@@ -5,6 +5,7 @@
   const $ = (s) => document.querySelector(s);
   const cmdKey = cue.platform === 'win32' ? 'Ctrl' : '⌘';
   const isCmdOrCtrl = (e) => cue.platform === 'win32' ? e.ctrlKey : e.metaKey;
+  const IS_MAC = cue.platform === 'darwin';   // used to branch onboarding copy per OS
 
   // ---- paint icons -------------------------------------------------------
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
@@ -185,7 +186,9 @@
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
       stream.getVideoTracks().forEach((t) => t.stop()); // we only want the audio
       const tracks = stream.getAudioTracks();
-      if (!tracks.length) { cue.log('system audio: no loopback track (macOS loopback unsupported here)'); stream.getTracks().forEach((t) => t.stop()); return; }
+      // Chromium only implements loopback audio capture on Windows; elsewhere the
+      // stream comes back video-only and the "Them" channel stays silent.
+      if (!tracks.length) { cue.log('system audio: no loopback track (system-audio capture is Windows-only)'); stream.getTracks().forEach((t) => t.stop()); return; }
       sysStream = stream;
       sysCtx = new AudioContext({ sampleRate: 16000 });
       sysNode = sysCtx.createMediaStreamSource(new MediaStream(tracks));
@@ -331,13 +334,20 @@
       title: 'Welcome to cue',
       body: 'cue is a private AI copilot that floats over your screen. It can <strong>see your screen</strong>, <strong>hear your meetings</strong>, and help you answer questions or solve coding problems — while staying hidden from most screen shares.<br><br>This quick guide gets you running in about a minute.'
     },
-    {
+    IS_MAC ? {
       icon: '🔐',
       title: 'Allow cue to see & hear',
       body: 'cue needs two macOS permissions. Click each button, turn <strong>cue</strong> ON in the window that opens, then come back here.<ul><li><strong>Microphone</strong> — to hear you</li><li><strong>Screen Recording</strong> — to see your screen and hear meeting audio</li></ul>',
       buttons: [
         { label: 'Open Microphone settings', action: () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone') },
         { label: 'Open Screen Recording settings', action: () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture') }
+      ]
+    } : {
+      icon: '🔐',
+      title: 'Allow cue to hear you',
+      body: 'cue needs <strong>one</strong> Windows permission — the microphone. Click the button, then make sure both <strong>Microphone access</strong> and <strong>Let desktop apps access your microphone</strong> are <strong>On</strong>.<br><br>Seeing your screen and hearing meeting audio need <strong>no permission</strong> on Windows — they work right away.',
+      buttons: [
+        { label: 'Open Microphone settings', action: () => cue.openPane('ms-settings:privacy-microphone') }
       ]
     },
     {
@@ -349,7 +359,7 @@
     {
       icon: '🫥',
       title: 'Stay hidden in Zoom',
-      body: 'cue is hidden from most screen shares automatically (Google Meet, Teams, QuickTime — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals cue.'
+      body: 'cue is hidden from most screen shares automatically (Google Meet, Teams' + (IS_MAC ? ', QuickTime' : '') + ' — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals cue.'
     },
     {
       icon: '✨',
