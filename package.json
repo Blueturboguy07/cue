@@ -1,7 +1,7 @@
 {
   "name": "cue",
   "version": "0.1.0",
-  "description": "Open-source macOS invisible AI overlay — three separate inputs (screen, mic, system audio) into an LLM. A Cluely-style copilot for meetings and coding problems.",
+  "description": "Open-source invisible AI overlay for macOS and Windows — three separate inputs (screen, mic, system audio) into an LLM. A Cluely-style copilot for meetings and coding problems.",
   "license": "GPL-3.0-or-later",
   "author": "cue",
   "main": "main.js",
@@ -39,7 +39,14 @@
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "artifactName": "${productName}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "cue"
     }
   },
   "keywords": [
@@ -48,7 +55,8 @@
     "ai",
     "assistant",
     "screencapturekit",
-    "macos"
+    "macos",
+    "windows"
   ],
   "devDependencies": {
     "electron": "33.2.1",
