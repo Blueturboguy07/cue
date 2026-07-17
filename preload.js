@@ -1,6 +1,9 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('cue', {
+  setZoomLevel: (level) => webFrame.setZoomLevel(level),
+  getZoomLevel: () => webFrame.getZoomLevel(),
+  platform: process.platform,
   settingsGet: () => ipcRenderer.invoke('settings:get'),
   settingsSet: (patch) => ipcRenderer.invoke('settings:set', patch),
   ask: (payload) => ipcRenderer.send('ask', payload),
