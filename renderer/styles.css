@@ -23,6 +23,8 @@
 
   --font: -apple-system, 'SF Pro Text', 'SF Pro Display', system-ui, 'Segoe UI', sans-serif;
   --mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+  
+  --text-zoom: 1;
 }
 
 * { box-sizing: border-box; }
@@ -119,11 +121,11 @@ button:focus { outline: none; }
 }
 .ai-text {
   color: var(--tx-1);
-  font-size: 20px; font-weight: 400; line-height: 1.5; letter-spacing: -0.01em;
+  font-size: calc(16px * var(--text-zoom)); font-weight: 400; line-height: 1.5; letter-spacing: -0.01em;
   text-align: left; margin: 14px 0 2px;
   -webkit-user-select: text; user-select: text;
 }
-.ai-text.small { font-size: 16px; line-height: 1.55; }
+.ai-text.small { font-size: calc(14px * var(--text-zoom)); line-height: 1.55; }
 .ai-text .w { display: inline; opacity: 0; animation: fadeUp 180ms ease forwards; }
 .ai-text ul { margin: 8px 0; padding-left: 20px; }
 .ai-text li { margin: 4px 0; }
@@ -134,7 +136,7 @@ button:focus { outline: none; }
   padding: 12px 14px;
   overflow-x: auto;
   font-family: var(--mono);
-  font-size: 13px; line-height: 1.5;
+  font-size: calc(13px * var(--text-zoom)); line-height: 1.5;
   margin: 12px 0;
 }
 .ai-text code { font-family: var(--mono); font-size: 0.92em; }

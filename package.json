@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --mac zip"
+    "dist": "electron-builder --mac zip",
+    "dist:win": "electron-builder --win"
   },
   "build": {
     "appId": "com.cue.overlay",
@@ -34,6 +35,11 @@
         "NSCameraUsageDescription": "cue does not use the camera.",
         "NSAudioCaptureUsageDescription": "cue captures system audio to transcribe the other participant in a call."
       }
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
     }
   },
   "keywords": [
