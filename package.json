@@ -14,7 +14,7 @@
   "build": {
     "appId": "com.cue.overlay",
     "productName": "cue",
-    "asar": false,
+    "asar": true,
     "files": [
       "main.js",
       "preload.js",
