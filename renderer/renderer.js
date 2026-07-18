@@ -10,6 +10,7 @@
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
+  $('#quit-btn').innerHTML = icon('x', { size: 14 });
   document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
   document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
   document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
@@ -149,6 +150,9 @@
     cue.captureToggle();
   });
 
+  // Quit button
+  $('#quit-btn').addEventListener('click', () => cue.quit());
+
   // ---- capture: mic (renderer side) --------------------------------------
   let audioCtx = null, micStream = null, micNode = null, micProc = null;
   async function startMic() {
@@ -164,6 +168,11 @@
       micNode.connect(micProc); micProc.connect(sink); sink.connect(audioCtx.destination);
     } catch (err) {
       cue.log('mic error: ' + (err && err.message));
+      if (err && (err.name === 'NotAllowedError' || err.name === 'NotFoundError')) {
+        showMicPermissionBanner();
+      } else {
+        showStatus('Microphone error: ' + (err && err.message));
+      }
     }
   }
   function stopMic() {
@@ -235,6 +244,35 @@
     statusTimer = setTimeout(() => el.classList.remove('show'), 11000);
   }
   cue.on('status', ({ message }) => { cue.log('[status] ' + message); showStatus(message); });
+
+  // ---- microphone permission banner --------------------------------------
+  function showMicPermissionBanner() {
+    let banner = document.getElementById('mic-perm-banner');
+    if (banner) { banner.classList.add('show'); return; }
+    banner = document.createElement('div');
+    banner.id = 'mic-perm-banner';
+    banner.className = 'show';
+    banner.innerHTML =
+      '<div class="mic-perm-text">' +
+        '<strong>🎙️ Microphone access required</strong><br>' +
+        'cue needs microphone permission to hear you during calls. Grant access in System Settings, then restart cue.' +
+      '</div>' +
+      '<div class="mic-perm-actions"></div>';
+    const actions = banner.querySelector('.mic-perm-actions');
+    if (cue.platform === 'darwin') {
+      const openBtn = document.createElement('button');
+      openBtn.textContent = 'Open Microphone Settings';
+      openBtn.addEventListener('click', () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'));
+      actions.appendChild(openBtn);
+    }
+    const dismissBtn = document.createElement('button');
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.className = 'dismiss';
+    dismissBtn.addEventListener('click', () => banner.classList.remove('show'));
+    actions.appendChild(dismissBtn);
+    const panel = document.getElementById('panel');
+    panel.insertBefore(banner, document.getElementById('action-row'));
+  }
 
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
