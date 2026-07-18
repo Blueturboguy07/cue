@@ -3,8 +3,8 @@
   const { icon } = window.ICONS;
   const cue = window.cue; // exposed by preload
   const $ = (s) => document.querySelector(s);
-  const cmdKey = cue.platform === 'win32' ? 'Ctrl' : '⌘';
-  const isCmdOrCtrl = (e) => cue.platform === 'win32' ? e.ctrlKey : e.metaKey;
+  const cmdKey = cue.platform === 'darwin' ? '⌘' : 'Ctrl';
+  const isCmdOrCtrl = (e) => cue.platform === 'darwin' ? e.metaKey : e.ctrlKey;
 
   // ---- paint icons -------------------------------------------------------
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
@@ -156,22 +156,18 @@
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
       audioCtx = new AudioContext({ sampleRate: 16000 });
+      await audioCtx.audioWorklet.addModule('./pcm-processor.js');
       micNode = audioCtx.createMediaStreamSource(micStream);
-      micProc = audioCtx.createScriptProcessor(4096, 1, 1);
+      micProc = new AudioWorkletNode(audioCtx, 'pcm-processor');
+      micProc.port.onmessage = (e) => cue.micPcm(e.data);
       const sink = audioCtx.createGain(); sink.gain.value = 0; // run processor silently
       micNode.connect(micProc); micProc.connect(sink); sink.connect(audioCtx.destination);
-      micProc.onaudioprocess = (e) => {
-        const f = e.inputBuffer.getChannelData(0);
-        const out = new Int16Array(f.length);
-        for (let i = 0; i < f.length; i++) { const s = Math.max(-1, Math.min(1, f[i])); out[i] = s < 0 ? s * 0x8000 : s * 0x7fff; }
-        cue.micPcm(out.buffer);
-      };
     } catch (err) {
       cue.log('mic error: ' + (err && err.message));
     }
   }
   function stopMic() {
-    if (micProc) { micProc.disconnect(); micProc.onaudioprocess = null; micProc = null; }
+    if (micProc) { micProc.port.onmessage = null; micProc.disconnect(); micProc = null; }
     if (micNode) { micNode.disconnect(); micNode = null; }
     if (audioCtx) { audioCtx.close(); audioCtx = null; }
     if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
@@ -188,23 +184,19 @@
       if (!tracks.length) { cue.log('system audio: no loopback track (macOS loopback unsupported here)'); stream.getTracks().forEach((t) => t.stop()); return; }
       sysStream = stream;
       sysCtx = new AudioContext({ sampleRate: 16000 });
+      await sysCtx.audioWorklet.addModule('./pcm-processor.js');
       sysNode = sysCtx.createMediaStreamSource(new MediaStream(tracks));
-      sysProc = sysCtx.createScriptProcessor(4096, 1, 1);
+      sysProc = new AudioWorkletNode(sysCtx, 'pcm-processor');
+      sysProc.port.onmessage = (e) => cue.systemPcm(e.data);
       const sink = sysCtx.createGain(); sink.gain.value = 0;
       sysNode.connect(sysProc); sysProc.connect(sink); sink.connect(sysCtx.destination);
-      sysProc.onaudioprocess = (e) => {
-        const f = e.inputBuffer.getChannelData(0);
-        const out = new Int16Array(f.length);
-        for (let i = 0; i < f.length; i++) { const s = Math.max(-1, Math.min(1, f[i])); out[i] = s < 0 ? s * 0x8000 : s * 0x7fff; }
-        cue.systemPcm(out.buffer);
-      };
       cue.log('system audio: capturing loopback');
     } catch (err) {
       cue.log('system audio error: ' + (err && err.message));
     }
   }
   function stopSystemAudio() {
-    if (sysProc) { sysProc.disconnect(); sysProc.onaudioprocess = null; sysProc = null; }
+    if (sysProc) { sysProc.port.onmessage = null; sysProc.disconnect(); sysProc = null; }
     if (sysNode) { sysNode.disconnect(); sysNode = null; }
     if (sysCtx) { sysCtx.close(); sysCtx = null; }
     if (sysStream) { sysStream.getTracks().forEach((t) => t.stop()); sysStream = null; }
@@ -331,7 +323,7 @@
       title: 'Welcome to cue',
       body: 'cue is a private AI copilot that floats over your screen. It can <strong>see your screen</strong>, <strong>hear your meetings</strong>, and help you answer questions or solve coding problems — while staying hidden from most screen shares.<br><br>This quick guide gets you running in about a minute.'
     },
-    {
+    ...(cue.platform === 'darwin' ? [{
       icon: '🔐',
       title: 'Allow cue to see & hear',
       body: 'cue needs two macOS permissions. Click each button, turn <strong>cue</strong> ON in the window that opens, then come back here.<ul><li><strong>Microphone</strong> — to hear you</li><li><strong>Screen Recording</strong> — to see your screen and hear meeting audio</li></ul>',
@@ -339,7 +331,7 @@
         { label: 'Open Microphone settings', action: () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone') },
         { label: 'Open Screen Recording settings', action: () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture') }
       ]
-    },
+    }] : []),
     {
       icon: '🔑',
       title: 'Connect an AI provider',
@@ -349,7 +341,9 @@
     {
       icon: '🫥',
       title: 'Stay hidden in Zoom',
-      body: 'cue is hidden from most screen shares automatically (Google Meet, Teams, QuickTime — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals cue.'
+      body: cue.platform === 'darwin'
+        ? 'cue is hidden from most screen shares automatically (Google Meet, Teams, QuickTime — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals cue.'
+        : 'cue is hidden from screen shares automatically. <strong>For Zoom:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong>'
     },
     {
       icon: '✨',
@@ -384,6 +378,9 @@
   // ---- boot --------------------------------------------------------------
   (async function boot() {
     settings = await cue.settingsGet();
+    if (cue.platform !== 'darwin') {
+      $('#placeholder').innerHTML = 'Ask about your screen or conversation, or <span class="keycap">Ctrl</span><span class="keycap">⏎</span> for Assist';
+    }
     smartBtn.classList.toggle('on', !!settings.smart);
     showExample();
     syncPlaceholder();
