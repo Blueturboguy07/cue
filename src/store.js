@@ -12,7 +12,7 @@ const DEFAULTS = {
   models: {
     openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
     anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
-    gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
+    gemini: { fast: 'gemini-3.5-flash', smart: 'gemini-3.1-pro-preview' },
     nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' }
   }
 };

@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>cue — Permissions</title>
+  <style>
+    :root {
+      --accent: #3C83F5;
+      --accent-hi: #4A8DF7;
+      --tx-1: rgba(255,255,255,0.95);
+      --tx-2: rgba(255,255,255,0.90);
+      --tx-mut: rgba(255,255,255,0.40);
+      --font: -apple-system, 'SF Pro Text', 'SF Pro Display', system-ui, 'Segoe UI', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      background: transparent;
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+      cursor: default;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    #perm-root {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .perm-card {
+      width: 100%;
+      max-width: 480px;
+      background: rgba(20,22,28,0.88);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
+      backdrop-filter: blur(40px) saturate(180%);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 24px;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.50), 0 2px 8px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.10);
+      padding: 32px 30px 24px;
+      text-align: center;
+      -webkit-app-region: drag;
+    }
+    .no-drag { -webkit-app-region: no-drag; }
+
+    .perm-icon { font-size: 40px; line-height: 1; margin-bottom: 16px; }
+    .perm-title { font-size: 22px; font-weight: 700; color: var(--tx-1); letter-spacing: -0.02em; margin-bottom: 8px; }
+    .perm-desc { font-size: 14px; line-height: 1.6; color: var(--tx-2); margin-bottom: 24px; text-align: center; }
+    .perm-desc strong { color: #fff; }
+
+    /* Permission rows */
+    .perm-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      margin-bottom: 10px;
+      text-align: left;
+      transition: border-color 200ms ease, background 200ms ease;
+    }
+    .perm-row.granted {
+      border-color: rgba(34,197,94,0.35);
+      background: rgba(34,197,94,0.06);
+    }
+    .perm-row.denied {
+      border-color: rgba(255,100,70,0.30);
+      background: rgba(255,100,70,0.05);
+    }
+    .perm-emoji { font-size: 22px; flex-shrink: 0; }
+    .perm-info { flex: 1; min-width: 0; }
+    .perm-name { font-size: 14px; font-weight: 600; color: var(--tx-1); }
+    .perm-status { font-size: 12px; color: var(--tx-mut); margin-top: 2px; }
+    .perm-status.ok { color: #4ade80; }
+    .perm-status.bad { color: #ff8a75; }
+    .perm-badge {
+      flex-shrink: 0;
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      display: grid; place-items: center;
+      font-size: 14px;
+    }
+    .perm-badge.ok { background: rgba(34,197,94,0.18); }
+    .perm-badge.bad { background: rgba(255,100,70,0.15); }
+    .perm-open-btn {
+      flex-shrink: 0;
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(60,131,245,0.40);
+      background: rgba(60,131,245,0.14);
+      color: #a8ccff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: var(--font);
+      transition: all 140ms ease;
+    }
+    .perm-open-btn:hover { background: rgba(60,131,245,0.24); }
+    .perm-open-btn.hidden { display: none; }
+
+    /* Note */
+    .perm-note {
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--tx-mut);
+      text-align: left;
+      margin: 16px 0 4px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .perm-note strong { color: var(--tx-2); font-weight: 600; }
+
+    /* Actions */
+    .perm-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .perm-ghost {
+      border: none;
+      background: transparent;
+      color: var(--tx-mut);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 9px 14px;
+      border-radius: 8px;
+      font-family: var(--font);
+      transition: all 140ms ease;
+    }
+    .perm-ghost:hover { color: #fff; background: rgba(255,255,255,0.06); }
+    .spacer { flex: 1; }
+    .perm-check-btn {
+      padding: 9px 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.06);
+      color: var(--tx-2);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: var(--font);
+      transition: all 160ms ease;
+    }
+    .perm-check-btn:hover { background: rgba(255,255,255,0.10); color: #fff; }
+    .perm-check-btn.checking { opacity: 0.5; pointer-events: none; }
+    .perm-continue-btn {
+      padding: 9px 22px;
+      border-radius: 999px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: var(--font);
+      box-shadow: 0 2px 8px rgba(60,131,245,0.45);
+      transition: all 160ms ease;
+    }
+    .perm-continue-btn:hover { filter: brightness(1.08); transform: scale(1.02); }
+    .perm-continue-btn:disabled {
+      opacity: 0.35;
+      pointer-events: none;
+      box-shadow: none;
+      filter: none;
+      transform: none;
+    }
+
+    /* Animations */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+      to { opacity: 1; transform: none; }
+    }
+    .perm-card { animation: fadeIn 280ms cubic-bezier(0.22,1,0.36,1); }
+  </style>
+</head>
+<body>
+  <div id="perm-root">
+    <div class="perm-card">
+      <div class="perm-icon">🔐</div>
+      <div class="perm-title">cue needs your permission</div>
+      <div class="perm-desc">
+        Grant <strong>Microphone</strong> and <strong>Screen Recording</strong> access so cue can hear your meetings and see your screen.
+      </div>
+
+      <!-- Microphone -->
+      <div class="perm-row no-drag" id="row-mic">
+        <span class="perm-emoji">🎙️</span>
+        <div class="perm-info">
+          <div class="perm-name">Microphone</div>
+          <div class="perm-status" id="status-mic">Checking…</div>
+        </div>
+        <button class="perm-open-btn no-drag" id="btn-mic">Open Settings</button>
+        <span class="perm-badge" id="badge-mic"></span>
+      </div>
+
+      <!-- Screen Recording -->
+      <div class="perm-row no-drag" id="row-screen">
+        <span class="perm-emoji">🖥️</span>
+        <div class="perm-info">
+          <div class="perm-name">Screen Recording</div>
+          <div class="perm-status" id="status-screen">Checking…</div>
+        </div>
+        <button class="perm-open-btn no-drag" id="btn-screen">Open Settings</button>
+        <span class="perm-badge" id="badge-screen"></span>
+      </div>
+
+      <div class="perm-note">
+        <strong>Tip:</strong> After toggling a permission in System Settings, click <strong>Check Again</strong> below.
+        If Screen Recording was just enabled, you may need to restart cue for it to take effect.
+      </div>
+
+      <div class="perm-actions no-drag">
+        <button class="perm-ghost" id="quit-btn">Quit</button>
+        <div class="spacer"></div>
+        <button class="perm-check-btn" id="check-btn">Check Again</button>
+        <button class="perm-continue-btn" id="continue-btn" disabled>Continue →</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const cue = window.cue;
+
+      const statusMic = document.getElementById('status-mic');
+      const statusScreen = document.getElementById('status-screen');
+      const rowMic = document.getElementById('row-mic');
+      const rowScreen = document.getElementById('row-screen');
+      const badgeMic = document.getElementById('badge-mic');
+      const badgeScreen = document.getElementById('badge-screen');
+      const btnMic = document.getElementById('btn-mic');
+      const btnScreen = document.getElementById('btn-screen');
+      const checkBtn = document.getElementById('check-btn');
+      const continueBtn = document.getElementById('continue-btn');
+      const quitBtn = document.getElementById('quit-btn');
+
+      function updateUI(status) {
+        const micOk = status.mic === 'granted';
+        const screenOk = status.screen === 'granted';
+
+        // Mic
+        rowMic.className = 'perm-row no-drag ' + (micOk ? 'granted' : 'denied');
+        statusMic.textContent = micOk ? 'Granted' : (status.mic === 'not-determined' ? 'Not yet requested' : 'Not granted — open Settings to allow');
+        statusMic.className = 'perm-status ' + (micOk ? 'ok' : 'bad');
+        badgeMic.textContent = micOk ? '✓' : '✗';
+        badgeMic.className = 'perm-badge ' + (micOk ? 'ok' : 'bad');
+        btnMic.classList.toggle('hidden', micOk);
+
+        // Screen
+        rowScreen.className = 'perm-row no-drag ' + (screenOk ? 'granted' : 'denied');
+        statusScreen.textContent = screenOk ? 'Granted' : (status.screen === 'not-determined' ? 'Not yet requested' : 'Not granted — open Settings to allow');
+        statusScreen.className = 'perm-status ' + (screenOk ? 'ok' : 'bad');
+        badgeScreen.textContent = screenOk ? '✓' : '✗';
+        badgeScreen.className = 'perm-badge ' + (screenOk ? 'ok' : 'bad');
+        btnScreen.classList.toggle('hidden', screenOk);
+
+        // Continue
+        continueBtn.disabled = !(micOk && screenOk);
+      }
+
+      async function checkPermissions() {
+        checkBtn.classList.add('checking');
+        checkBtn.textContent = 'Checking…';
+        try {
+          const status = await cue.permissionsCheck();
+          updateUI(status);
+        } catch (e) {
+          cue.log('permissions check error: ' + e);
+        } finally {
+          checkBtn.classList.remove('checking');
+          checkBtn.textContent = 'Check Again';
+        }
+      }
+
+      // Open settings buttons
+      btnMic.addEventListener('click', () => {
+        cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
+      });
+      btnScreen.addEventListener('click', () => {
+        cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+      });
+
+      // Check again
+      checkBtn.addEventListener('click', checkPermissions);
+
+      // Continue — close permission window and launch the real app
+      continueBtn.addEventListener('click', () => {
+        cue.permissionsContinue();
+      });
+
+      // Quit
+      quitBtn.addEventListener('click', () => cue.quit());
+
+      // Initial check on page load
+      checkPermissions();
+    })();
+  </script>
+</body>
+</html>
