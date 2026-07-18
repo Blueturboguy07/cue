@@ -27,7 +27,7 @@ cue floats a small glass panel on top of everything. It takes **three separate i
 
 | Feature | How to trigger | What it uses |
 |---|---|---|
-| **Assist** | `⌘` `↵` or the *Assist* button | your screen + recent conversation |
+| **Assist** | `⌘` `↵` by default (configurable) or the *Assist* button | your screen + recent conversation |
 | **What should I say?** | button | meeting audio + your mic |
 | **Follow-up questions** | button | the whole conversation |
 | **Recap** | button | the whole conversation |
@@ -114,7 +114,7 @@ cue is hidden from most screen-share tools automatically — **Google Meet, Micr
 
 ## How to use it
 
-- **`⌘` `↵` — Assist.** The do-the-smart-thing key. On a coding problem it solves it; in a conversation it tells you what to say. Works from anywhere.
+- **`⌘` `↵` — Assist.** The do-the-smart-thing key. On a coding problem it solves it; in a conversation it tells you what to say. Works from anywhere. Change this shortcut under **Settings → Keyboard shortcuts**.
 - **`⌘` `H` — Solve what's on screen.** Screenshots a coding problem and returns the approach, code, and time/space complexity.
 - **The `▢` button** (top bar) — start/stop **listening** to a meeting. The green dot means it's live.
 - **Type a question** in the box and press `↵` to ask about your screen or conversation.
