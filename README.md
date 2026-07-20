@@ -180,7 +180,7 @@ Issues and PRs welcome. cue is intentionally small and readable — `main.js` (a
 ### Platform Support
 - [x] **macOS** (Fully Supported)
 - [x] **Windows** (Fully Supported)
-- [ ] **Linux** (Untested)
+- [x] **Linux** (Tested on a VM)
 
 ### Features Open for Contribution
 - [ ] Upgrade audio capture pipeline for zero-latency streaming
