@@ -5,6 +5,7 @@
   const $ = (s) => document.querySelector(s);
   const cmdKey = cue.platform === 'darwin' ? '⌘' : 'Ctrl';
   const isCmdOrCtrl = (e) => cue.platform === 'darwin' ? e.metaKey : e.ctrlKey;
+  const DEFAULT_ASSIST_SHORTCUT = 'CommandOrControl+Return';
 
   // ---- paint icons -------------------------------------------------------
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
@@ -23,10 +24,36 @@
   let busy = false;
   let aiEl = null;       // current streaming <div class="ai-text">
   let caretEl = null;
+  let assistShortcut = DEFAULT_ASSIST_SHORTCUT;
+  let recordingShortcut = false;
 
   const messages = $('#messages');
 
   function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  function shortcutParts(accelerator) {
+    const labels = {
+      CommandOrControl: cue.platform === 'darwin' ? '⌘' : 'Ctrl',
+      Command: '⌘', Control: 'Ctrl', Super: 'Super',
+      Alt: cue.platform === 'darwin' ? '⌥' : 'Alt',
+      Shift: cue.platform === 'darwin' ? '⇧' : 'Shift',
+      Return: 'Enter', Escape: 'Esc', Space: 'Space',
+      Up: '↑', Down: '↓', Left: '←', Right: '→'
+    };
+    return (accelerator || DEFAULT_ASSIST_SHORTCUT).split('+').map((part) => labels[part] || part);
+  }
+
+  function shortcutKeycapsHtml(accelerator, className) {
+    const cls = className || 'keycap';
+    return shortcutParts(accelerator).map((part) => '<span class="' + cls + '">' + esc(part) + '</span>').join(' ');
+  }
+
+  function syncAssistShortcutLabels() {
+    const shortcutBtn = $('#shortcut-assist');
+    if (shortcutBtn && !recordingShortcut) shortcutBtn.textContent = shortcutParts(assistShortcut).join(' + ');
+    const placeholder = $('#placeholder');
+    if (placeholder) placeholder.innerHTML = 'Ask about your screen or conversation, or ' + shortcutKeycapsHtml(assistShortcut) + ' for Assist';
+  }
 
   // minimal, safe markdown: fenced code, bullets, inline code, bold, paragraphs
   function renderMarkdown(text) {
@@ -122,8 +149,11 @@
   }
   $('#send-btn').addEventListener('click', send);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isCmdOrCtrl(e)) { e.preventDefault(); send(); }
-    if (e.key === 'Enter' && isCmdOrCtrl(e)) { e.preventDefault(); runMode('assist', ''); }
+    const captured = keyEventToAccelerator(e);
+    if (captured.accelerator && captured.accelerator.toLowerCase() === assistShortcut.toLowerCase()) {
+      e.preventDefault(); runMode('assist', ''); return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); send(); }
   });
 
   // Smart toggle
@@ -239,7 +269,7 @@
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
   function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
-  function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
+  function closeSettings() { cancelShortcutRecording(); saveSettings(); scrim.classList.add('hidden'); }
   $('#more-btn').addEventListener('click', openSettings);
   $('#s-close').addEventListener('click', closeSettings);
   scrim.addEventListener('click', (e) => { if (e.target === scrim) closeSettings(); });
@@ -252,6 +282,7 @@
     $('#key-nvidia').value = settings.apiKeys.nvidia || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
+    syncAssistShortcutLabels();
     $('#s-status').textContent = statusText();
   }
   function statusText() {
@@ -277,6 +308,104 @@
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
     await cue.settingsSet(settings);
   }
+
+  // Assist shortcut recorder. The renderer captures a key combination and the
+  // main process only saves it after Electron confirms the global registration.
+  const shortcutBtn = $('#shortcut-assist');
+  const shortcutHint = $('#shortcut-hint');
+
+  function setShortcutHint(message, kind) {
+    shortcutHint.textContent = message;
+    shortcutHint.classList.toggle('error', kind === 'error');
+    shortcutHint.classList.toggle('success', kind === 'success');
+  }
+
+  function cancelShortcutRecording() {
+    recordingShortcut = false;
+    shortcutBtn.classList.remove('recording');
+    syncAssistShortcutLabels();
+  }
+
+  function keyEventToAccelerator(e) {
+    const modifierKeys = new Set(['Meta', 'Control', 'Alt', 'Shift']);
+    if (modifierKeys.has(e.key)) return { error: 'Press a modifier together with another key.' };
+
+    const parts = [];
+    const primaryDown = cue.platform === 'darwin' ? e.metaKey : e.ctrlKey;
+    if (primaryDown) parts.push('CommandOrControl');
+    if (cue.platform === 'darwin' && e.ctrlKey) parts.push('Control');
+    if (cue.platform !== 'darwin' && e.metaKey) parts.push('Super');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+
+    const named = {
+      Enter: 'Return', ' ': 'Space', Tab: 'Tab', Backspace: 'Backspace',
+      Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End',
+      PageUp: 'PageUp', PageDown: 'PageDown', ArrowUp: 'Up', ArrowDown: 'Down',
+      ArrowLeft: 'Left', ArrowRight: 'Right'
+    };
+    const punctuation = { '+': 'Plus', '-': '-', '=': '=', ',': ',', '.': '.', '/': '/', ';': ';', "'": "'", '[': '[', ']': ']', '\\': '\\', '`': '`' };
+    let key = named[e.key] || punctuation[e.key] || '';
+    if (!key && /^[a-z]$/i.test(e.key)) key = e.key.toUpperCase();
+    if (!key && /^[0-9]$/.test(e.key)) key = e.key;
+    if (!key && /^F(?:[1-9]|1[0-9]|2[0-4])$/.test(e.key)) key = e.key;
+    if (!key) return { error: 'Use a letter, number, function key, arrow, or common navigation key.' };
+    if (!parts.length && !/^F/.test(key)) return { error: 'Include Command/Ctrl, Alt, or Shift in the shortcut.' };
+    parts.push(key);
+    return { accelerator: parts.join('+') };
+  }
+
+  async function applyAssistShortcut(accelerator) {
+    const wasRecording = recordingShortcut;
+    recordingShortcut = false;
+    shortcutBtn.classList.remove('recording');
+    shortcutBtn.textContent = 'Saving…';
+    let result;
+    try {
+      result = await cue.shortcutAssistSet(accelerator);
+    } catch (_) {
+      result = { ok: false, error: 'cue could not update the shortcut. Please try again.' };
+    }
+    if (!result.ok) {
+      setShortcutHint(result.error, 'error');
+      recordingShortcut = wasRecording;
+      shortcutBtn.classList.toggle('recording', recordingShortcut);
+      if (recordingShortcut) shortcutBtn.textContent = 'Press keys…';
+      else syncAssistShortcutLabels();
+      return;
+    }
+    assistShortcut = result.accelerator;
+    if (!settings.shortcuts) settings.shortcuts = {};
+    settings.shortcuts.assist = assistShortcut;
+    cancelShortcutRecording();
+    setShortcutHint('Assist shortcut updated.', 'success');
+  }
+
+  shortcutBtn.addEventListener('click', () => {
+    recordingShortcut = true;
+    shortcutBtn.classList.add('recording');
+    shortcutBtn.textContent = 'Press keys…';
+    setShortcutHint('Press Escape to cancel.', '');
+  });
+
+  $('#shortcut-reset').addEventListener('click', () => applyAssistShortcut(DEFAULT_ASSIST_SHORTCUT));
+
+  document.addEventListener('keydown', (e) => {
+    if (!recordingShortcut) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.key === 'Escape') {
+      cancelShortcutRecording();
+      setShortcutHint('Shortcut change cancelled.', '');
+      return;
+    }
+    const captured = keyEventToAccelerator(e);
+    if (captured.error) {
+      setShortcutHint(captured.error, 'error');
+      return;
+    }
+    applyAssistShortcut(captured.accelerator);
+  }, true);
 
   // ---- example conversation (matches the reference screenshot) ------------
   function showExample() {
@@ -348,7 +477,7 @@
     {
       icon: '✨',
       title: 'You’re all set',
-      body: `How to use cue:<ul><li><span class="kbd">${cmdKey}</span> <span class="kbd">↵</span> — <strong>Assist</strong> with whatever's on screen or being said</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">H</span> — solve a coding problem on screen</li><li>Click <strong>▢</strong> in the top bar to start listening to a meeting</li><li>Type a question and press <span class="kbd">↵</span></li></ul>Reopen this guide anytime by clicking the <strong>cue logo</strong>. Quit with <span class="kbd">${cmdKey}</span><span class="kbd">⇧</span><span class="kbd">X</span>.`
+      body: () => `How to use cue:<ul><li>${shortcutKeycapsHtml(assistShortcut, 'kbd')} — <strong>Assist</strong> with whatever's on screen or being said</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">H</span> — solve a coding problem on screen</li><li>Click <strong>▢</strong> in the top bar to start listening to a meeting</li><li>Type a question and press <span class="kbd">↵</span></li></ul>Reopen this guide anytime by clicking the <strong>cue logo</strong>. Change Assist's shortcut in <strong>Settings</strong>. Quit with <span class="kbd">${cmdKey}</span><span class="kbd">⇧</span><span class="kbd">X</span>.`
     }
   ];
   let obIndex = 0;
@@ -356,7 +485,7 @@
     const step = OB_STEPS[obIndex];
     $('#ob-icon').textContent = step.icon;
     $('#ob-title').textContent = step.title;
-    $('#ob-body').innerHTML = step.body;
+    $('#ob-body').innerHTML = typeof step.body === 'function' ? step.body() : step.body;
     const btns = $('#ob-buttons'); btns.innerHTML = '';
     (step.buttons || []).forEach((b) => { const el = document.createElement('button'); el.textContent = b.label; el.addEventListener('click', b.action); btns.appendChild(el); });
     const dots = $('#ob-dots'); dots.innerHTML = '';
@@ -378,9 +507,8 @@
   // ---- boot --------------------------------------------------------------
   (async function boot() {
     settings = await cue.settingsGet();
-    if (cue.platform !== 'darwin') {
-      $('#placeholder').innerHTML = 'Ask about your screen or conversation, or <span class="keycap">Ctrl</span><span class="keycap">⏎</span> for Assist';
-    }
+    assistShortcut = (settings.shortcuts && settings.shortcuts.assist) || DEFAULT_ASSIST_SHORTCUT;
+    syncAssistShortcutLabels();
     smartBtn.classList.toggle('on', !!settings.smart);
     showExample();
     syncPlaceholder();
@@ -389,9 +517,5 @@
     $('#stop-btn').classList.toggle('active', st.active);
     if (!settings.onboarded) showOnboard();
 
-    if (cue.platform === 'win32') {
-      const keycaps = document.querySelectorAll('#placeholder .keycap');
-      if (keycaps.length > 0) keycaps[0].textContent = 'Ctrl';
-    }
   })();
 })();

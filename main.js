@@ -9,6 +9,13 @@ const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 
 let win = null;
+let registeredAssistShortcut = null;
+
+const DEFAULT_ASSIST_SHORTCUT = 'CommandOrControl+Return';
+const RESERVED_SHORTCUTS = new Set([
+  'commandorcontrol+h',
+  'commandorcontrol+shift+x'
+]);
 
 // -------- capture / transcript state --------
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
@@ -188,6 +195,7 @@ async function runFeature(mode, userText) {
 // -------- IPC --------
 ipcMain.handle('settings:get', () => store.getSettings());
 ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; return store.setSettings(patch); });
+ipcMain.handle('shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
 ipcMain.handle('capture:toggle', () => setCapturing(!state.capturing));
 ipcMain.handle('capture:state', () => ({ active: state.capturing }));
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
@@ -198,10 +206,52 @@ ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); 
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 
 // -------- shortcuts --------
+function normalizeShortcut(accelerator) {
+  return typeof accelerator === 'string' ? accelerator.trim().replace(/\s+/g, '') : '';
+}
+
+function registerAssistShortcut(accelerator) {
+  const next = normalizeShortcut(accelerator) || DEFAULT_ASSIST_SHORTCUT;
+  if (next.length > 80) return { ok: false, error: 'That shortcut is too long.' };
+  if (RESERVED_SHORTCUTS.has(next.toLowerCase())) {
+    return { ok: false, error: 'That shortcut is reserved by another cue action.' };
+  }
+
+  const previous = registeredAssistShortcut;
+  if (previous) globalShortcut.unregister(previous);
+
+  try {
+    if (!globalShortcut.register(next, () => runFeature('assist', ''))) {
+      if (previous) globalShortcut.register(previous, () => runFeature('assist', ''));
+      return { ok: false, error: 'That shortcut is already in use by another application.' };
+    }
+  } catch (_) {
+    if (previous) globalShortcut.register(previous, () => runFeature('assist', ''));
+    return { ok: false, error: 'That key combination is not a valid global shortcut.' };
+  }
+
+  registeredAssistShortcut = next;
+  return { ok: true, accelerator: next };
+}
+
+function setAssistShortcut(accelerator) {
+  const result = registerAssistShortcut(accelerator);
+  if (result.ok) store.setSettings({ shortcuts: { assist: result.accelerator } });
+  return result;
+}
+
 function registerShortcuts() {
-  globalShortcut.register('CommandOrControl+Return', () => runFeature('assist', ''));
   globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
   globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
+
+  const settings = store.getSettings();
+  const configured = settings.shortcuts && settings.shortcuts.assist;
+  const result = registerAssistShortcut(configured || DEFAULT_ASSIST_SHORTCUT);
+  if (!result.ok && configured && configured !== DEFAULT_ASSIST_SHORTCUT) {
+    console.log('[cue] unable to register Assist shortcut:', result.error, 'Falling back to default.');
+    const fallback = registerAssistShortcut(DEFAULT_ASSIST_SHORTCUT);
+    if (fallback.ok) store.setSettings({ shortcuts: { assist: DEFAULT_ASSIST_SHORTCUT } });
+  }
 }
 
 // -------- lifecycle --------
