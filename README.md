@@ -100,6 +100,10 @@ cue uses **your own** API key, so it's free to run (you only pay your AI provide
 
 Your key is stored **only on your computer** (in `cue-data.json`) and is sent **only** to that provider. cue has no server and collects nothing.
 
+### Optional — tailor answers to your background
+
+In **Settings**, paste your résumé or professional background into **Résumé / professional background**. cue uses it as the factual reference for career-related answers and says when the résumé does not provide a detail. You can clear it anytime.
+
 ### Step 3 — The Zoom setting (only needed for Zoom)
 
 cue is hidden from most screen-share tools automatically — **Google Meet, Microsoft Teams, and QuickTime need nothing.** **Zoom** has a specific setting that decides whether it respects cue's "don't capture me" flag:
@@ -171,6 +175,7 @@ Run `xattr -cr /Applications/cue.app` in Terminal once (see Install → Option A
 
 - No accounts, no servers, no telemetry. cue collects nothing.
 - Your API keys live in a local file (`cue-data.json`) and are sent only to the provider you chose.
+- Your optional résumé text also lives in `cue-data.json` and is sent with each model request to your selected AI provider. It is stored as plain text; clear it in Settings to remove it.
 - Screenshots and audio are sent to your AI provider only when a feature runs, and are not stored by cue beyond the current session's transcript (kept in memory).
 
 ## Contributing
