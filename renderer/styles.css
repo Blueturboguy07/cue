@@ -257,6 +257,27 @@ button:focus { outline: none; }
 .s-resume-actions { display: flex; align-items: center; justify-content: space-between; }
 .s-resume-actions button { border: 0; border-radius: var(--r-pill); padding: 5px 10px; background: rgba(255,255,255,0.08); color: var(--tx-2); font: 12px var(--font); cursor: pointer; }
 .s-resume-actions button:hover { color: #fff; background: rgba(255,255,255,0.14); }
+.s-shortcut { display: flex; align-items: center; gap: 8px; }
+.s-shortcut > span { width: 78px; color: var(--tx-mut); font-size: 12px; }
+.shortcut-record, .shortcut-reset {
+  border-radius: var(--r-8); font-family: var(--font); cursor: pointer;
+  transition: all 140ms ease;
+}
+.shortcut-record {
+  flex: 1; min-height: 34px; padding: 7px 10px;
+  border: 1px solid rgba(255,255,255,0.14); background: rgba(0,0,0,0.25);
+  color: var(--tx-1); font-size: 12px; font-weight: 600;
+}
+.shortcut-record:hover { border-color: rgba(255,255,255,0.28); }
+.shortcut-record.recording { border-color: var(--accent); background: rgba(60,131,245,0.12); color: #cfe0ff; }
+.shortcut-reset {
+  padding: 7px 10px; border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04); color: var(--tx-mut); font-size: 12px;
+}
+.shortcut-reset:hover { background: rgba(255,255,255,0.08); color: var(--tx-2); }
+.shortcut-hint { min-height: 15px; margin-left: 88px; color: var(--tx-mut); font-size: 11px; line-height: 1.35; }
+.shortcut-hint.error { color: #ff9d8f; }
+.shortcut-hint.success { color: #78dba0; }
 .s-status { color: var(--tx-mut); font-size: 12px; margin-top: 10px; min-height: 16px; }
 
 /* ============================ Onboarding / tutorial ============================ */
