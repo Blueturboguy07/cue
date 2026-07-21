@@ -252,6 +252,11 @@ button:focus { outline: none; }
 .s-field span { width: 78px; color: var(--tx-mut); font-size: 12px; }
 .s-field input { flex: 1; padding: 8px 10px; border-radius: var(--r-8); border: 1px solid rgba(255,255,255,0.14); background: rgba(0,0,0,0.25); color: var(--tx-1); font-size: 13px; font-family: var(--font); outline: none; }
 .s-field input:focus { border-color: var(--accent); }
+.s-textarea { box-sizing: border-box; width: 100%; min-height: 112px; padding: 8px 10px; resize: vertical; border: 1px solid rgba(255,255,255,0.14); border-radius: var(--r-8); background: rgba(0,0,0,0.25); color: var(--tx-1); font: 13px/1.45 var(--font); outline: none; }
+.s-textarea:focus { border-color: var(--accent); }
+.s-resume-actions { display: flex; align-items: center; justify-content: space-between; }
+.s-resume-actions button { border: 0; border-radius: var(--r-pill); padding: 5px 10px; background: rgba(255,255,255,0.08); color: var(--tx-2); font: 12px var(--font); cursor: pointer; }
+.s-resume-actions button:hover { color: #fff; background: rgba(255,255,255,0.14); }
 .s-shortcut { display: flex; align-items: center; gap: 8px; }
 .s-shortcut > span { width: 78px; color: var(--tx-mut); font-size: 12px; }
 .shortcut-record, .shortcut-reset {

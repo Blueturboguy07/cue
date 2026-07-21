@@ -280,11 +280,17 @@
     $('#key-anthropic').value = settings.apiKeys.anthropic || '';
     $('#key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-nvidia').value = settings.apiKeys.nvidia || '';
+    $('#resume-context').value = settings.resumeContext || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     syncAssistShortcutLabels();
     $('#s-status').textContent = statusText();
   }
+  $('#clear-resume').addEventListener('click', async () => {
+    $('#resume-context').value = '';
+    settings.resumeContext = '';
+    await cue.settingsSet({ resumeContext: '' });
+  });
   function statusText() {
     const k = settings.apiKeys;
     const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia'].filter(Boolean);
@@ -303,6 +309,7 @@
     settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
     settings.apiKeys.gemini = $('#key-gemini').value.trim();
     settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
+    settings.resumeContext = $('#resume-context').value.trim();
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();

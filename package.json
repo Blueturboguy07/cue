@@ -7,6 +7,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --mac zip",
     "dist:win": "electron-builder --win"

@@ -6,6 +6,7 @@ const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
+const { appendResumeContext } = require('./src/profile-context');
 const { rms16 } = require('./src/wav');
 
 let win = null;
@@ -178,7 +179,7 @@ async function runFeature(mode, userText) {
     const built = def.build({ transcript, userText: userText || '' });
     if (DEBUG) console.log('[DEBUG MAIN] Built prompt. Starting LLM stream...');
     const fullText = await llm.stream({
-      system: def.system,
+      system: appendResumeContext(def.system, settings.resumeContext),
       turns: [{ role: 'user', text: built }],
       imageDataUrl,
       onToken: (t) => send('llm:token', { text: t })
