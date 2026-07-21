@@ -32,10 +32,14 @@ jobs:
       - name: Build macOS
         if: matrix.os == 'macos-latest'
         run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Windows
         if: matrix.os == 'windows-latest'
         run: npm run dist:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
