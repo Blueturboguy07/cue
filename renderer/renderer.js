@@ -236,7 +236,10 @@
   cue.on('capture:state', ({ active }) => {
     $('#live-dot').classList.toggle('off', !active);
     $('#stop-btn').classList.toggle('active', active);
-    if (active) { startMic(); startSystemAudio(); } else { stopMic(); stopSystemAudio(); }
+    // System audio is started directly from the button click above so the
+    // getDisplayMedia request keeps its user gesture. Starting it here too
+    // can create a second capture request before the first one resolves.
+    if (active) startMic(); else { stopMic(); stopSystemAudio(); }
   });
   cue.on('llm:start', ({ userBubble, small }) => {
     clearMessages();
