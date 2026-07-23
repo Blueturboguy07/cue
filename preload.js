@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('cue', {
   settingsGet: () => ipcRenderer.invoke('settings:get'),
   settingsSet: (patch) => ipcRenderer.invoke('settings:set', patch),
   shortcutAssistSet: (accelerator) => ipcRenderer.invoke('shortcut:assist:set', accelerator),
+  windowGetBounds: () => ipcRenderer.invoke('window:get-bounds'),
+  windowSetBounds: (bounds) => ipcRenderer.invoke('window:set-bounds', bounds),
   ask: (payload) => ipcRenderer.send('ask', payload),
   captureToggle: () => ipcRenderer.invoke('capture:toggle'),
   captureState: () => ipcRenderer.invoke('capture:state'),
