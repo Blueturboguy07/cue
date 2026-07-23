@@ -26,6 +26,8 @@
   let caretEl = null;
   let assistShortcut = DEFAULT_ASSIST_SHORTCUT;
   let recordingShortcut = false;
+  let resizeState = null;
+  let hoverResizeEdge = null;
 
   const messages = $('#messages');
 
@@ -53,6 +55,16 @@
     if (shortcutBtn && !recordingShortcut) shortcutBtn.textContent = shortcutParts(assistShortcut).join(' + ');
     const placeholder = $('#placeholder');
     if (placeholder) placeholder.innerHTML = 'Ask about your screen or conversation, or ' + shortcutKeycapsHtml(assistShortcut) + ' for Assist';
+  }
+
+  function isMessagesScrolledToBottom() {
+    return messages.scrollHeight - messages.clientHeight - messages.scrollTop < 36;
+  }
+
+  function scrollMessagesToBottom(force) {
+    requestAnimationFrame(() => {
+      if (force || isMessagesScrolledToBottom()) messages.scrollTop = messages.scrollHeight;
+    });
   }
 
   // minimal, safe markdown: fenced code, bullets, inline code, bold, paragraphs
@@ -86,6 +98,7 @@
     b.className = 'user-bubble';
     b.textContent = text;
     messages.appendChild(b);
+    scrollMessagesToBottom(true);
   }
 
   function startAi(small) {
@@ -96,6 +109,7 @@
     caretEl.className = 'ai-caret';
     aiEl.appendChild(caretEl);
     messages.appendChild(aiEl);
+    scrollMessagesToBottom(true);
   }
 
   function appendToken(t) {
@@ -105,6 +119,7 @@
     span.className = 'w';
     span.textContent = t;
     aiEl.insertBefore(span, caretEl);
+    scrollMessagesToBottom(false);
   }
 
   function finalizeAi() {
@@ -112,6 +127,7 @@
     const raw = aiEl.dataset.raw || '';
     aiEl.innerHTML = renderMarkdown(raw);
     aiEl = null; caretEl = null;
+    scrollMessagesToBottom(true);
   }
 
   function setBusy(v) { busy = v; $('#send-btn').classList.toggle('busy', v); }
@@ -239,7 +255,6 @@
     if (active) { startMic(); startSystemAudio(); } else { stopMic(); stopSystemAudio(); }
   });
   cue.on('llm:start', ({ userBubble, small }) => {
-    clearMessages();
     if (userBubble) addUserBubble(userBubble);
     startAi(!!small);
     setBusy(true);
@@ -416,12 +431,13 @@
 
   // ---- example conversation (matches the reference screenshot) ------------
   function showExample() {
-    clearMessages();
+    if (messages.childElementCount) return;
     addUserBubble('What should I say?');
     const ai = document.createElement('div');
     ai.className = 'ai-text';
     ai.textContent = '“A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.”';
     messages.appendChild(ai);
+    scrollMessagesToBottom(true);
   }
 
   // ---- global keys -------------------------------------------------------
@@ -445,11 +461,138 @@
   let ignoring = null;
   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
   document.addEventListener('mousemove', (e) => {
+    if (resizeState) {
+      setIgnore(false);
+      return;
+    }
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim'));
+    const resizeHandle = el && el.closest && el.closest('.resize-handle');
+    if (resizeHandle) {
+      setHoverResizeEdge(resizeHandle.dataset.edge);
+      setIgnore(false);
+      return;
+    }
+    if (hoverResizeEdge) setHoverResizeEdge(null);
+    setCursorForResize(null);
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #resize-layer'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
+
+  // ---- border resize ----------------------------------------------------
+  const edgeToCursor = {
+    top: 'ns-resize',
+    bottom: 'ns-resize',
+    left: 'ew-resize',
+    right: 'ew-resize',
+    'top-left': 'nwse-resize',
+    'bottom-right': 'nwse-resize',
+    'top-right': 'nesw-resize',
+    'bottom-left': 'nesw-resize'
+  };
+
+  function getEdgeFlags(edge) {
+    return {
+      top: edge.includes('top'),
+      bottom: edge.includes('bottom'),
+      left: edge.includes('left'),
+      right: edge.includes('right')
+    };
+  }
+
+  function setCursorForResize(edge) {
+    document.body.style.cursor = edge ? (edgeToCursor[edge] || 'default') : '';
+  }
+
+  function setHoverResizeEdge(edge) {
+    hoverResizeEdge = edge;
+    setCursorForResize(edge);
+    if (edge) cue.setIgnoreMouse(false);
+  }
+
+  function beginResize(edge, startEvent) {
+    if (resizeState) return;
+    const start = { x: startEvent.screenX, y: startEvent.screenY };
+    cue.windowGetBounds().then((bounds) => {
+      if (!bounds) return;
+      resizeState = {
+        edge,
+        start,
+        bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+        nextBounds: null,
+        frame: null
+      };
+      cue.setIgnoreMouse(false);
+      document.body.style.cursor = edgeToCursor[edge] || 'default';
+      window.addEventListener('mousemove', handleResizeMove, true);
+      window.addEventListener('mouseup', endResize, true);
+    });
+  }
+
+  function scheduleResizeUpdate(bounds) {
+    if (!resizeState) return;
+    resizeState.nextBounds = bounds;
+    if (resizeState.frame) return;
+    resizeState.frame = window.requestAnimationFrame(() => {
+      resizeState.frame = null;
+      const next = resizeState.nextBounds;
+      resizeState.nextBounds = null;
+      if (!next) return;
+      cue.windowSetBounds(next);
+    });
+  }
+
+  function handleResizeMove(e) {
+    if (!resizeState) return;
+    e.preventDefault();
+    const dx = e.screenX - resizeState.start.x;
+    const dy = e.screenY - resizeState.start.y;
+    const edge = getEdgeFlags(resizeState.edge);
+    const next = { ...resizeState.bounds };
+    const minWidth = 500;
+    const minHeight = 360;
+
+    if (edge.left) {
+      const width = Math.max(minWidth, resizeState.bounds.width - dx);
+      next.x = resizeState.bounds.x + (resizeState.bounds.width - width);
+      next.width = width;
+    }
+    if (edge.right) {
+      next.width = Math.max(minWidth, resizeState.bounds.width + dx);
+    }
+    if (edge.top) {
+      const height = Math.max(minHeight, resizeState.bounds.height - dy);
+      next.y = resizeState.bounds.y + (resizeState.bounds.height - height);
+      next.height = height;
+    }
+    if (edge.bottom) {
+      next.height = Math.max(minHeight, resizeState.bounds.height + dy);
+    }
+
+    scheduleResizeUpdate(next);
+  }
+
+  function endResize() {
+    if (!resizeState) return;
+    window.removeEventListener('mousemove', handleResizeMove, true);
+    window.removeEventListener('mouseup', endResize, true);
+    if (resizeState.frame) window.cancelAnimationFrame(resizeState.frame);
+    if (resizeState.nextBounds) cue.windowSetBounds(resizeState.nextBounds);
+    document.body.style.cursor = '';
+    resizeState = null;
+  }
+
+  document.querySelectorAll('.resize-handle').forEach((handle) => {
+    handle.addEventListener('mouseenter', () => setHoverResizeEdge(handle.dataset.edge));
+    handle.addEventListener('mouseleave', () => {
+      if (!resizeState) setHoverResizeEdge(null);
+    });
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      beginResize(handle.dataset.edge, e);
+    });
+  });
 
   // ---- onboarding / first-run tutorial -----------------------------------
   const obScrim = $('#onboard-scrim');

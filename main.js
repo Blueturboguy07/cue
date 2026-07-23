@@ -70,6 +70,27 @@ function createWindow() {
   win.webContents.on('render-process-gone', (_e, d) => console.log('[cue] renderer gone', JSON.stringify(d)));
 }
 
+function clampBounds(bounds) {
+  if (!win) return bounds;
+  const current = win.getBounds();
+  const display = screen.getDisplayMatching(current);
+  const workArea = display.workArea;
+  const minWidth = 500;
+  const minHeight = 360;
+
+  let width = Math.max(minWidth, Math.round(bounds.width || current.width));
+  let height = Math.max(minHeight, Math.round(bounds.height || current.height));
+  let x = Math.round(bounds.x != null ? bounds.x : current.x);
+  let y = Math.round(bounds.y != null ? bounds.y : current.y);
+
+  if (x < workArea.x) x = workArea.x;
+  if (y < workArea.y) y = workArea.y;
+  if (x + width > workArea.x + workArea.width) x = Math.max(workArea.x, workArea.x + workArea.width - width);
+  if (y + height > workArea.y + workArea.height) y = Math.max(workArea.y, workArea.y + workArea.height - height);
+
+  return { x, y, width, height };
+}
+
 // -------- STT flushing --------
 async function flushChannel(channel) {
   if (state.transcribing[channel]) return;
@@ -197,6 +218,13 @@ async function runFeature(mode, userText) {
 ipcMain.handle('settings:get', () => store.getSettings());
 ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; return store.setSettings(patch); });
 ipcMain.handle('shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
+ipcMain.handle('window:get-bounds', () => (win ? win.getBounds() : null));
+ipcMain.handle('window:set-bounds', (_e, bounds) => {
+  if (!win || !bounds) return null;
+  const next = clampBounds(bounds);
+  win.setBounds(next, false);
+  return win.getBounds();
+});
 ipcMain.handle('capture:toggle', () => setCapturing(!state.capturing));
 ipcMain.handle('capture:state', () => ({ active: state.capturing }));
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
