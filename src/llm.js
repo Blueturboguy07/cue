@@ -19,6 +19,11 @@ function formatProviderErrorMessage(error, provider) {
   return rawMessage || 'Unknown LLM error.';
 }
 
+function sanitizeTurns(turns) {
+  const valid = new Set(['user', 'assistant']);
+  return (turns || []).filter(t => valid.has(t.role)).map(t => ({ role: t.role, text: String(t.text || '') }));
+}
+
 function stripDataUrl(dataUrl) {
   const m = /^data:(.+?);base64,(.*)$/s.exec(dataUrl || '');
   return m ? { mime: m[1], b64: m[2] } : null;
@@ -109,7 +114,7 @@ function createLLM(settings) {
     provider, model, apiKey,
     ready: !!apiKey && !!model,
     async stream(params) {
-      const args = { apiKey, model, maxTokens, ...params };
+      const args = { apiKey, model, maxTokens, ...params, turns: sanitizeTurns(params.turns) };
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === 'anthropic') return await streamAnthropic(args);
