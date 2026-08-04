@@ -14,9 +14,12 @@ contextBridge.exposeInMainWorld('cue', {
   systemPcm: (arrayBuffer) => ipcRenderer.send('system:pcm', arrayBuffer),
   setIgnoreMouse: (v) => ipcRenderer.send('mouse:ignore', v),
   openPane: (url) => ipcRenderer.send('open-pane', url),
+  appLinkState: () => ipcRenderer.invoke('applink:state'),
+  appLinkRevoke: (callerId) => ipcRenderer.invoke('applink:revoke', callerId),
+  appLinkConsentRespond: (id, allowed) => ipcRenderer.send('applink:consent-response', { id, allowed }),
   log: (msg) => ipcRenderer.send('log', msg),
   on: (channel, cb) => {
-    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript'];
+    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'applink:consent-request'];
     if (!allowed.includes(channel)) return;
     ipcRenderer.on(channel, (_e, data) => cb(data));
   }

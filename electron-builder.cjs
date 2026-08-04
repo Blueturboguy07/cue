@@ -31,7 +31,10 @@ module.exports = {
   productName: "cue",
   asar: false,
   publish: null,
-  files: ["main.js", "preload.js", "src/**/*", "renderer/**/*"],
+  // An allowlist, so anything new has to be added here or it simply is not in
+  // the shipped app — and the only symptom is a require() that throws at
+  // launch, in a build that ran fine from source.
+  files: ["main.js", "preload.js", "src/**/*", "renderer/**/*", "vendor/**/*"],
   directories: { buildResources: "build-resources" },
   mac: {
     target: [{ target: "zip", arch: ["arm64"] }],

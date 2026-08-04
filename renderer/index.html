@@ -89,6 +89,9 @@
         </div>
         <div class="shortcut-hint" id="shortcut-hint">Click the shortcut, then press a new key combination.</div>
 
+        <label class="s-label">Assistant access <span class="s-hint">programs allowed to see what cue is doing</span></label>
+        <div class="s-callers" id="applink-callers"></div>
+
         <div class="s-status" id="s-status"></div>
       </div>
     </div>
@@ -107,6 +110,20 @@
         <div class="spacer"></div>
         <button id="ob-back" class="ob-ghost">Back</button>
         <button id="ob-next" class="ob-primary">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Assistant access request. Shown in-window rather than as a native dialog:
+       cue hides its dock icon, so an OS panel never comes forward and cannot be
+       clicked. -->
+  <div id="consent-scrim" class="hidden">
+    <div id="consent" class="glass">
+      <div class="cs-title" id="cs-title"></div>
+      <div class="cs-body" id="cs-body"></div>
+      <div class="cs-actions">
+        <button id="cs-deny" class="ob-ghost">Don’t allow</button>
+        <button id="cs-allow" class="ob-primary">Allow</button>
       </div>
     </div>
   </div>

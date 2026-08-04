@@ -54,7 +54,7 @@ html, body {
   padding-top: 14px;
   pointer-events: none;                  /* only the actual UI blocks; gaps pass through */
 }
-#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim { pointer-events: auto; }
+#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
 #toolbar { -webkit-app-region: drag; }   /* the pill is the window's drag handle */
 .no-drag, button, input, textarea { -webkit-app-region: no-drag; }
 
@@ -278,6 +278,12 @@ button:focus { outline: none; }
 .shortcut-hint { min-height: 15px; margin-left: 88px; color: var(--tx-mut); font-size: 11px; line-height: 1.35; }
 .shortcut-hint.error { color: #ff9d8f; }
 .shortcut-hint.success { color: #78dba0; }
+.s-callers { display: flex; flex-direction: column; gap: 6px; }
+.s-caller { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--tx-2); }
+.s-caller span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-caller button { padding: 4px 10px; border-radius: var(--r-8); border: 1px solid rgba(255,255,255,0.14); background: rgba(0,0,0,0.25); color: var(--tx-mut); font-size: 11px; font-family: var(--font); cursor: pointer; }
+.s-caller button:hover { background: rgba(255,255,255,0.08); color: var(--tx-2); }
+.s-caller-empty { color: var(--tx-mut); font-size: 11px; }
 .s-status { color: var(--tx-mut); font-size: 12px; margin-top: 10px; min-height: 16px; }
 
 /* ============================ Onboarding / tutorial ============================ */
@@ -317,3 +323,14 @@ button:focus { outline: none; }
   #panel, .user-bubble, .ai-text .w { animation: none !important; opacity: 1 !important; transform: none !important; }
   #live-dot { animation: none !important; }
 }
+
+/* ============================ Assistant access ============================ */
+/* Anything full-screen added here must ALSO be listed in the pointer-events
+   rule near the top and in the click-through selector in renderer.js, or the
+   window stays transparent to the mouse and the buttons cannot be clicked. */
+#consent-scrim { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(0,0,0,0.5); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+#consent-scrim.hidden { display: none; }
+#consent { width: min(430px, 92vw); padding: 24px 26px 16px; text-align: center; -webkit-app-region: no-drag; animation: overlayIn 240ms cubic-bezier(0.22,1,0.36,1); }
+.cs-title { font-size: 15px; font-weight: 620; color: var(--tx-1); line-height: 1.35; }
+.cs-body { margin-top: 10px; color: var(--tx-mut); font-size: 12.5px; line-height: 1.5; white-space: pre-line; }
+.cs-actions { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }

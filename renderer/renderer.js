@@ -287,7 +287,44 @@
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     syncAssistShortcutLabels();
+    fillAppLinkCallers();
     $('#s-status').textContent = statusText();
+  }
+
+  // Whoever cue has been told it may answer questions for. Empty is the normal
+  // state — nothing appears here until something has asked and been allowed.
+  async function fillAppLinkCallers() {
+    const host = $('#applink-callers');
+    if (!host || !cue.appLinkState) return;
+    let state;
+    try { state = await cue.appLinkState(); } catch (_) { return; }
+    const callers = Object.entries((state && state.callers) || {});
+    if (!callers.length) {
+      host.innerHTML = '<div class="s-caller-empty">Nothing has asked yet.</div>';
+      return;
+    }
+    host.innerHTML = '';
+    for (const [id, scopes] of callers) {
+      const allowed = Object.entries(scopes)
+        .filter(([, record]) => record && record.decision === 'granted')
+        .map(([scope]) => (scope === 'action' ? 'control' : 'read'));
+      const name = (scopes.read && scopes.read.callerName) || (scopes.action && scopes.action.callerName) || id;
+
+      const row = document.createElement('div');
+      row.className = 's-caller';
+      const label = document.createElement('span');
+      label.textContent = name + ' — ' + (allowed.length ? allowed.join(' + ') : 'denied');
+      label.title = id;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Forget';
+      button.addEventListener('click', async () => {
+        await cue.appLinkRevoke(id);
+        fillAppLinkCallers();
+      });
+      row.append(label, button);
+      host.append(row);
+    }
   }
   $('#clear-resume').addEventListener('click', async () => {
     $('#resume-context').value = '';
@@ -449,10 +486,47 @@
   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
+
+  // ---- assistant access request ------------------------------------------
+  // Shown here rather than as a native dialog because cue hides its dock icon:
+  // an OS panel from an accessory app never comes forward and cannot be
+  // clicked. Note the scrim is registered in the click-through selector above
+  // and in styles.css — without both, this window stays transparent to the
+  // mouse and the buttons do nothing.
+  const consentScrim = $('#consent-scrim');
+  let pendingConsentId = null;
+
+  function answerConsent(allowed) {
+    if (!pendingConsentId) return;
+    cue.appLinkConsentRespond(pendingConsentId, allowed);
+    pendingConsentId = null;
+    consentScrim.classList.add('hidden');
+  }
+
+  cue.on('applink:consent-request', (request) => {
+    pendingConsentId = request.id;
+    $('#cs-title').textContent = request.message;
+    $('#cs-body').textContent = request.detail;
+    $('#cs-allow').textContent = request.allowLabel;
+    consentScrim.classList.remove('hidden');
+    // Do not wait for a mousemove to turn the mouse back on: the pointer may
+    // already be still, and the sheet would be unclickable until it moved.
+    setIgnore(false);
+    $('#cs-deny').focus();
+  });
+
+  $('#cs-allow').addEventListener('click', () => answerConsent(true));
+  $('#cs-deny').addEventListener('click', () => answerConsent(false));
+  // Anything other than a deliberate Allow is a no, including Escape and
+  // clicking away.
+  consentScrim.addEventListener('click', (e) => { if (e.target === consentScrim) answerConsent(false); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && pendingConsentId) { e.preventDefault(); answerConsent(false); }
+  });
 
   // ---- onboarding / first-run tutorial -----------------------------------
   const obScrim = $('#onboard-scrim');
