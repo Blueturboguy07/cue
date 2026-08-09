@@ -234,6 +234,12 @@ Your API key is restricted. Most often it's an OpenAI **project key that only al
 **Listening does nothing / no transcript.**
 Check Settings shows a transcription-capable key (OpenAI with Whisper, or Gemini). On macOS, also make sure Screen Recording is granted (meeting audio needs it). On Windows, make sure **Let desktop apps access your microphone** is on — the top-level Microphone toggle alone isn't enough.
 
+**The transcript is full of stuttering or repeating words ("YouYou guys coming coming").**
+This is an acoustic echo hallucination. It happens when your laptop microphone picks up the meeting audio from your speakers, and the speech-to-text engine stutters while trying to transcribe the distorted echo. cue has a built-in filter to aggressively discard these stutters, but wearing headphones guarantees it never happens.
+
+**Does conversation context leak between modes (e.g. Work mode vs Job Interview mode)?**
+No. cue automatically clears the active transcript (soft clears the screen and zeroes out the memory) whenever you switch modes via the top bar to ensure context does not spill over.
+
 **A Custom provider request cannot connect.**
 Confirm the Base URL includes the endpoint's `/v1` path when required, the selected model ID exists on that endpoint, and the local gateway is running. Custom provider credentials are intentionally not reused for speech-to-text.
 
