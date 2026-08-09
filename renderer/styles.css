@@ -52,9 +52,9 @@ html, body {
   padding-top: 14px;
   pointer-events: none;                  /* only the actual UI blocks; gaps pass through */
 }
-#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
+#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim, #mode-select-scrim { pointer-events: auto; }
 #toolbar { -webkit-app-region: drag; }   /* drag the top pill to move the window */
-#panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary { -webkit-app-region: no-drag; }
+#panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary, #mode-badge { -webkit-app-region: no-drag; }
 
 /* ============================ Toolbar pill ============================ */
 #toolbar {
@@ -100,6 +100,33 @@ html, body {
 .tb-stop { width: 28px; height: 28px; border-radius: var(--r-8); color: #fff; }
 .tb-stop:hover { background: rgba(255,255,255,0.08); }
 .tb-stop.active { color: #ff6b6b; }
+
+/* Mode badge in toolbar */
+.tb-mode-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: var(--r-pill);
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0.01em;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.05);
+  color: var(--tx-2);
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+  white-space: nowrap; -webkit-app-region: no-drag;
+}
+.tb-mode-badge:hover { background: rgba(255,255,255,0.10); color: #fff; transform: scale(1.03); }
+.tb-mode-badge:active { transform: scale(0.97); }
+.tb-mode-badge.mode-interview {
+  border-color: rgba(60,131,245,0.35);
+  background: rgba(60,131,245,0.10);
+  color: #a8c8ff;
+}
+.tb-mode-badge.mode-interview:hover { background: rgba(60,131,245,0.18); color: #cfe0ff; }
+.tb-mode-badge.mode-work {
+  border-color: rgba(139,92,246,0.35);
+  background: rgba(139,92,246,0.10);
+  color: #c4b5fd;
+}
+.tb-mode-badge.mode-work:hover { background: rgba(139,92,246,0.18); color: #ddd6fe; }
 
 /* ============================ Panel ============================ */
 #panel-wrap { position: relative; margin-top: 12px; width: min(624px, 94vw); }
@@ -479,3 +506,122 @@ button:focus { outline: none; }
 .cs-title { font-size: 15px; font-weight: 620; color: var(--tx-1); line-height: 1.35; }
 .cs-body { margin-top: 10px; color: var(--tx-mut); font-size: 12.5px; line-height: 1.5; white-space: pre-line; }
 .cs-actions { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }
+
+/* ============================ Mode Selection Screen ============================ */
+#mode-select-scrim {
+  position: fixed; inset: 0; z-index: 50;
+  display: grid; place-items: center;
+  background: rgba(0,0,0,0.72);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+}
+#mode-select-scrim.hidden { display: none; }
+#mode-select {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 12px; padding: 0 16px; width: min(600px, 96vw);
+  -webkit-app-region: no-drag;
+  animation: overlayIn 320ms cubic-bezier(0.22,1,0.36,1);
+}
+.ms-logo {
+  font-size: 22px; font-weight: 900; letter-spacing: -0.04em;
+  background: linear-gradient(135deg, #6ea8ff 0%, #a78bfa 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text; margin-bottom: 2px;
+}
+.ms-title {
+  font-size: 23px; font-weight: 700; color: var(--tx-1);
+  letter-spacing: -0.02em; text-align: center;
+}
+.ms-subtitle {
+  font-size: 13.5px; color: var(--tx-mut); text-align: center; margin-bottom: 4px;
+}
+.ms-cards { display: flex; gap: 14px; width: 100%; flex-wrap: wrap; }
+.mode-card {
+  flex: 1; min-width: 200px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  padding: 22px 24px; border-radius: 20px; text-align: left;
+  background: rgba(255,255,255,0.05);
+  border: 1.5px solid rgba(255,255,255,0.12);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+  cursor: pointer; font-family: var(--font);
+  transition: transform 220ms cubic-bezier(0.22,1,0.36,1),
+              border-color 220ms ease,
+              box-shadow 220ms ease,
+              background 220ms ease;
+  -webkit-app-region: no-drag;
+}
+.mode-card:hover {
+  transform: translateY(-4px);
+  background: rgba(255,255,255,0.09);
+  border-color: rgba(255,255,255,0.22);
+  box-shadow: 0 16px 44px rgba(0,0,0,0.50);
+}
+.mode-card:active { transform: translateY(0); }
+#mode-card-interview:hover { border-color: rgba(60,131,245,0.60); box-shadow: 0 16px 44px rgba(60,131,245,0.22); }
+#mode-card-work:hover { border-color: rgba(139,92,246,0.60); box-shadow: 0 16px 44px rgba(139,92,246,0.22); }
+.mode-card.selected { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(60,131,245,0.25), 0 16px 44px rgba(60,131,245,0.28); }
+.mc-icon { font-size: 30px; line-height: 1; }
+.mc-title { font-size: 16px; font-weight: 700; color: var(--tx-1); }
+.mc-desc { font-size: 13px; line-height: 1.55; color: var(--tx-2); }
+.mc-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.mc-tags span {
+  font-size: 10.5px; font-weight: 600; padding: 2px 9px;
+  border-radius: var(--r-pill); background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.12); color: var(--tx-mut);
+}
+#mode-card-interview .mc-tags span { color: rgba(147,197,253,0.90); border-color: rgba(60,131,245,0.28); background: rgba(60,131,245,0.09); }
+#mode-card-work .mc-tags span { color: rgba(196,181,253,0.90); border-color: rgba(139,92,246,0.28); background: rgba(139,92,246,0.09); }
+
+/* ============================ Work Recording Indicator ============================ */
+#work-recording-indicator {
+  position: absolute; top: -2px; right: -6px; z-index: 5;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px 3px 7px; border-radius: var(--r-pill);
+  background: rgba(239,68,68,0.18); border: 1px solid rgba(239,68,68,0.38);
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em;
+  color: #fca5a5; pointer-events: none;
+}
+#work-recording-indicator.hidden { display: none; }
+.wri-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #ef4444; flex-shrink: 0;
+  animation: recPulse 1.2s ease infinite;
+}
+@keyframes recPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.30; } }
+
+/* ============================ Toggle Switch ============================ */
+.s-toggle-row {
+  display: flex; align-items: flex-start; gap: 14px;
+  margin-top: 6px; padding: 10px 12px;
+  border-radius: var(--r-8); background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.s-toggle-row > div { flex: 1; }
+.s-toggle { display: inline-flex; flex-shrink: 0; cursor: pointer; margin-top: 2px; }
+.s-toggle input[type="checkbox"] { position: absolute; opacity: 0; width: 0; height: 0; }
+.s-toggle-track {
+  position: relative; width: 40px; height: 22px;
+  border-radius: 11px; background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.18);
+  transition: background 200ms ease, border-color 200ms ease;
+}
+.s-toggle input:checked + .s-toggle-track { background: rgba(34,197,94,0.55); border-color: rgba(34,197,94,0.70); }
+.s-toggle-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: rgba(255,255,255,0.92);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+  transition: transform 200ms cubic-bezier(0.22,1,0.36,1);
+}
+.s-toggle input:checked + .s-toggle-track .s-toggle-thumb { transform: translateX(18px); }
+.s-toggle input:focus-visible + .s-toggle-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ============================ Switch Mode Button ============================ */
+.s-switch-mode { margin-top: 10px; border-top: 1px solid var(--bd-hair); padding-top: 10px; }
+.s-switch-btn {
+  width: 100%; padding: 9px; border-radius: var(--r-8);
+  border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.04);
+  color: var(--tx-2); font-size: 13px; font-weight: 500; font-family: var(--font);
+  cursor: pointer; transition: all 140ms ease;
+}
+.s-switch-btn:hover { background: rgba(255,255,255,0.09); color: #fff; border-color: rgba(255,255,255,0.22); }

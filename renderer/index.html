@@ -7,6 +7,29 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- Mode selection screen (shown on first launch or when switching) -->
+  <div id="mode-select-scrim" class="hidden">
+    <div id="mode-select">
+      <div class="ms-logo">◆</div>
+      <div class="ms-title">How will you use cue?</div>
+      <div class="ms-subtitle">Pick a mode. You can switch anytime from Settings.</div>
+      <div class="ms-cards">
+        <button class="mode-card" id="mode-card-interview" data-mode="interview">
+          <div class="mc-icon">🎯</div>
+          <div class="mc-title">Interview Mode</div>
+          <div class="mc-desc">Real-time coaching for job interviews. Suggests answers, surfaces your stories, and tracks salary targets.</div>
+          <div class="mc-tags"><span>Live answers</span><span>Resume context</span><span>STAR stories</span></div>
+        </button>
+        <button class="mode-card" id="mode-card-work" data-mode="work">
+          <div class="mc-icon">💼</div>
+          <div class="mc-title">Work Mode</div>
+          <div class="mc-desc">Your everyday work copilot. Assists in standups, drafts follow-ups, and keeps notes on your meetings.</div>
+          <div class="mc-tags"><span>Meeting assist</span><span>Follow-up drafts</span><span>Recaps</span></div>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div id="app">
     <!-- Dedicated drag handle / top bar -->
     <div id="toolbar" class="drag-handle">
@@ -15,6 +38,10 @@
         <span class="drag-label">Drag</span>
       </div>
       <button class="tb-logo" id="logo-btn" title="cue"></button>
+      <div class="tb-divider"></div>
+      <div id="mode-badge" class="tb-mode-badge" title="Current mode — click to switch">
+        <span id="mode-badge-icon"></span><span id="mode-badge-label"></span>
+      </div>
       <div class="tb-divider"></div>
       <button class="tb-hide" id="hide-btn"><span class="chev"></span><span>Hide</span></button>
       <div class="tb-divider"></div>
@@ -25,6 +52,12 @@
     <div id="panel-wrap">
       <span id="live-dot" class="off"></span>
       <div id="stt-status" class="stt-status stt-disconnected" title="STT connection status">off</div>
+
+      <!-- Work Mode recording indicator (visible only to user, not shared in screen share) -->
+      <div id="work-recording-indicator" class="hidden">
+        <span class="wri-dot"></span><span class="wri-label">REC</span>
+      </div>
+
       <div id="panel" class="glass no-drag">
         <div id="messages"></div>
 
@@ -67,12 +100,8 @@
           </div>
         </div>
 
-        <div id="prep-status" class="prep-status">
-          <span class="prep-item" data-field="resume">📄 Resume</span>
-          <span class="prep-item" data-field="jd">💼 JD</span>
-          <span class="prep-item" data-field="stories">🎯 Stories</span>
-          <span class="prep-item" data-field="salary">💰 Salary</span>
-        </div>
+        <!-- Populated by JS based on active mode -->
+        <div id="prep-status" class="prep-status"></div>
       </div>
     </div>
   </div>
@@ -89,9 +118,10 @@
       <div class="s-tabs">
         <button class="s-tab on" data-tab="keys">🔑 Keys</button>
         <button class="s-tab" data-tab="profile">📄 Profile</button>
-        <button class="s-tab" data-tab="prep">🎯 Interview Prep</button>
+        <button class="s-tab s-tab-interview" data-tab="prep">🎯 Interview Prep</button>
+        <button class="s-tab s-tab-work hidden" data-tab="work">📋 Work Context</button>
         <button class="s-tab" data-tab="style">✨ Style</button>
-        <button class="s-tab" data-tab="qa">💬 Q&amp;A</button>
+        <button class="s-tab s-tab-interview" data-tab="qa">💬 Q&amp;A</button>
       </div>
 
       <!-- Tab: Keys -->
@@ -121,6 +151,10 @@
         <div class="s-callers" id="applink-callers"></div>
 
         <div class="s-status" id="s-status"></div>
+
+        <div class="s-switch-mode">
+          <button id="switch-mode-btn" class="s-switch-btn">⇄ Switch Mode</button>
+        </div>
       </div>
 
       <!-- Tab: Profile -->
@@ -147,6 +181,29 @@
         <textarea id="work-style" rows="3" spellcheck="false" placeholder="e.g. I prefer data-driven decisions, work well with autonomy, value direct feedback, thrive in fast-paced environments..."></textarea>
       </div>
 
+      <!-- Tab: Work Context -->
+      <div class="s-body s-tab-pane hidden" data-pane="work">
+        <label class="s-label">Work role &amp; team <span class="s-hint">your role, team, and current projects — used for in-meeting suggestions</span></label>
+        <textarea id="work-context" rows="4" spellcheck="false" placeholder="e.g. I'm a senior engineer on the Payments team at Acme Corp. We're currently migrating from a monolith to microservices. My focus is the checkout service."></textarea>
+
+        <label class="s-label">Project notes <span class="s-hint">paste relevant docs, specs, or notes — cue surfaces these during meetings</span></label>
+        <textarea id="project-notes" rows="6" spellcheck="false" placeholder="Paste project specs, PRD excerpts, meeting context, or anything cue should know about your current work."></textarea>
+
+        <label class="s-label">Meeting notes context <span class="s-hint">optional standing agenda or recurring talking points</span></label>
+        <textarea id="meeting-notes-context" rows="3" spellcheck="false" placeholder="e.g. Weekly standup: what I did, what I'm doing, blockers. Retrospective: what went well, what to improve."></textarea>
+
+        <div class="s-toggle-row">
+          <div>
+            <div class="s-label" style="margin-top:0">Save meeting transcripts <span class="s-hint">optional — stores transcripts locally on your device</span></div>
+            <div class="s-hint-block" style="margin-top:4px">When enabled, transcripts are saved to a local file on your device only. Nothing is sent to any server. Useful for generating follow-ups after a call. <strong>Inform meeting participants</strong> if required by your local laws.</div>
+          </div>
+          <label class="s-toggle" for="persist-transcripts-toggle">
+            <input type="checkbox" id="persist-transcripts-toggle" role="switch" aria-label="Save meeting transcripts" />
+            <span class="s-toggle-track"><span class="s-toggle-thumb"></span></span>
+          </label>
+        </div>
+      </div>
+
       <!-- Tab: Q&A -->
       <div class="s-body s-tab-pane hidden" data-pane="qa">
         <label class="s-label">Salary target <span class="s-hint">used when asked about compensation</span></label>
@@ -171,7 +228,6 @@
           These rules tell cue <strong>how</strong> to write, not <strong>what</strong> to say. Use one imperative sentence per line (e.g. <em>Never use em-dashes.</em>). They apply to every mode except coding-problem solves (LeetCode), which stays strict. Stored locally; never sent anywhere except the AI provider when cue answers a question.
         </div>
       </div>
-
 
     </div>
   </div>
@@ -201,7 +257,7 @@
       <div class="cs-title" id="cs-title"></div>
       <div class="cs-body" id="cs-body"></div>
       <div class="cs-actions">
-        <button id="cs-deny" class="ob-ghost">Don’t allow</button>
+        <button id="cs-deny" class="ob-ghost">Don't allow</button>
         <button id="cs-allow" class="ob-primary">Allow</button>
       </div>
     </div>

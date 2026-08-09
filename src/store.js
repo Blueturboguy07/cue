@@ -12,23 +12,26 @@ const MAX_AI_RULES_CHARS = 2000;
 const DEFAULTS = {
   provider: 'openai',
   smart: false,
+  appMode: '',
   apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', ollama: '', groq: '' },
   // Tab 2: Profile
   resumeText: '',
   jobDescription: '',
   // Tab 3: Interview Prep
-  starStories: '',       // 3-5 behavioral STAR stories in plain English
-  whyCompany: '',        // Why do you want to work here?
-  whyLeaving: '',        // Why are you leaving your current job?
-  workStyle: '',         // How you work, decision-making style, values
+  starStories: '',
+  whyCompany: '',
+  whyLeaving: '',
+  workStyle: '',
   // Tab 4: Q&A
-  salaryTarget: '',      // e.g. "$150k-$180k base + equity"
-  questionsToAsk: '',    // Questions to ask the interviewer
-  // Tab 5: Style — custom response rules
-  // The user writes how the AI should write: e.g. "no em-dashes", "use bullet
-  // points", "casual tone". Applied to every LLM mode EXCEPT LeetCode (kept
-  // strict for coding problems).
+  salaryTarget: '',
+  questionsToAsk: '',
+  // Tab 5: Style
   aiRules: '',
+  // Work Mode context
+  workContext: '',
+  projectNotes: '',
+  meetingNotesContext: '',
+  persistTranscripts: false,
   // Window position
   windowX: null,
   windowY: null,

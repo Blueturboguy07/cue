@@ -24,6 +24,7 @@
 
   // ---- state -------------------------------------------------------------
   let settings = null;
+  let appMode = 'interview';
   let busy = false;
   let aiEl = null;       // current streaming <div class="ai-text">
   let caretEl = null;
@@ -149,6 +150,122 @@
     toastTimer = setTimeout(() => el.classList.remove('show'), ms);
   }
 
+  // ---- mode selection ----------------------------------------------------
+  const modeSelectScrim = $('#mode-select-scrim');
+
+  function showModeSelect() {
+    modeSelectScrim.classList.remove('hidden');
+    setIgnore(false);
+    document.querySelectorAll('.mode-card').forEach((card) => {
+      card.classList.toggle('selected', card.dataset.mode === appMode);
+    });
+  }
+
+  async function selectMode(mode) {
+    appMode = mode;
+    settings.appMode = mode;
+    await cue.settingsSet({ appMode: mode });
+    applyMode(mode);
+    modeSelectScrim.classList.add('hidden');
+  }
+
+  function applyMode(mode) {
+    const isWork = mode === 'work';
+    const actionRow = $('#action-row');
+
+    if (isWork) {
+      actionRow.innerHTML = [
+        `<button class="act act-primary" data-mode="assist" title="Scans your screen and meeting audio to suggest your next response"><span class="ic" id="ic-assist"></span><span>Live Assist</span><span class="shortcut-hint" id="assist-shortcut-hint"></span></button>`,
+        `<span class="sep">•</span>`,
+        `<button class="act" data-mode="followup"><span class="ic" id="ic-followup"></span><span>Draft Follow-up</span></button>`,
+        `<span class="sep">•</span>`,
+        `<button class="act" data-mode="recap"><span class="ic" id="ic-recap"></span><span>Recap &amp; Tasks</span></button>`,
+        `<span class="sep">•</span>`,
+        `<button class="act" id="transcript-toggle-btn" title="Show/hide what was heard"><span class="ic" id="ic-transcript"></span><span>Transcript</span></button>`,
+        `<span class="sep">•</span>`,
+        `<button class="act act-clear" id="clear-transcript-btn" title="Clear transcript and start fresh"><span class="ic" id="ic-clear"></span><span>Clear</span></button>`
+      ].join('');
+    } else {
+      actionRow.innerHTML = [
+        `<button class="act act-primary" data-mode="say" title="Suggests what to say next based on the conversation"><span class="ic" id="ic-say"></span><span>What should I say?</span><span class="shortcut-hint" id="say-shortcut-hint"></span></button>`,
+        `<span class="sep">•</span>`,
+        `<button class="act act-secondary" data-mode="assist" title="Scans your screen and conversation to decide what you need"><span class="ic" id="ic-assist"></span><span>Assist</span><span class="shortcut-hint" id="assist-shortcut-hint"></span></button>`,
+        `<span class="sep">•</span>`,
+        `<button class="act" data-mode="followup"><span class="ic" id="ic-followup"></span><span>Follow-up</span></button>`,
+        `<span class="sep">•</span>`,
+        `<button class="act" data-mode="recap"><span class="ic" id="ic-recap"></span><span>Recap</span></button>`,
+        `<span class="sep">•</span>`,
+        `<button class="act" id="transcript-toggle-btn" title="Show/hide what was heard"><span class="ic" id="ic-transcript"></span><span>Transcript</span></button>`,
+        `<span class="sep">•</span>`,
+        `<button class="act act-clear" id="clear-transcript-btn" title="Clear transcript and start fresh"><span class="ic" id="ic-clear"></span><span>Clear</span></button>`
+      ].join('');
+    }
+
+    // Re-paint icons after rebuilding action row
+    const icMap = {
+      'ic-say':        () => document.getElementById('ic-say')        && (document.getElementById('ic-say').innerHTML        = icon('wand-sparkles',  { size: 16 })),
+      'ic-assist':     () => document.getElementById('ic-assist')     && (document.getElementById('ic-assist').innerHTML     = icon('sparkles',       { size: 16 })),
+      'ic-followup':   () => document.getElementById('ic-followup')   && (document.getElementById('ic-followup').innerHTML   = icon('message-circle', { size: 16 })),
+      'ic-recap':      () => document.getElementById('ic-recap')      && (document.getElementById('ic-recap').innerHTML      = icon('refresh-cw',     { size: 16 })),
+      'ic-transcript': () => document.getElementById('ic-transcript') && (document.getElementById('ic-transcript').innerHTML = icon('file-text',      { size: 15 })),
+      'ic-clear':      () => document.getElementById('ic-clear')      && (document.getElementById('ic-clear').innerHTML      = icon('trash-2',        { size: 15 }))
+    };
+    Object.values(icMap).forEach((fn) => fn());
+
+    // Re-bind action buttons (they were re-created)
+    actionRow.querySelectorAll('.act').forEach((btn) => {
+      if (btn.dataset.mode) btn.addEventListener('click', () => runMode(btn.dataset.mode, ''));
+    });
+    rebindTranscriptBtns();
+
+    // Prep status bar
+    const prepStatus = $('#prep-status');
+    if (isWork) {
+      prepStatus.innerHTML = [
+        `<span class="prep-item" data-field="workContext">👤 Work Context</span>`,
+        `<span class="prep-item" data-field="projectNotes">📁 Project Notes</span>`,
+        `<span class="prep-item" data-field="meetingNotesContext">🗒️ Meeting Notes</span>`
+      ].join('');
+    } else {
+      prepStatus.innerHTML = [
+        `<span class="prep-item" data-field="resume">📄 Resume</span>`,
+        `<span class="prep-item" data-field="jd">💼 JD</span>`,
+        `<span class="prep-item" data-field="stories">🎯 Stories</span>`,
+        `<span class="prep-item" data-field="salary">💰 Salary</span>`
+      ].join('');
+    }
+
+    // Settings tab visibility
+    document.querySelectorAll('.s-tab-interview').forEach((t) => t.classList.toggle('hidden', isWork));
+    document.querySelectorAll('.s-tab-work').forEach((t) => t.classList.toggle('hidden', !isWork));
+
+    // Shortcut hints (they're re-created in DOM)
+    const sayHintEl = document.getElementById('say-shortcut-hint');
+    const assistHintEl = document.getElementById('assist-shortcut-hint');
+    if (sayHintEl) sayHintEl.textContent = isWindows ? 'Ctrl+Shift+↵' : '⌘⇧↵';
+    if (assistHintEl) assistHintEl.textContent = isWindows ? 'Ctrl+↵' : '⌘↵';
+
+    updatePrepStatus();
+
+    // Toolbar mode badge
+    const badge = document.getElementById('mode-badge');
+    const badgeIcon = document.getElementById('mode-badge-icon');
+    const badgeLabel = document.getElementById('mode-badge-label');
+    if (badge && badgeIcon && badgeLabel) {
+      badge.classList.remove('mode-interview', 'mode-work');
+      badge.classList.add(isWork ? 'mode-work' : 'mode-interview');
+      badgeIcon.textContent = isWork ? '💼 ' : '🎯 ';
+      badgeLabel.textContent = isWork ? 'Work Mode' : 'Interview Mode';
+    }
+  }
+
+  document.querySelectorAll('.mode-card').forEach((card) => {
+    card.addEventListener('click', () => selectMode(card.dataset.mode));
+  });
+
+  const modeBadge = document.getElementById('mode-badge');
+  if (modeBadge) modeBadge.addEventListener('click', () => showModeSelect());
+
   // ---- actions -----------------------------------------------------------
   function runMode(mode, text) {
     if (busy) return;
@@ -211,42 +328,42 @@
     await cue.captureToggle();
   });
 
-  // Transcript toggle
-  const transcriptToggleBtn = document.getElementById('transcript-toggle-btn');
-  if (transcriptToggleBtn) {
-    transcriptToggleBtn.addEventListener('click', () => {
-      transcriptOpen = !transcriptOpen;
-      const wrap = document.getElementById('transcript-wrap');
-      if (wrap) {
-        wrap.classList.toggle('hidden', !transcriptOpen);
-        if (transcriptOpen) {
-          const list = document.getElementById('transcript-list');
-          if (list && !list.children.length) {
-            const ph = document.createElement('div');
-            ph.className = 'transcript-placeholder';
-            ph.textContent = 'Nothing heard yet — start listening to begin.';
-            list.appendChild(ph);
+  // Transcript + Clear transcript buttons — rebindable after action-row rebuild
+  function rebindTranscriptBtns() {
+    const toggleBtn = document.getElementById('transcript-toggle-btn');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        transcriptOpen = !transcriptOpen;
+        const wrap = document.getElementById('transcript-wrap');
+        if (wrap) {
+          wrap.classList.toggle('hidden', !transcriptOpen);
+          if (transcriptOpen) {
+            const list = document.getElementById('transcript-list');
+            if (list && !list.children.length) {
+              const ph = document.createElement('div');
+              ph.className = 'transcript-placeholder';
+              ph.textContent = 'Nothing heard yet — start listening to begin.';
+              list.appendChild(ph);
+            }
+            if (wrap) wrap.scrollTop = wrap.scrollHeight;
           }
-          if (wrap) wrap.scrollTop = wrap.scrollHeight;
         }
-      }
-    });
+      });
+    }
+    const clearBtn = document.getElementById('clear-transcript-btn');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', async () => {
+        await cue.clearTranscript();
+        clearMessages();
+        if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
+        const list = document.getElementById('transcript-list');
+        if (list) list.innerHTML = '';
+        transcriptInterimEl = null;
+        showToast('Transcript cleared', 3000);
+      });
+    }
   }
-
-  // Clear transcript
-  const clearTranscriptBtn = document.getElementById('clear-transcript-btn');
-  if (clearTranscriptBtn) {
-    clearTranscriptBtn.addEventListener('click', async () => {
-      await cue.clearTranscript();
-      clearMessages();
-      // Also clear the floating interim bar
-      if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
-      const list = document.getElementById('transcript-list');
-      if (list) list.innerHTML = '';
-      transcriptInterimEl = null;
-      showToast('Transcript cleared', 3000);
-    });
-  }
+  rebindTranscriptBtns();
 
   // ---- capture: mic (renderer side) — uses AudioWorklet (modern, off-main-thread) ----
   let audioCtx = null, micStream = null, micWorklet = null;
@@ -421,6 +538,9 @@
     // Here we only start the mic (no gesture required) and stop everything on deactivate.
     if (active) { startMic(); } else { stopMic(); stopSystemAudio(); }
     updateSttStatus({ active, streaming });
+    // Work Mode recording indicator
+    const recIndicator = document.getElementById('work-recording-indicator');
+    if (recIndicator) recIndicator.classList.toggle('hidden', !(appMode === 'work' && active && settings && settings.persistTranscripts));
   });
 
   // ---- real-time transcript display (interim + final) ----
@@ -550,7 +670,12 @@
   if (aiRulesEl) aiRulesEl.addEventListener('input', updateAiRulesCounter);
   function updatePrepStatus() {
     if (!settings) return;
-    const fields = {
+    const isWork = appMode === 'work';
+    const fields = isWork ? {
+      workContext:         !!(settings.workContext && settings.workContext.trim()),
+      projectNotes:        !!(settings.projectNotes && settings.projectNotes.trim()),
+      meetingNotesContext: !!(settings.meetingNotesContext && settings.meetingNotesContext.trim())
+    } : {
       resume:  !!(settings.resumeText && settings.resumeText.trim()),
       jd:      !!(settings.jobDescription && settings.jobDescription.trim()),
       stories: !!(settings.starStories && settings.starStories.trim()),
@@ -582,6 +707,9 @@
   $('#more-btn').addEventListener('click', openSettings);
   $('#s-close').addEventListener('click', closeSettings);
   scrim.addEventListener('click', (e) => { if (e.target === scrim) closeSettings(); });
+
+  const switchModeBtn = document.getElementById('switch-mode-btn');
+  if (switchModeBtn) switchModeBtn.addEventListener('click', () => { closeSettings(); showModeSelect(); });
 
   // Tab switching
   document.querySelectorAll('.s-tab').forEach((tab) => {
@@ -618,6 +746,15 @@
     $('#why-company').value = settings.whyCompany || '';
     $('#why-leaving').value = settings.whyLeaving || '';
     $('#work-style').value = settings.workStyle || '';
+    // Work Context tab
+    const wcEl = document.getElementById('work-context');
+    const pnEl = document.getElementById('project-notes');
+    const mncEl = document.getElementById('meeting-notes-context');
+    const ptEl = document.getElementById('persist-transcripts-toggle');
+    if (wcEl) wcEl.value = settings.workContext || '';
+    if (pnEl) pnEl.value = settings.projectNotes || '';
+    if (mncEl) mncEl.value = settings.meetingNotesContext || '';
+    if (ptEl) ptEl.checked = !!(settings.persistTranscripts);
     // Style tab
     $('#ai-rules').value = settings.aiRules || '';
     updateAiRulesCounter();
@@ -703,6 +840,15 @@
     settings.whyCompany = $('#why-company').value.trim();
     settings.whyLeaving = $('#why-leaving').value.trim();
     settings.workStyle = $('#work-style').value.trim();
+    // Work Context
+    const wcEl = document.getElementById('work-context');
+    const pnEl = document.getElementById('project-notes');
+    const mncEl = document.getElementById('meeting-notes-context');
+    const ptEl = document.getElementById('persist-transcripts-toggle');
+    if (wcEl) settings.workContext = wcEl.value.trim();
+    if (pnEl) settings.projectNotes = pnEl.value.trim();
+    if (mncEl) settings.meetingNotesContext = mncEl.value.trim();
+    if (ptEl) settings.persistTranscripts = ptEl.checked;
     // Style tab
     settings.aiRules = $('#ai-rules').value.trim();
     // Q&A
@@ -734,7 +880,7 @@
   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim, #mode-select-scrim'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
@@ -851,7 +997,15 @@
     settings = await cue.settingsGet();
     const platformInfo = await cue.platformInfo();
 
-    // R4: shortcut hints
+    // Load and apply saved mode (or prompt to choose)
+    if (settings.appMode) {
+      appMode = settings.appMode;
+      applyMode(appMode);
+    } else {
+      showModeSelect();
+    }
+
+    // R4: shortcut hints (applyMode also sets these, but set here as safe fallback)
     const sayHintEl = document.getElementById('say-shortcut-hint');
     const assistHintEl = document.getElementById('assist-shortcut-hint');
     if (sayHintEl) sayHintEl.textContent = isWindows ? 'Ctrl+Shift+↵' : '⌘⇧↵';

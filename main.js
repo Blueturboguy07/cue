@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell } = require('electron');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
@@ -9,7 +10,7 @@ const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 const { createStreamingSTT } = require('./src/stt-streaming');
 const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
-const { buildInterviewContext, detectCategory } = require('./src/interview-context');
+const { buildInterviewContext, buildWorkContext, detectCategory } = require('./src/interview-context');
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 
 let win = null;
@@ -71,6 +72,21 @@ const ringBuffers = {
 function pushTranscript(turn) {
   transcript.push(turn);
   if (transcript.length > MAX_TRANSCRIPT_TURNS) transcript.splice(0, transcript.length - MAX_TRANSCRIPT_TURNS);
+  persistTranscriptTurn(turn);
+}
+
+// -------- optional transcript persistence (Work Mode) --------
+function persistTranscriptTurn(turn) {
+  try {
+    const settings = store.getSettings();
+    if (!settings.persistTranscripts) return;
+    const dir = path.join(app.getPath('userData'), 'cue-transcripts');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const date = new Date().toISOString().slice(0, 10);
+    const file = path.join(dir, `transcript-${date}.jsonl`);
+    const line = JSON.stringify({ channel: turn.channel, text: turn.text, ts: turn.ts }) + '\n';
+    fs.appendFileSync(file, line, 'utf8');
+  } catch (_) { /* best-effort — never block audio pipeline */ }
 }
 
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
@@ -346,9 +362,10 @@ async function runFeature(mode, userText) {
   state.busy = true;
   try {
     const settings = store.getSettings();
+    const isWorkMode = settings.appMode === 'work';
     const llm = createLLM(settings);
     const userBubble = def.userBubble !== null ? def.userBubble : (mode === 'ask' ? userText : null);
-    const category = mode !== 'leetcode' ? detectCategory(transcript) : null;
+    const category = (!isWorkMode && mode !== 'leetcode') ? detectCategory(transcript) : null;
     send('llm:start', { userBubble, small: !!def.small, category });
 
     if (!llm.ready) {
@@ -365,9 +382,10 @@ async function runFeature(mode, userText) {
       }
     }
 
-    const settingsForPrompt = store.getSettings();
-    const contextBlock = buildInterviewContext(settingsForPrompt, mode, transcript);
-    const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '') : (def.system || '');
+    const contextBlock = isWorkMode
+      ? buildWorkContext(settings, mode, transcript)
+      : buildInterviewContext(settings, mode, transcript);
+    const system = def.buildSystem ? def.buildSystem(contextBlock, settings.aiRules || '') : (def.system || '');
     const built = def.build({ transcript, userText: userText || '' });
     await llm.stream({
       system,

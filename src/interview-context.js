@@ -279,4 +279,32 @@ function buildResumeContext(resumeText, jobDescription, mode) {
   return parts.join('\n\n');
 }
 
-module.exports = { buildInterviewContext, buildResumeContext, detectCategory, parseResume };
+// ── Work Mode context builder ─────────────────────────────────────────────────
+
+/**
+ * buildWorkContext(settings, mode, transcript)
+ * Returns a system-prompt context block for Work Mode features.
+ * Injects work role, project notes, and meeting context.
+ */
+function buildWorkContext(settings, _mode, _transcript) {
+  const wc = settings.workContext || '';
+  const pn = settings.projectNotes || '';
+  const mn = settings.meetingNotesContext || '';
+
+  const blocks = [];
+
+  if (wc.trim()) {
+    blocks.push('=== Your Role & Team ===\n' + clip(wc.trim(), 800));
+  }
+  if (pn.trim()) {
+    blocks.push('=== Project Notes ===\n' + clip(pn.trim(), 2000));
+  }
+  if (mn.trim()) {
+    blocks.push('=== Meeting Context ===\n' + clip(mn.trim(), 600));
+  }
+
+  if (!blocks.length) return null;
+  return blocks.join('\n\n');
+}
+
+module.exports = { buildInterviewContext, buildWorkContext, buildResumeContext, detectCategory, parseResume };
