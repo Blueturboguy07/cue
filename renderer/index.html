@@ -10,21 +10,23 @@
   <!-- Mode selection screen (shown on first launch or when switching) -->
   <div id="mode-select-scrim" class="hidden">
     <div id="mode-select">
-      <div class="ms-logo">◆</div>
-      <div class="ms-title">How will you use cue?</div>
-      <div class="ms-subtitle">Pick a mode. You can switch anytime from Settings.</div>
+      <div class="ms-wordmark"><span class="ms-mark" data-ic="logo" data-ic-size="16"></span><span class="ms-name">cue</span></div>
+      <h1 class="ms-title">How will you use cue?</h1>
+      <p class="ms-subtitle">Pick a mode. Switch anytime from Settings.</p>
       <div class="ms-cards">
         <button class="mode-card" id="mode-card-interview" data-mode="interview">
-          <div class="mc-icon">🎯</div>
-          <div class="mc-title">Interview Mode</div>
-          <div class="mc-desc">Real-time coaching for job interviews. Suggests answers, surfaces your stories, and tracks salary targets.</div>
-          <div class="mc-tags"><span>Live answers</span><span>Resume context</span><span>STAR stories</span></div>
+          <span class="mc-ind" aria-hidden="true"><span class="mc-dot"></span>LISTENING</span>
+          <span class="mc-ic" data-ic="mic" data-ic-size="20"></span>
+          <span class="mc-title">Interview</span>
+          <span class="mc-desc">Real-time coaching for job interviews. Suggests answers, surfaces your stories, and tracks salary targets.</span>
+          <span class="mc-tags"><span>Live answers</span><span>Resume context</span><span>STAR stories</span></span>
         </button>
         <button class="mode-card" id="mode-card-work" data-mode="work">
-          <div class="mc-icon">💼</div>
-          <div class="mc-title">Work Mode</div>
-          <div class="mc-desc">Your everyday work copilot. Assists in standups, drafts follow-ups, and keeps notes on your meetings.</div>
-          <div class="mc-tags"><span>Meeting assist</span><span>Follow-up drafts</span><span>Recaps</span></div>
+          <span class="mc-ind" aria-hidden="true"><span class="mc-dot"></span>LISTENING</span>
+          <span class="mc-ic" data-ic="briefcase" data-ic-size="20"></span>
+          <span class="mc-title">Work</span>
+          <span class="mc-desc">Your everyday work copilot. Assists in standups, drafts follow-ups, and keeps notes on your meetings.</span>
+          <span class="mc-tags"><span>Meeting assist</span><span>Follow-up drafts</span><span>Recaps</span></span>
         </button>
       </div>
     </div>
@@ -133,14 +135,14 @@
 
       <!-- Tab bar -->
       <div class="s-tabs">
-        <button class="s-tab on" data-tab="keys">🔑 Keys</button>
-        <button class="s-tab" data-tab="transcription">Audio</button>
-        <button class="s-tab s-tab-interview" data-tab="profile">📄 Profile</button>
-        <button class="s-tab s-tab-work hidden" data-tab="team">👥 Team</button>
-        <button class="s-tab s-tab-interview" data-tab="prep">🎯 Interview Prep</button>
-        <button class="s-tab s-tab-work hidden" data-tab="work">📋 Work Context</button>
-        <button class="s-tab" data-tab="style">✨ Style</button>
-        <button class="s-tab s-tab-interview" data-tab="qa">💬 Q&amp;A</button>
+        <button class="s-tab on" data-tab="keys"><span class="s-tab-ic" data-ic="key"></span><span>Keys</span></button>
+        <button class="s-tab" data-tab="transcription"><span class="s-tab-ic" data-ic="audio-lines"></span><span>Audio</span></button>
+        <button class="s-tab s-tab-interview" data-tab="profile"><span class="s-tab-ic" data-ic="file-text"></span><span>Profile</span></button>
+        <button class="s-tab s-tab-work hidden" data-tab="team"><span class="s-tab-ic" data-ic="users"></span><span>Team</span></button>
+        <button class="s-tab s-tab-interview" data-tab="prep"><span class="s-tab-ic" data-ic="target"></span><span>Interview Prep</span></button>
+        <button class="s-tab s-tab-work hidden" data-tab="work"><span class="s-tab-ic" data-ic="clipboard-list"></span><span>Work Context</span></button>
+        <button class="s-tab" data-tab="style"><span class="s-tab-ic" data-ic="palette"></span><span>Style</span></button>
+        <button class="s-tab s-tab-interview" data-tab="qa"><span class="s-tab-ic" data-ic="help-circle"></span><span>Q&amp;A</span></button>
       </div>
 
       <!-- Tab: Keys -->
@@ -410,6 +412,7 @@
   </div>
 
   <script src="icons.js"></script>
+  <script src="settings-schema.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

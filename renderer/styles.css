@@ -521,15 +521,35 @@ button:focus { outline: none; }
 .s-close { border: none; background: var(--accent); color: #fff; font-weight: 600; font-size: 13px; padding: 6px 14px; border-radius: var(--r-pill); cursor: pointer; }
 
 /* Tab bar */
-.s-tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-shrink: 0; overflow-x: auto; }
-.s-tab {
-  flex: 1 0 auto; min-width: 72px; padding: 7px 4px; border-radius: var(--r-8);
-  border: 1px solid rgba(255,255,255,0.10); background: rgba(255,255,255,0.03);
-  color: var(--tx-mut); font-size: 12px; font-weight: 500; font-family: var(--font);
-  cursor: pointer; transition: all 140ms ease; white-space: nowrap;
+/* The tab bar is one segmented control — the same family as the .s-seg buttons
+   used for provider/STT/persona picks — with lucide icons and Space Grotesk
+   labels, so it speaks the app's language instead of emoji-on-pills. */
+.s-tabs {
+  display: flex; gap: 2px; margin-bottom: 14px; flex-shrink: 0;
+  overflow-x: auto; padding: 3px;
+  scrollbar-width: none;               /* scroll without a visible bar */
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--bd-hair);
+  border-radius: 12px;
 }
+.s-tabs::-webkit-scrollbar { display: none; }
+.s-tab {
+  flex: 1 0 auto; min-width: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 12px; border-radius: 9px;
+  border: none; background: transparent;
+  color: var(--tx-mut); font-size: 12px; font-weight: 500;
+  font-family: 'Space Grotesk', var(--font); letter-spacing: 0.02em;
+  cursor: pointer; white-space: nowrap;
+  transition: color 140ms ease, background 140ms ease;
+}
+.s-tab .s-tab-ic { display: inline-flex; opacity: 0.85; }
 .s-tab:hover { color: var(--tx-2); background: rgba(255,255,255,0.06); }
-.s-tab.on { border-color: rgba(60,131,245,0.5); color: #7FB0F9; background: rgba(60,131,245,0.12); }
+.s-tab.on {
+  color: #fff; background: rgba(60,131,245,0.18);
+  box-shadow: inset 0 0 0 1px rgba(60,131,245,0.45), 0 1px 6px rgba(0,0,0,0.3);
+}
+.s-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Tab panes */
 .s-tab-pane { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; min-height: 0; }
@@ -899,69 +919,123 @@ button:focus { outline: none; }
 .cs-actions { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }
 
 /* ============================ Mode Selection Screen ============================ */
+/* The mode screen is the same desk as the main panel: identical glass material,
+   the app's blue accent for selection, its green live-dot for "on", lucide icons.
+   The chosen mode wears the app's own indicator pattern (dot + pill, see
+   #work-recording-indicator) so "this one is listening" uses the app's semantics. */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('fonts/space-grotesk.woff2') format('woff2');
+}
 #mode-select-scrim {
   position: fixed; inset: 0; z-index: 50;
-  display: grid; place-items: center;
-  background: rgba(0,0,0,0.72);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
-  backdrop-filter: blur(20px) saturate(160%);
+  display: grid; place-items: center; padding: 24px;
+  background: rgba(7,10,15,0.60);
+  -webkit-backdrop-filter: blur(26px) saturate(140%);
+  backdrop-filter: blur(26px) saturate(140%);
 }
 #mode-select-scrim.hidden { display: none; }
 #mode-select {
   display: flex; flex-direction: column; align-items: center;
-  gap: 12px; padding: 0 16px; width: min(600px, 96vw);
+  gap: 6px; width: min(560px, 94vw);
+  padding: 28px 30px 24px;
+  background: rgba(20,22,28,0.72);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--bd-hair);
+  border-radius: var(--r-panel);
+  box-shadow: 0 16px 48px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.10);
   -webkit-app-region: no-drag;
-  animation: overlayIn 320ms cubic-bezier(0.22,1,0.36,1);
+  animation: overlayIn 260ms cubic-bezier(0.22,1,0.36,1);
 }
-.ms-logo {
-  font-size: 22px; font-weight: 900; letter-spacing: -0.04em;
-  background: linear-gradient(135deg, #6ea8ff 0%, #a78bfa 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-  background-clip: text; margin-bottom: 2px;
+.ms-wordmark { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.ms-mark { color: var(--accent); display: inline-flex; }
+.ms-name {
+  font-family: 'Space Grotesk', var(--font);
+  font-size: 15px; font-weight: 600; letter-spacing: 0.26em;
+  text-transform: uppercase; color: var(--tx-1);
 }
 .ms-title {
-  font-size: 23px; font-weight: 700; color: var(--tx-1);
-  letter-spacing: -0.02em; text-align: center;
+  font-family: 'Space Grotesk', var(--font);
+  font-size: 24px; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--tx-1); text-align: center; margin: 2px 0 0;
 }
-.ms-subtitle {
-  font-size: 13.5px; color: var(--tx-mut); text-align: center; margin-bottom: 4px;
-}
-.ms-cards { display: flex; gap: 14px; width: 100%; flex-wrap: wrap; }
+.ms-subtitle { font-size: 13px; color: var(--tx-mut); text-align: center; margin-bottom: 18px; }
+.ms-cards { display: flex; gap: 12px; width: 100%; }
 .mode-card {
-  flex: 1; min-width: 200px;
-  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
-  padding: 22px 24px; border-radius: 20px; text-align: left;
-  background: rgba(255,255,255,0.05);
-  border: 1.5px solid rgba(255,255,255,0.12);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  position: relative;
+  padding: 16px 18px 18px; border-radius: 16px; text-align: left;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--bd-hair);
   cursor: pointer; font-family: var(--font);
-  transition: transform 220ms cubic-bezier(0.22,1,0.36,1),
-              border-color 220ms ease,
-              box-shadow 220ms ease,
-              background 220ms ease;
+  transition: transform 160ms cubic-bezier(0.22,1,0.36,1),
+              border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
   -webkit-app-region: no-drag;
 }
 .mode-card:hover {
-  transform: translateY(-4px);
-  background: rgba(255,255,255,0.09);
-  border-color: rgba(255,255,255,0.22);
-  box-shadow: 0 16px 44px rgba(0,0,0,0.50);
+  transform: translateY(-2px); background: rgba(255,255,255,0.06);
+  border-color: var(--bd-strong);
 }
 .mode-card:active { transform: translateY(0); }
-#mode-card-interview:hover { border-color: rgba(60,131,245,0.60); box-shadow: 0 16px 44px rgba(60,131,245,0.22); }
-#mode-card-work:hover { border-color: rgba(139,92,246,0.60); box-shadow: 0 16px 44px rgba(139,92,246,0.22); }
-.mode-card.selected { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(60,131,245,0.25), 0 16px 44px rgba(60,131,245,0.28); }
-.mc-icon { font-size: 30px; line-height: 1; }
-.mc-title { font-size: 16px; font-weight: 700; color: var(--tx-1); }
-.mc-desc { font-size: 13px; line-height: 1.55; color: var(--tx-2); }
-.mc-tags { display: flex; flex-wrap: wrap; gap: 5px; }
-.mc-tags span {
-  font-size: 10.5px; font-weight: 600; padding: 2px 9px;
-  border-radius: var(--r-pill); background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.12); color: var(--tx-mut);
+.mode-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.mode-card.selected {
+  background: rgba(60,131,245,0.10);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(60,131,245,0.22), 0 12px 32px rgba(0,0,0,0.35);
 }
-#mode-card-interview .mc-tags span { color: rgba(147,197,253,0.90); border-color: rgba(60,131,245,0.28); background: rgba(60,131,245,0.09); }
-#mode-card-work .mc-tags span { color: rgba(196,181,253,0.90); border-color: rgba(139,92,246,0.28); background: rgba(139,92,246,0.09); }
+.mc-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 12px; margin-bottom: 6px;
+  background: rgba(255,255,255,0.06); border: 1px solid var(--bd-hair);
+  color: var(--tx-2);
+}
+.mode-card.selected .mc-ic {
+  color: #fff; background: rgba(60,131,245,0.20); border-color: rgba(60,131,245,0.45);
+}
+.mc-title {
+  font-family: 'Space Grotesk', var(--font);
+  font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--tx-1);
+}
+.mc-desc { font-size: 12px; line-height: 1.5; color: var(--tx-2); }
+.mc-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.mc-tags span {
+  font-size: 10.5px; font-weight: 500; padding: 2px 8px;
+  border-radius: var(--r-pill); background: rgba(255,255,255,0.04);
+  border: 1px solid var(--bd-hair); color: var(--tx-mut);
+}
+.mode-card.selected .mc-tags span {
+  color: rgba(147,197,253,0.95); border-color: rgba(60,131,245,0.35);
+  background: rgba(60,131,245,0.10);
+}
+/* "Listening" indicator — the app's live-dot + pill pattern, shown on the
+   selected mode only. Kept invisible (not display:none) so nothing shifts. */
+.mc-ind {
+  position: absolute; top: 12px; right: 12px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: var(--r-pill);
+  background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.35);
+  font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.10em;
+  color: #6ee7a0;
+  visibility: hidden;
+}
+.mode-card.selected .mc-ind { visibility: visible; }
+.mc-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--live); box-shadow: 0 0 6px rgba(34,197,94,0.7);
+  animation: pulse 2s infinite;
+}
+@media (max-width: 480px) {
+  #mode-select { padding: 22px 18px 18px; }
+  .ms-cards { flex-direction: column; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mc-dot { animation: none; }
+}
 
 /* ============================ Work Recording Indicator ============================ */
 #work-recording-indicator {
@@ -1043,7 +1117,9 @@ button:focus { outline: none; }
   padding: 4px 8px; border-radius: 6px;
   border: 1px solid rgba(255,255,255,0.08);
   word-wrap: break-word; word-break: break-word;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
 }
+.s-file-item .s-file-name { flex: 1; min-width: 0; overflow-wrap: break-word; word-break: break-word; }
 .s-upload-btn {
   padding: 6px 12px; border-radius: var(--r-8); border: 1px solid rgba(255,255,255,0.14);
   background: rgba(255,255,255,0.05); color: var(--tx-2); font: 500 12px var(--font); cursor: pointer;

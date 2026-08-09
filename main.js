@@ -714,21 +714,26 @@ async function pickAndParseDocument() {
     filters: [{ name: 'Documents', extensions: ['pdf', 'docx'] }]
   });
   if (res.canceled || !res.filePaths.length) return null;
-  
-  let files = [];
-  for (const filePath of res.filePaths) {
-    const text = await parseDocumentFile(filePath);
-    files.push({ fileName: path.basename(filePath), text: text });
-  }
-  return { files };
+
+  // Parse concurrently so one slow file doesn't stall the rest; each file succeeds
+  // or fails on its own so a single bad file doesn't discard the good ones.
+  const results = await Promise.allSettled(res.filePaths.map((filePath) =>
+    parseDocumentFile(filePath).then((text) => ({ fileName: path.basename(filePath), text }))
+  ));
+  const files = [], errors = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') files.push(r.value);
+    else errors.push({ fileName: path.basename(res.filePaths[i]), error: (r.reason && r.reason.message) || String(r.reason) });
+  });
+  return { files, errors };
 }
 ipcMain.handle('profile:pickDocument', async () => {
   try {
     const picked = await pickAndParseDocument();
     if (!picked) return { canceled: true };
-    return { canceled: false, files: picked.files };
+    return { canceled: false, files: picked.files, errors: picked.errors };
   } catch (e) {
-    return { canceled: false, error: (e && e.message) || String(e) };
+    return { canceled: false, files: [], errors: [{ fileName: '(dialog)', error: (e && e.message) || String(e) }] };
   }
 });
 ipcMain.on('app:quit', () => app.quit());

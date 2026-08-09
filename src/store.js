@@ -27,6 +27,8 @@ const DEFAULTS = {
   // Tab 2: Profile
   resumeText: '',
   jobDescription: '',
+  resumeFiles: [],
+  jdFiles: [],
   // Tab 3: Interview Prep
   starStories: '',
   whyCompany: '',
@@ -42,6 +44,7 @@ const DEFAULTS = {
   workPersona: 'participant',
   workContext: '',
   projectNotes: '',
+  projectNotesFiles: [],
   meetingNotesContext: '',
   teamRoster: '',
   managerNotes: '',

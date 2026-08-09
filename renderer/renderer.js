@@ -1355,23 +1355,29 @@
 
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
-  function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
-  async function closeSettings() {
-    if (await saveSettings()) scrim.classList.add('hidden');
-  }
   function openSettings() {
     fillSettings();
     scrim.classList.remove('hidden');
     refreshWhisperModels();
   }
-  function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
+  // Only close when the save actually succeeded, so a failed save surfaces its
+  // error instead of silently discarding the user's edits.
+  async function closeSettings() {
+    if (await saveSettings()) scrim.classList.add('hidden');
+  }
   $('#more-btn').addEventListener('click', openSettings);
   $('#quit-btn').addEventListener('click', () => { cue.quit(); });
   $('#s-close').addEventListener('click', () => { void closeSettings(); });
   scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
 
   const switchModeBtn = document.getElementById('switch-mode-btn');
-  if (switchModeBtn) switchModeBtn.addEventListener('click', () => { closeSettings(); showModeSelect(); });
+  if (switchModeBtn) switchModeBtn.addEventListener('click', () => { void closeSettings().then(showModeSelect); });
+
+  // Fill lucide icons (settings tabs, mode cards, mode-screen logo mark) — the
+  // app's icon system, not emoji. Per-element size via data-ic-size.
+  document.querySelectorAll('[data-ic]').forEach((el) => {
+    el.innerHTML = icon(el.dataset.ic, { size: Number(el.dataset.icSize) || 16 });
+  });
 
   // Tab switching
   document.querySelectorAll('.s-tab').forEach((tab) => {
@@ -1391,67 +1397,16 @@
   }
 
   function fillSettings() {
-    // Keys tab
-    document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
-    $('#key-openai').value = settings.apiKeys.openai || '';
-    $('#key-anthropic').value = settings.apiKeys.anthropic || '';
-    $('#key-gemini').value = settings.apiKeys.gemini || '';
-    $('#key-deepgram').value = settings.apiKeys.deepgram || '';
-    $('#key-custom').value = settings.apiKeys.custom || '';
-    $('#base-url').value = settings.baseUrl || '';
-    updateCustomProviderFields();
-    $('#key-ollama').value = settings.apiKeys.ollama || '';
-    $('#key-groq').value = settings.apiKeys.groq || '';
-    $('#key-minimax').value = settings.apiKeys.minimax || '';
-    document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.classList.toggle('on', b.dataset.region === (settings.minimaxRegion || 'global_en')));
-    $('#key-azure').value = settings.apiKeys.azure || '';
-    $('#azure-endpoint').value = settings.azureEndpoint || '';
-    const m = settings.models[settings.provider] || { fast: '', smart: '' };
-    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
+    // Every panel field is mapped in renderer/settings-schema.js — one table, so
+    // fill and collect cannot drift. Cross-field wiring that follows the fill:
+    CueSettingsSchema.fill(document, settings);
     fillAppLinkCallers();
     $('#s-status').textContent = statusText();
-    // Transcription tab
-    document.querySelectorAll('#stt-provider-seg button').forEach((button) => {
-      button.classList.toggle('on', button.dataset.sttProvider === (settings.sttProvider || 'auto'));
-    });
-    const localWhisper = settings.localWhisper || { modelId: 'base.en', language: 'auto', threads: 0 };
-    $('#whisper-language').value = localWhisper.language || 'auto';
-    $('#whisper-threads').value = Number(localWhisper.threads) || 0;
-    // Profile tab
-    $('#resume-text').value = settings.resumeText || '';
-    $('#job-description').value = settings.jobDescription || '';
-    // Interview Prep tab
-    $('#star-stories').value = settings.starStories || '';
-    $('#why-company').value = settings.whyCompany || '';
-    $('#why-leaving').value = settings.whyLeaving || '';
-    $('#work-style').value = settings.workStyle || '';
-    // Work Context tab
-    document.querySelectorAll('#work-persona-seg button').forEach((b) => {
-      b.classList.toggle('on', b.dataset.persona === (settings.workPersona || 'participant'));
-    });
-    const wcEl = document.getElementById('work-context');
-    const pnEl = document.getElementById('project-notes');
-    const mncEl = document.getElementById('meeting-notes-context');
-    const ptEl = document.getElementById('persist-transcripts-toggle');
-    const esEl = document.getElementById('enable-sentiment-toggle');
-    if (wcEl) wcEl.value = settings.workContext || '';
-    if (pnEl) pnEl.value = settings.projectNotes || '';
-    if (mncEl) mncEl.value = settings.meetingNotesContext || '';
-    if (ptEl) ptEl.checked = !!(settings.persistTranscripts);
-    if (esEl) esEl.checked = !!(settings.enableSentimentDetection);
-    // Team tab
-    const trEl = document.getElementById('team-roster');
-    const mnEl = document.getElementById('manager-notes');
-    const ksEl = document.getElementById('key-stakeholders');
-    if (trEl) trEl.value = settings.teamRoster || '';
-    if (mnEl) mnEl.value = settings.managerNotes || '';
-    if (ksEl) ksEl.value = settings.keyStakeholders || '';
-    // Style tab
-    $('#ai-rules').value = settings.aiRules || '';
+    updateCustomProviderFields();
     updateAiRulesCounter();
-    // Q&A tab
-    $('#salary-target').value = settings.salaryTarget || '';
-    $('#questions-to-ask').value = settings.questionsToAsk || '';
+    loadSessionFiles('resume', settings.resumeFiles);
+    loadSessionFiles('jd', settings.jdFiles);
+    loadSessionFiles('projectNotes', settings.projectNotesFiles);
   }
 
   // Whoever cue has been told it may answer questions for. Empty is the normal
@@ -1491,83 +1446,136 @@
   }
 
   // --- Document Import State ---
+  // The textarea is the single source of truth (persisted as resumeText & co.); the
+  // file list is metadata over it. Each row knows which file contributed which text,
+  // so removing a row can surgically remove just that text without ever clobbering
+  // pasted or previously saved content. The lists themselves are persisted too, so
+  // the rows and the ✖ buttons survive an app restart.
   let sessionFiles = { projectNotes: [], resume: [], jd: [] };
+  const FILE_FIELDS = {
+    projectNotes: { container: '#project-notes-filename', textarea: '#project-notes', clearBtn: '#clear-project-notes-btn', label: 'Document' },
+    resume: { container: '#resume-filename', textarea: '#resume-text', clearBtn: '#clear-resume-btn', label: 'Resume' },
+    jd: { container: '#jd-filename', textarea: '#job-description', clearBtn: '#clear-jd-btn', label: 'Job description' }
+  };
+
+  // Remove fileText from a field value. File text is appended verbatim on import, so
+  // the last occurrence is the file's own copy; if the user edited it away, the value
+  // is left untouched (the row is still removed — the content is already gone).
+  function removeFileText(value, fileText) {
+    if (!fileText) return value;
+    const idx = value.lastIndexOf(fileText);
+    if (idx === -1) return value;
+    const before = value.slice(0, idx).replace(/[ \t]*\n+[ \t]*$/, '');
+    const after = value.slice(idx + fileText.length).replace(/^[ \t]*\n+[ \t]*/, '');
+    return (before + '\n\n' + after).replace(/\n{3,}/g, '\n\n').trim();
+  }
 
   function renderFileList(type) {
-    const listHtml = sessionFiles[type].map((f, i) => 
-      '<div class="s-file-item">📄 ' + f.fileName + ' <button class="s-action danger" style="padding:1px 5px; font-size:10px; margin-left:6px;" data-del="' + type + '" data-idx="' + i + '">✖</button></div>'
-    ).join('');
-    
-    let container, textarea, clearBtn;
-    if (type === 'projectNotes') {
-      container = '#project-notes-filename'; textarea = '#project-notes'; clearBtn = '#clear-project-notes-btn';
-    } else if (type === 'resume') {
-      container = '#resume-filename'; textarea = '#resume-text'; clearBtn = '#clear-resume-btn';
-    } else if (type === 'jd') {
-      container = '#jd-filename'; textarea = '#job-description'; clearBtn = '#clear-jd-btn';
-    }
-    
-    $(container).innerHTML = listHtml;
-    // Overwrite the textarea with the combined state (Note: this overrides manual edits if a file is added/removed)
-    $(textarea).value = sessionFiles[type].map(f => f.text).join('\n\n');
-    
-    if (sessionFiles[type].length > 0) $(clearBtn).classList.remove('hidden');
-    else $(clearBtn).classList.add('hidden');
-    
-    $(container).querySelectorAll('button[data-del]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const idx = parseInt(e.currentTarget.getAttribute('data-idx'), 10);
-        sessionFiles[type].splice(idx, 1);
-        renderFileList(type);
-      });
+    const f = FILE_FIELDS[type];
+    if (!f) return;
+    const container = $(f.container);
+    container.textContent = '';
+    sessionFiles[type].forEach((file, i) => {
+      const item = document.createElement('div');
+      item.className = 's-file-item';
+      const label = document.createElement('span');
+      label.className = 's-file-name';
+      label.textContent = '📄 ' + file.fileName;
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 's-action danger';
+      del.title = 'Remove this file';
+      del.textContent = '✖';
+      del.dataset.del = type;
+      del.dataset.idx = String(i);
+      item.append(label, del);
+      container.appendChild(item);
     });
+    syncClearButton(type);
+  }
+
+  // Keep the ✖ clear button visible whenever the field actually has content,
+  // including text restored from saved settings that was never in sessionFiles.
+  function syncClearButton(type) {
+    const f = FILE_FIELDS[type];
+    if (!f) return;
+    $(f.clearBtn).classList.toggle('hidden', !$(f.textarea).value.trim().length);
+  }
+
+  function loadSessionFiles(type, list) {
+    sessionFiles[type] = Array.isArray(list) ? list.map((x) => ({ fileName: x.fileName, text: x.text })) : [];
+    renderFileList(type);
+  }
+
+  // One delegated listener per list container: rows are rebuilt on every render, so
+  // a single container-level click handler avoids rebinding N listeners each time.
+  function bindFileListContainer(type) {
+    const f = FILE_FIELDS[type];
+    if (!f) return;
+    $(f.container).addEventListener('click', (e) => {
+      const btn = e.target.closest && e.target.closest('button[data-del]');
+      if (!btn || btn.dataset.del !== type) return;
+      const idx = parseInt(btn.dataset.idx, 10);
+      const file = sessionFiles[type][idx];
+      if (!file) return;
+      $(f.textarea).value = removeFileText($(f.textarea).value, file.text);
+      sessionFiles[type].splice(idx, 1);
+      renderFileList(type);
+    });
+  }
+  bindFileListContainer('projectNotes');
+  bindFileListContainer('resume');
+  bindFileListContainer('jd');
+
+  // Append imported text to the field instead of replacing it: pasted or previously
+  // saved content is preserved, and a per-file row can later remove just its text.
+  async function importDocuments(type) {
+    const f = FILE_FIELDS[type];
+    const res = await cue.pickProfileDocument();
+    if (!res || res.canceled) return;
+    if (res.error && !res.files) { showStatus(f.label + ' import failed: ' + res.error); return; }
+    const files = res.files || [];
+    const errors = res.errors || [];
+    if (files.length) {
+      sessionFiles[type].push(...files);
+      const added = files.map((x) => x.text).filter(Boolean).join('\n\n');
+      const textarea = $(f.textarea);
+      if (added) textarea.value = textarea.value.trim() ? textarea.value.trim() + '\n\n' + added : added;
+      renderFileList(type);
+    }
+    if (errors.length) {
+      const first = errors[0];
+      showStatus(f.label + ' import: ' + files.length + ' of ' + (files.length + errors.length) + ' succeeded; ' + first.fileName + ' failed — ' + first.error);
+    } else if (files.length) {
+      const name = files.length > 1 ? files.length + ' files' : files[0].fileName;
+      showStatus('Imported ' + name + ' — press Done to save.');
+    }
   }
 
   const uploadProjectNotesBtn = document.getElementById('upload-project-notes-btn');
-  if (uploadProjectNotesBtn) uploadProjectNotesBtn.addEventListener('click', async () => {
-    const res = await cue.pickProfileDocument();
-    if (!res || res.canceled) return;
-    if (res.error) { showStatus('Document import failed: ' + res.error); return; }
-    sessionFiles.projectNotes.push(...res.files);
-    renderFileList('projectNotes');
-    const toastName = res.files.length > 1 ? res.files.length + ' files' : res.files[0].fileName;
-    showStatus('Imported ' + toastName + ' — press Done to save.');
-  });
+  if (uploadProjectNotesBtn) uploadProjectNotesBtn.addEventListener('click', () => void importDocuments('projectNotes'));
   const clearProjectNotesBtn = document.getElementById('clear-project-notes-btn');
   if (clearProjectNotesBtn) clearProjectNotesBtn.addEventListener('click', () => {
-    sessionFiles.projectNotes = []; renderFileList('projectNotes');
+    sessionFiles.projectNotes = [];
+    renderFileList('projectNotes');
     $('#project-notes').value = '';
   });
 
   const uploadResumeBtn = document.getElementById('upload-resume-btn');
-  if (uploadResumeBtn) uploadResumeBtn.addEventListener('click', async () => {
-    const res = await cue.pickProfileDocument();
-    if (!res || res.canceled) return;
-    if (res.error) { showStatus('Resume import failed: ' + res.error); return; }
-    sessionFiles.resume.push(...res.files);
-    renderFileList('resume');
-    const toastName = res.files.length > 1 ? res.files.length + ' files' : res.files[0].fileName;
-    showStatus('Imported ' + toastName + ' — press Done to save.');
-  });
+  if (uploadResumeBtn) uploadResumeBtn.addEventListener('click', () => void importDocuments('resume'));
   const clearResumeBtn = document.getElementById('clear-resume-btn');
   if (clearResumeBtn) clearResumeBtn.addEventListener('click', () => {
-    sessionFiles.resume = []; renderFileList('resume');
+    sessionFiles.resume = [];
+    renderFileList('resume');
     $('#resume-text').value = '';
   });
 
   const uploadJdBtn = document.getElementById('upload-jd-btn');
-  if (uploadJdBtn) uploadJdBtn.addEventListener('click', async () => {
-    const res = await cue.pickProfileDocument();
-    if (!res || res.canceled) return;
-    if (res.error) { showStatus('Job description import failed: ' + res.error); return; }
-    sessionFiles.jd.push(...res.files);
-    renderFileList('jd');
-    const toastName = res.files.length > 1 ? res.files.length + ' files' : res.files[0].fileName;
-    showStatus('Imported ' + toastName + ' — press Done to save.');
-  });
+  if (uploadJdBtn) uploadJdBtn.addEventListener('click', () => void importDocuments('jd'));
   const clearJdBtn = document.getElementById('clear-jd-btn');
   if (clearJdBtn) clearJdBtn.addEventListener('click', () => {
-    sessionFiles.jd = []; renderFileList('jd');
+    sessionFiles.jd = [];
+    renderFileList('jd');
     $('#job-description').value = '';
   });
 
@@ -1757,57 +1765,18 @@
   cue.on('whisper:models-changed', () => refreshWhisperModels());
 
   async function saveSettings() {
-    // Keys
-    settings.apiKeys.openai = $('#key-openai').value.trim();
-    settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
-    settings.apiKeys.gemini = $('#key-gemini').value.trim();
-    settings.apiKeys.deepgram = $('#key-deepgram').value.trim();
-    settings.apiKeys.custom = $('#key-custom').value.trim();
-    settings.baseUrl = $('#base-url').value.trim();
-    settings.apiKeys.ollama = $('#key-ollama').value.trim();
-    settings.apiKeys.groq = $('#key-groq').value.trim();
-    settings.apiKeys.minimax = $('#key-minimax').value.trim();
-    settings.apiKeys.azure = $('#key-azure').value.trim();
-    settings.azureEndpoint = $('#azure-endpoint').value.trim();
-    if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
-    settings.models[settings.provider].fast = $('#model-fast').value.trim();
-    settings.models[settings.provider].smart = $('#model-smart').value.trim();
-    // Transcription
+    // Collect every panel field through the same schema table fillSettings uses.
+    for (const { path, value } of CueSettingsSchema.collect(document, settings)) {
+      CueSettingsSchema.setPath(settings, path, value);
+    }
+    // Not symmetric panel fields, so outside the schema table: the whisper model
+    // list is populated asynchronously by refreshWhisperModels, and the imported
+    // file lists live in sessionFiles (loaded from settings in fillSettings).
     if (!settings.localWhisper) settings.localWhisper = {};
     settings.localWhisper.modelId = $('#whisper-model').value || settings.localWhisper.modelId || 'base.en';
-    settings.localWhisper.language = $('#whisper-language').value || 'auto';
-    settings.localWhisper.threads = Math.max(0, Math.min(64, Number.parseInt($('#whisper-threads').value, 10) || 0));
-    // Profile
-    settings.resumeText = $('#resume-text').value.trim();
-    settings.jobDescription = $('#job-description').value.trim();
-    // Interview Prep
-    settings.starStories = $('#star-stories').value.trim();
-    settings.whyCompany = $('#why-company').value.trim();
-    settings.whyLeaving = $('#why-leaving').value.trim();
-    settings.workStyle = $('#work-style').value.trim();
-    // Work Context
-    settings.workPersona = settings.workPersona || 'participant';
-    const wcEl = document.getElementById('work-context');
-    const pnEl = document.getElementById('project-notes');
-    const mncEl = document.getElementById('meeting-notes-context');
-    if (wcEl) settings.workContext = wcEl.value.trim();
-    if (pnEl) settings.projectNotes = pnEl.value.trim();
-    if (mncEl) settings.meetingNotesContext = mncEl.value.trim();
-    settings.persistTranscripts = $('#persist-transcripts-toggle').checked;
-    settings.enableSentimentDetection = $('#enable-sentiment-toggle').checked;
-    settings.autoAnswer = $('#auto-answer-toggle').checked;
-    // Team
-    const trEl = document.getElementById('team-roster');
-    const mnEl = document.getElementById('manager-notes');
-    const ksEl = document.getElementById('key-stakeholders');
-    if (trEl) settings.teamRoster = trEl.value.trim();
-    if (mnEl) settings.managerNotes = mnEl.value.trim();
-    if (ksEl) settings.keyStakeholders = ksEl.value.trim();
-    // Style tab
-    settings.aiRules = $('#ai-rules').value.trim();
-    // Q&A
-    settings.salaryTarget = $('#salary-target').value.trim();
-    settings.questionsToAsk = $('#questions-to-ask').value.trim();
+    settings.resumeFiles = sessionFiles.resume.map((x) => ({ fileName: x.fileName, text: x.text }));
+    settings.jdFiles = sessionFiles.jd.map((x) => ({ fileName: x.fileName, text: x.text }));
+    settings.projectNotesFiles = sessionFiles.projectNotes.map((x) => ({ fileName: x.fileName, text: x.text }));
     try {
       settings = await cue.settingsSet(settings);
       $('#s-status').textContent = statusText();
