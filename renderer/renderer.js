@@ -158,6 +158,9 @@
   }
 
   async function selectMode(mode) {
+    if (appMode !== null && appMode !== mode) {
+      await performClearTranscript(false, false);
+    }
     appMode = mode;
     settings.appMode = mode;
     await cue.settingsSet({ appMode: mode });
@@ -209,7 +212,8 @@
       prepStatus.innerHTML = [
         `<span class="prep-item" data-field="workContext">👤 Work Context</span>`,
         `<span class="prep-item" data-field="projectNotes">📁 Project Notes</span>`,
-        `<span class="prep-item" data-field="meetingNotesContext">🗒️ Meeting Notes</span>`
+        `<span class="prep-item" data-field="meetingNotesContext">🗒️ Meeting Notes</span>`,
+        `<span class="prep-item" data-field="teamRoster">👥 Team Roster</span>`
       ].join('');
     } else {
       prepStatus.innerHTML = [
@@ -450,10 +454,16 @@
     clearTimeout(questionFinalizeTimer);
     questionFinalizeTimer = setTimeout(() => {
       if (isLikelyCompleteQuestion(input.value)) {
-        composer.classList.add('stt-ready');
-        updateSendButtonState(); // FIX #9: Update send button when ready
-        // Subtle notification that question is ready
-        showToast('Press Enter to answer', 2500);
+        if (settings.autoAnswer) {
+          // Auto-Answer mode: instantly trigger the AI instead of waiting
+          composer.classList.remove('stt-ready', 'stt-filling');
+          runMode('assist', '');
+        } else {
+          composer.classList.add('stt-ready');
+          updateSendButtonState(); // FIX #9: Update send button when ready
+          // Subtle notification that question is ready
+          showToast('Press Enter to answer', 2500);
+        }
       }
     }, 1800);
 
@@ -680,26 +690,30 @@
 
   // Transcript toggle removed — sidebar now auto-opens with listening
 
-  // Clear transcript
+  // Clear transcript helper
+  async function performClearTranscript(saveUndo = true, showToastMsg = false) {
+    if (saveUndo) saveToQuestionHistory(input.value);
+    
+    await cue.clearTranscript();
+    clearMessages();
+    if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
+    const list = document.getElementById('ts-list');
+    if (list) list.innerHTML = '<div class="ts-placeholder">Conversation history will appear here when listening.</div>';
+    transcriptInterimEl = null;
+    clearTranscriptSidebar();
+    hardClearSTTFill();
+    
+    if (showToastMsg) {
+      const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
+      showToast(`Transcript cleared · ${undoHint}`, 3500);
+    }
+  }
+
+  // Clear transcript button
   const clearTranscriptBtn = document.getElementById('clear-transcript-btn');
   if (clearTranscriptBtn) {
     clearTranscriptBtn.addEventListener('click', async () => {
-      // Save current input to history before clearing (for undo)
-      saveToQuestionHistory(input.value);
-      
-      await cue.clearTranscript();
-      clearMessages();
-      // Also clear the floating interim bar
-      if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
-      // FIX #1: Use ts-list instead of non-existent transcript-list
-      const list = document.getElementById('ts-list');
-      if (list) list.innerHTML = '<div class="ts-placeholder">Conversation history will appear here when listening.</div>';
-      transcriptInterimEl = null;
-      clearTranscriptSidebar(); // clear the history sidebar too
-      hardClearSTTFill(); // clear the input box too
-      
-      const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
-      showToast(`Transcript cleared · ${undoHint}`, 3500);
+      await performClearTranscript(true, true);
     });
   }
 
@@ -1098,13 +1112,39 @@
       showInterimInInput(text);
     }
   });
-  cue.on('stt:final', ({ channel, text }) => {
+  let sentimentUtteranceCount = 0;
+  let analyzingSentiment = false;
+
+  cue.on('stt:final', async ({ channel, text }) => {
     setLiveDotState('idle');
     // Clear interim when we get a final
     if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
     clearTranscriptInterim();
     clearInputInterim(); // FIX #12: Clear interim text from input area
     // sidebar: the final turn is added via the 'transcript' event below
+    
+    if (window.checkStakeholderFlashcards) {
+      window.checkStakeholderFlashcards(text);
+    }
+
+    if (settings.appMode === 'work' && settings.enableSentimentDetection && cue.analyzeSentiment) {
+      sentimentUtteranceCount++;
+      if (sentimentUtteranceCount >= 10 && !analyzingSentiment) {
+        sentimentUtteranceCount = 0;
+        analyzingSentiment = true;
+        try {
+          const recentText = transcript.slice(-15).map(t => `${t.channel === 'me' ? 'Me' : 'Speaker'}: ${t.text}`).join('\n');
+          const suggestion = await cue.analyzeSentiment(recentText);
+          if (suggestion && suggestion.toUpperCase() !== 'NO') {
+            if (window.showToast) window.showToast(`💡 ${suggestion}`);
+          }
+        } catch (e) {
+          console.error('[sentiment]', e);
+        } finally {
+          analyzingSentiment = false;
+        }
+      }
+    }
   });
   cue.on('stt:status', ({ channel, status, provider }) => {
     cue.log(`[stt] ${provider || channel || 'unknown'} ${status}`);
@@ -1174,7 +1214,9 @@
     messages.appendChild(group);
     // Use requestAnimationFrame so the DOM is fully updated before scrolling
     requestAnimationFrame(() => {
-      if (sep && sep.isConnected) sep.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (sep && sep.isConnected) {
+        messages.scrollTo({ top: sep.offsetTop, behavior: 'smooth' });
+      }
     });
     setBusy(true);
   });
@@ -1253,7 +1295,10 @@
     const fields = isWork ? {
       workContext:         !!(settings.workContext && settings.workContext.trim()),
       projectNotes:        !!(settings.projectNotes && settings.projectNotes.trim()),
-      meetingNotesContext: !!(settings.meetingNotesContext && settings.meetingNotesContext.trim())
+      meetingNotesContext: !!(settings.meetingNotesContext && settings.meetingNotesContext.trim()),
+      teamRoster:          !!(settings.teamRoster && settings.teamRoster.trim()),
+      managerNotes:        !!(settings.managerNotes && settings.managerNotes.trim()),
+      keyStakeholders:     !!(settings.keyStakeholders && settings.keyStakeholders.trim())
     } : {
       resume:  !!(settings.resumeText && settings.resumeText.trim()),
       jd:      !!(settings.jobDescription && settings.jobDescription.trim()),
@@ -1321,6 +1366,7 @@
   }
   function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
   $('#more-btn').addEventListener('click', openSettings);
+  $('#quit-btn').addEventListener('click', () => { cue.quit(); });
   $('#s-close').addEventListener('click', () => { void closeSettings(); });
   scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
 
@@ -1380,14 +1426,26 @@
     $('#why-leaving').value = settings.whyLeaving || '';
     $('#work-style').value = settings.workStyle || '';
     // Work Context tab
+    document.querySelectorAll('#work-persona-seg button').forEach((b) => {
+      b.classList.toggle('on', b.dataset.persona === (settings.workPersona || 'participant'));
+    });
     const wcEl = document.getElementById('work-context');
     const pnEl = document.getElementById('project-notes');
     const mncEl = document.getElementById('meeting-notes-context');
     const ptEl = document.getElementById('persist-transcripts-toggle');
+    const esEl = document.getElementById('enable-sentiment-toggle');
     if (wcEl) wcEl.value = settings.workContext || '';
     if (pnEl) pnEl.value = settings.projectNotes || '';
     if (mncEl) mncEl.value = settings.meetingNotesContext || '';
     if (ptEl) ptEl.checked = !!(settings.persistTranscripts);
+    if (esEl) esEl.checked = !!(settings.enableSentimentDetection);
+    // Team tab
+    const trEl = document.getElementById('team-roster');
+    const mnEl = document.getElementById('manager-notes');
+    const ksEl = document.getElementById('key-stakeholders');
+    if (trEl) trEl.value = settings.teamRoster || '';
+    if (mnEl) mnEl.value = settings.managerNotes || '';
+    if (ksEl) ksEl.value = settings.keyStakeholders || '';
     // Style tab
     $('#ai-rules').value = settings.aiRules || '';
     updateAiRulesCounter();
@@ -1431,6 +1489,16 @@
       host.append(row);
     }
   }
+
+  const uploadProjectNotesBtn = document.getElementById('upload-project-notes-btn');
+  if (uploadProjectNotesBtn) uploadProjectNotesBtn.addEventListener('click', async () => {
+    const res = await cue.pickProfileDocument();
+    if (!res || res.canceled) return;
+    if (res.error) { showStatus('Document import failed: ' + res.error); return; }
+    $('#project-notes').value = res.text || '';
+    $('#project-notes-filename').textContent = res.fileName;
+    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+  });
 
   const uploadResumeBtn = document.getElementById('upload-resume-btn');
   if (uploadResumeBtn) uploadResumeBtn.addEventListener('click', async () => {
@@ -1479,6 +1547,11 @@
   document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.addEventListener('click', () => {
     settings.minimaxRegion = b.dataset.region;
     document.querySelectorAll('#minimax-region-seg button').forEach((x) => x.classList.toggle('on', x === b));
+  }));
+
+  document.querySelectorAll('#work-persona-seg button').forEach((b) => b.addEventListener('click', () => {
+    settings.workPersona = b.dataset.persona;
+    document.querySelectorAll('#work-persona-seg button').forEach((x) => x.classList.toggle('on', x === b));
   }));
 
   document.querySelectorAll('#stt-provider-seg button').forEach((button) => button.addEventListener('click', () => {
@@ -1659,14 +1732,23 @@
     settings.whyLeaving = $('#why-leaving').value.trim();
     settings.workStyle = $('#work-style').value.trim();
     // Work Context
+    settings.workPersona = settings.workPersona || 'participant';
     const wcEl = document.getElementById('work-context');
     const pnEl = document.getElementById('project-notes');
     const mncEl = document.getElementById('meeting-notes-context');
-    const ptEl = document.getElementById('persist-transcripts-toggle');
     if (wcEl) settings.workContext = wcEl.value.trim();
     if (pnEl) settings.projectNotes = pnEl.value.trim();
     if (mncEl) settings.meetingNotesContext = mncEl.value.trim();
-    if (ptEl) settings.persistTranscripts = ptEl.checked;
+    settings.persistTranscripts = $('#persist-transcripts-toggle').checked;
+    settings.enableSentimentDetection = $('#enable-sentiment-toggle').checked;
+    settings.autoAnswer = $('#auto-answer-toggle').checked;
+    // Team
+    const trEl = document.getElementById('team-roster');
+    const mnEl = document.getElementById('manager-notes');
+    const ksEl = document.getElementById('key-stakeholders');
+    if (trEl) settings.teamRoster = trEl.value.trim();
+    if (mnEl) settings.managerNotes = mnEl.value.trim();
+    if (ksEl) settings.keyStakeholders = ksEl.value.trim();
     // Style tab
     settings.aiRules = $('#ai-rules').value.trim();
     // Q&A
@@ -1869,4 +1951,58 @@
     $('#stop-btn').classList.toggle('active', st.active);
     if (!settings.onboarded) showOnboard();
   })();
+
+  // ============================ Toasts & Flashcards ============================
+  function showToast(message) {
+    let container = document.querySelector('.s-toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.className = 's-toast-container';
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = 's-toast';
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+      toast.classList.add('fade-out');
+      toast.addEventListener('animationend', () => toast.remove());
+    }, 4500);
+  }
+
+  const stakeholderCooldowns = {};
+  
+  function checkStakeholderFlashcards(text) {
+    if (settings.appMode !== 'work') return;
+    const mn = settings.managerNotes || '';
+    const ks = settings.keyStakeholders || '';
+    const combined = (mn + ' ' + ks).trim();
+    if (!combined) return;
+    
+    const words = combined.match(/\b[A-Z][a-z]+\b/g) || [];
+    const uniqueNames = [...new Set(words)].filter(w => w.length > 2);
+    
+    for (const name of uniqueNames) {
+      const regex = new RegExp('\\b' + name + '\\b', 'i'); // case-insensitive match on transcript
+      if (regex.test(text)) {
+        const now = Date.now();
+        if (!stakeholderCooldowns[name] || (now - stakeholderCooldowns[name] > 5 * 60 * 1000)) {
+          stakeholderCooldowns[name] = now;
+          let note = '';
+          if (mn.includes(name)) note = mn;
+          else note = ks;
+          
+          let preview = note.trim();
+          if (preview.length > 80) preview = preview.substring(0, 80) + '...';
+          showToast(`Flashcard: ${name}\n${preview}`);
+          break; // Show at most one flashcard per utterance
+        }
+      }
+    }
+  }
+
+  // Expose to window for stt:final listener to use
+  window.checkStakeholderFlashcards = checkStakeholderFlashcards;
+  window.showToast = showToast;
+
 })();

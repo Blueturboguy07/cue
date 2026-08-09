@@ -39,6 +39,22 @@ html, body {
   user-select: none;
 }
 
+/* ============================ Scrollbars ============================ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: var(--r-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
 /* ============================ Layout ============================ */
 /* Transparent window: no in-page background. You see your real screen behind the panel.
    Empty areas are made click-through from the renderer so they don't block your screen. */
@@ -59,6 +75,7 @@ html, body {
 /* ============================ Toolbar pill ============================ */
 #toolbar {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 4px;
   padding: 5px 6px;
@@ -197,7 +214,7 @@ button:focus { outline: none; }
 #panel.collapsed { display: none; }
 
 /* ============================ Messages ============================ */
-#messages { display: flex; flex-direction: column; overflow-y: auto; max-height: 50vh; }
+#messages { position: relative; display: flex; flex-direction: column; overflow-y: auto; max-height: 50vh; }
 .user-bubble {
   align-self: flex-end;
   max-width: 75%;
@@ -496,7 +513,9 @@ button:focus { outline: none; }
   background: rgba(0,0,0,0.35); backdrop-filter: blur(4px);
 }
 #settings-scrim.hidden { display: none; }
-#settings { width: min(480px, 94vw); padding: 18px 20px 20px; -webkit-app-region: no-drag; max-height: 88vh; display: flex; flex-direction: column; }
+#settings { width: min(560px, 94vw); padding: 18px 20px 20px; -webkit-app-region: no-drag; max-height: 88vh; display: flex; flex-direction: column; }
+.api-keys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+.api-keys-grid .s-field span { width: 70px; }
 .s-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-shrink: 0; }
 .s-title { font-size: 17px; font-weight: 600; color: var(--tx-1); }
 .s-close { border: none; background: var(--accent); color: #fff; font-weight: 600; font-size: 13px; padding: 6px 14px; border-radius: var(--r-pill); cursor: pointer; }
@@ -568,6 +587,7 @@ button:focus { outline: none; }
   color: var(--tx-1); font-size: 12.5px; font-family: var(--font);
   resize: vertical; outline: none; line-height: 1.5;
   -webkit-user-select: text; user-select: text;
+  flex-shrink: 0;
 }
 #settings textarea:focus { border-color: var(--accent); }
 .s-callers { display: flex; flex-direction: column; gap: 6px; }
@@ -996,3 +1016,10 @@ button:focus { outline: none; }
   cursor: pointer; transition: all 140ms ease;
 }
 .s-switch-btn:hover { background: rgba(255,255,255,0.09); color: #fff; border-color: rgba(255,255,255,0.22); }
+
+/* ============================ Toasts ============================ */
+.s-toast-container { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 9999; pointer-events: none; }
+.s-toast { background: rgba(30, 30, 30, 0.85); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; padding: 10px 16px; color: #fff; font-size: 13px; font-weight: 500; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4); pointer-events: auto; animation: toast-in 0.3s cubic-bezier(0.2, 1, 0.3, 1) forwards; max-width: 400px; line-height: 1.4; word-wrap: break-word; text-align: center; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.s-toast.fade-out { animation: toast-out 0.4s ease forwards; }
+@keyframes toast-out { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(10px); } }

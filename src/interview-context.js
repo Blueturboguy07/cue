@@ -290,14 +290,33 @@ function buildWorkContext(settings, _mode, _transcript) {
   const wc = settings.workContext || '';
   const pn = settings.projectNotes || '';
   const mn = settings.meetingNotesContext || '';
+  const tr = settings.teamRoster || '';
+  const man = settings.managerNotes || '';
+  const ks = settings.keyStakeholders || '';
 
   const blocks = [];
+
+  const persona = settings.workPersona || 'participant';
+  if (persona === 'leader') {
+    blocks.push('=== Your Persona ===\nYou are acting as a Meeting Leader. Proactively suggest questions to ask, identify when topics are dragging, and recommend action items to assign to participants.');
+  } else {
+    blocks.push('=== Your Persona ===\nYou are acting as a Meeting Participant. Focus on answering direct questions, summarizing key points silently, and noting down action items assigned to you.');
+  }
 
   if (wc.trim()) {
     blocks.push('=== Your Role & Team ===\n' + clip(wc.trim(), 800));
   }
+  if (tr.trim()) {
+    blocks.push('=== Team Roster ===\n' + clip(tr.trim(), 800));
+  }
+  if (man.trim()) {
+    blocks.push('=== Manager Notes ===\n' + clip(man.trim(), 600));
+  }
+  if (ks.trim()) {
+    blocks.push('=== Key Stakeholders ===\n' + clip(ks.trim(), 600));
+  }
   if (pn.trim()) {
-    blocks.push('=== Project Notes ===\n' + clip(pn.trim(), 2000));
+    blocks.push('=== Project Notes ===\n' + clip(pn.trim(), 30000));
   }
   if (mn.trim()) {
     blocks.push('=== Meeting Context ===\n' + clip(mn.trim(), 600));

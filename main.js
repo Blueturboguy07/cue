@@ -4,7 +4,7 @@ const os = require('os');
 const fs = require('fs');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
-const { createSTT } = require('./src/stt');
+const { createSTT, looksLikeHallucination } = require('./src/stt');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
@@ -91,10 +91,41 @@ const ringBuffers = {
   them: new AudioRingBuffer(300, 16000)
 };
 
+function isAcousticEcho(youText, recentThemTexts) {
+  const normalize = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  const youWords = normalize(youText);
+  if (youWords.length < 2) return false;
+  
+  const themWords = normalize(recentThemTexts.join(' '));
+  if (themWords.length === 0) return false;
+  
+  const youStr = youWords.join(' ');
+  const themStr = themWords.join(' ');
+  if (themStr.includes(youStr)) return true;
+  
+  if (youWords.length < 4) return false;
+  
+  const themWordSet = new Set(themWords);
+  let matchCount = 0;
+  for (const w of youWords) {
+    if (themWordSet.has(w)) matchCount++;
+  }
+  return (matchCount / youWords.length) >= 0.75;
+}
+
 function pushTranscript(turn) {
+  if (turn.channel === 'you') {
+    const recentThem = transcript.filter(t => t.channel === 'them' && (Date.now() - t.ts < 25000)).map(t => t.text);
+    if (isAcousticEcho(turn.text, recentThem)) {
+       console.log('[main] Discarding acoustic echo:', turn.text);
+       return false;
+    }
+  }
+
   transcript.push(turn);
   if (transcript.length > MAX_TRANSCRIPT_TURNS) transcript.splice(0, transcript.length - MAX_TRANSCRIPT_TURNS);
   persistTranscriptTurn(turn);
+  return true;
 }
 
 // -------- optional transcript persistence (Work Mode) --------
@@ -126,10 +157,15 @@ function getWhisperRuntime() {
 
 function publishTranscript(channel, text) {
   if (!text || !text.trim()) return;
+  if (looksLikeHallucination(text)) {
+    console.log('[main] Discarding hallucinated transcript:', text);
+    return;
+  }
   const turn = { channel, text: text.trim(), ts: Date.now() };
-  pushTranscript(turn);
-  send('transcript', turn);
-  send('stt:final', { channel, text: turn.text });
+  if (pushTranscript(turn)) {
+    send('transcript', turn);
+    send('stt:final', { channel, text: turn.text });
+  }
 }
 
 async function startLocalWhisper(settings) {
@@ -313,8 +349,9 @@ async function flushChannel(channel) {
     }
     if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
       const turn = { channel, text: res.text.trim(), ts: Date.now() };
-      pushTranscript(turn);
-      send('transcript', turn);
+      if (pushTranscript(turn)) {
+        send('transcript', turn);
+      }
     }
   } catch (e) {
     console.log('[stt] error', e && e.message);
@@ -362,9 +399,10 @@ function initStreamingSTT() {
     const sttInstance = createStreamingSTT(settings, channel, {
       onTranscript: (ch, text) => {
         const turn = { channel: ch, text, ts: Date.now() };
-        pushTranscript(turn);
-        send('transcript', turn);
-        send('stt:final', { channel: ch, text });
+        if (pushTranscript(turn)) {
+          send('transcript', turn);
+          send('stt:final', { channel: ch, text });
+        }
       },
       onInterim: (ch, text) => {
         send('stt:interim', { channel: ch, text });
@@ -641,6 +679,25 @@ ipcMain.handle('transcript:clear', () => {
   return { ok: true };
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
+ipcMain.handle('llm:analyzeSentiment', async (_e, recentText) => {
+  const settings = store.getSettings();
+  const llmInst = createLLM(settings);
+  if (!llmInst || !llmInst.ready) return 'NO';
+  const system = "Analyze the following meeting transcript. Is there strong pushback, objections, or is the conversation going in circles? If YES, reply with a 1-sentence actionable suggestion for the user. If NO, reply EXACTLY with 'NO'.";
+  try {
+    let result = '';
+    await llmInst.stream({
+      system,
+      turns: [{ role: 'user', text: recentText }],
+      maxTokens: 50,
+      onToken: (t) => { result += t; }
+    });
+    return result.trim();
+  } catch (e) {
+    console.error('[sentiment]', e);
+    return 'NO';
+  }
+});
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
@@ -794,9 +851,7 @@ function launchApp() {
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
       if (!sources.length) return callback();
-      const request = { video: sources[0] };
-      if (isWindows) request.audio = true;
-      else request.audio = 'loopback';
+      const request = { video: sources[0], audio: 'loopback' };
       callback(request);
     }).catch(() => callback());
   }, { useSystemPicker: false });

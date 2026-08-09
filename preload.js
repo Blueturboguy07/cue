@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('cue', {
   appLinkState: () => ipcRenderer.invoke('applink:state'),
   appLinkRevoke: (callerId) => ipcRenderer.invoke('applink:revoke', callerId),
   appLinkConsentRespond: (id, allowed) => ipcRenderer.send('applink:consent-response', { id, allowed }),
+  analyzeSentiment: (text) => ipcRenderer.invoke('llm:analyzeSentiment', text),
   pickProfileDocument: () => ipcRenderer.invoke('profile:pickDocument'),
   quit: () => ipcRenderer.send('app:quit'),
   permissionsCheck: () => ipcRenderer.invoke('permissions:check'),

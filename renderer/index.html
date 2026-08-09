@@ -135,7 +135,8 @@
       <div class="s-tabs">
         <button class="s-tab on" data-tab="keys">🔑 Keys</button>
         <button class="s-tab" data-tab="transcription">Audio</button>
-        <button class="s-tab" data-tab="profile">📄 Profile</button>
+        <button class="s-tab s-tab-interview" data-tab="profile">📄 Profile</button>
+        <button class="s-tab s-tab-work hidden" data-tab="team">👥 Team</button>
         <button class="s-tab s-tab-interview" data-tab="prep">🎯 Interview Prep</button>
         <button class="s-tab s-tab-work hidden" data-tab="work">📋 Work Context</button>
         <button class="s-tab" data-tab="style">✨ Style</button>
@@ -145,7 +146,7 @@
       <!-- Tab: Keys -->
       <div class="s-body s-tab-pane" data-pane="keys">
         <label class="s-label">Provider</label>
-        <div class="s-seg" id="provider-seg">
+        <div class="s-seg s-seg-wrap" id="provider-seg">
           <button data-provider="openai">OpenAI</button>
           <button data-provider="anthropic">Anthropic</button>
           <button data-provider="gemini">Gemini</button>
@@ -157,12 +158,18 @@
         </div>
 
         <label class="s-label">API keys &amp; URLs <span class="s-hint">stored locally · never sent to any server</span></label>
-        <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
-        <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
-        <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
+        <div class="api-keys-grid">
+          <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
+          <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
+          <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
+          <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
+          <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
+          <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
+          <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
+          <div class="s-field"><span>Azure AI</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
+          <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
+          <div class="s-field"><span>Azure URL</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
+        </div>
 
         <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
         <div class="s-seg" id="minimax-region-seg">
@@ -175,12 +182,6 @@
           <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
           <div class="s-help">Your Custom key and LLM requests are sent to this URL. Speech-to-text continues to use Deepgram, OpenAI, or Gemini.</div>
         </div>
-        <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
-        <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
-        <div class="s-field"><span>Azure AI Foundry</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
-
-        <label class="s-label">Azure endpoint <span class="s-hint">Azure OpenAI: https://&lt;resource&gt;.openai.azure.com/openai · AI Foundry: https://&lt;host&gt;.cognitiveservices.azure.com (cue adds /openai/v1)</span></label>
-        <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
 
         <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
         <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
@@ -258,6 +259,18 @@
         <textarea id="job-description" rows="5" spellcheck="false" placeholder="Paste the job description for the role you're interviewing for. cue will highlight your most relevant experience."></textarea>
       </div>
 
+      <!-- Tab: Team -->
+      <div class="s-body s-tab-pane hidden" data-pane="team">
+        <label class="s-label">Team roster <span class="s-hint">who's who and their roles</span></label>
+        <textarea id="team-roster" rows="4" spellcheck="false" placeholder="e.g. Alice (Tech Lead), Bob (Backend), Charlie (Design)."></textarea>
+
+        <label class="s-label">Manager notes <span class="s-hint">name, communication style, current priorities</span></label>
+        <textarea id="manager-notes" rows="3" spellcheck="false" placeholder="e.g. Sarah prefers concise updates and focuses heavily on sprint velocity."></textarea>
+
+        <label class="s-label">Key stakeholders <span class="s-hint">people outside your immediate team</span></label>
+        <textarea id="key-stakeholders" rows="3" spellcheck="false" placeholder="e.g. Dave from Marketing needs to be kept in the loop on feature X releases."></textarea>
+      </div>
+
       <!-- Tab: Interview Prep -->
       <div class="s-body s-tab-pane hidden" data-pane="prep">
         <label class="s-label">Your STAR stories <span class="s-hint">write 3–5 real behavioral stories — used for "tell me about a time…" questions</span></label>
@@ -275,10 +288,17 @@
 
       <!-- Tab: Work Context -->
       <div class="s-body s-tab-pane hidden" data-pane="work">
+        <label class="s-label">Work Persona <span class="s-hint">how cue should behave during meetings</span></label>
+        <div class="s-seg" id="work-persona-seg" style="margin-bottom: 8px;">
+          <button data-persona="participant">Participant</button>
+          <button data-persona="leader">Leader</button>
+        </div>
+
         <label class="s-label">Work role &amp; team <span class="s-hint">your role, team, and current projects — used for in-meeting suggestions</span></label>
         <textarea id="work-context" rows="4" spellcheck="false" placeholder="e.g. I'm a senior engineer on the Payments team at Acme Corp. We're currently migrating from a monolith to microservices. My focus is the checkout service."></textarea>
 
         <label class="s-label">Project notes <span class="s-hint">paste relevant docs, specs, or notes — cue surfaces these during meetings</span></label>
+        <div class="s-field s-upload" style="margin-bottom:4px"><span class="s-filename" id="project-notes-filename"></span><button class="s-upload-btn" id="upload-project-notes-btn">Import PDF/DOCX</button></div>
         <textarea id="project-notes" rows="6" spellcheck="false" placeholder="Paste project specs, PRD excerpts, meeting context, or anything cue should know about your current work."></textarea>
 
         <label class="s-label">Meeting notes context <span class="s-hint">optional standing agenda or recurring talking points</span></label>
@@ -294,6 +314,17 @@
             <span class="s-toggle-track"><span class="s-toggle-thumb"></span></span>
           </label>
         </div>
+
+        <div class="s-toggle-row">
+          <div>
+            <div class="s-label" style="margin-top:0">Enable Pushback &amp; Sentiment Detection <span class="s-hint">optional — background analysis</span></div>
+            <div class="s-hint-block" style="margin-top:4px">When enabled, cue will periodically send snippets of your meeting transcript to the AI in the background to detect pushback and suggest responses. <strong>Warning:</strong> This will continuously ping your LLM API during a meeting and may incur higher API costs.</div>
+          </div>
+          <label class="s-toggle" for="enable-sentiment-toggle">
+            <input type="checkbox" id="enable-sentiment-toggle" role="switch" aria-label="Enable sentiment detection" />
+            <span class="s-toggle-track"><span class="s-toggle-thumb"></span></span>
+          </label>
+        </div>
       </div>
 
       <!-- Tab: Q&A -->
@@ -303,6 +334,17 @@
 
         <label class="s-label" style="margin-top:14px;">Questions to ask the interviewer <span class="s-hint">cue will suggest these at the end</span></label>
         <textarea id="questions-to-ask" rows="6" spellcheck="false" placeholder="e.g.&#10;- What does success look like in the first 90 days?&#10;- How does the team handle technical debt?&#10;- What's the biggest challenge the team is facing right now?&#10;- How does feedback and mentorship work here?"></textarea>
+
+        <div class="s-toggle-row" style="margin-top: 14px;">
+          <div>
+            <div class="s-label" style="margin-top:0">Auto-Answer (Mock Interviews) <span class="s-hint">experimental</span></div>
+            <div class="s-hint-block" style="margin-top:4px">Automatically generate a response when cue detects the interviewer has finished asking a question. Recommended for mock interviews only.</div>
+          </div>
+          <label class="s-toggle" for="auto-answer-toggle">
+            <input type="checkbox" id="auto-answer-toggle" role="switch" aria-label="Enable auto-answer" />
+            <span class="s-toggle-track"><span class="s-toggle-thumb"></span></span>
+          </label>
+        </div>
       </div>
 
       <!-- Tab: Style -->

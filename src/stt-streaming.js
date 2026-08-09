@@ -110,7 +110,7 @@ class OpenAIRealtimeSTT {
         break;
 
       case 'conversation.item.input_audio_transcription.completed':
-        if (event.transcript && event.transcript.trim()) {
+        if (event.transcript && event.transcript.trim() && !looksLikeHallucination(event.transcript.trim())) {
           this.onTranscript(event.transcript.trim());
         }
         break;

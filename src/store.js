@@ -35,13 +35,19 @@ const DEFAULTS = {
   // Tab 4: Q&A
   salaryTarget: '',
   questionsToAsk: '',
+  autoAnswer: false,
   // Tab 5: Style
   aiRules: '',
   // Work Mode context
+  workPersona: 'participant',
   workContext: '',
   projectNotes: '',
   meetingNotesContext: '',
+  teamRoster: '',
+  managerNotes: '',
+  keyStakeholders: '',
   persistTranscripts: false,
+  enableSentimentDetection: false,
   // Window position
   windowX: null,
   windowY: null,
