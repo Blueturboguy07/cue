@@ -1490,14 +1490,53 @@
     }
   }
 
+  // --- Document Import State ---
+  let sessionFiles = { projectNotes: [], resume: [], jd: [] };
+
+  function renderFileList(type) {
+    const listHtml = sessionFiles[type].map((f, i) => 
+      '<div class="s-file-item">📄 ' + f.fileName + ' <button class="s-action danger" style="padding:1px 5px; font-size:10px; margin-left:6px;" data-del="' + type + '" data-idx="' + i + '">✖</button></div>'
+    ).join('');
+    
+    let container, textarea, clearBtn;
+    if (type === 'projectNotes') {
+      container = '#project-notes-filename'; textarea = '#project-notes'; clearBtn = '#clear-project-notes-btn';
+    } else if (type === 'resume') {
+      container = '#resume-filename'; textarea = '#resume-text'; clearBtn = '#clear-resume-btn';
+    } else if (type === 'jd') {
+      container = '#jd-filename'; textarea = '#job-description'; clearBtn = '#clear-jd-btn';
+    }
+    
+    $(container).innerHTML = listHtml;
+    // Overwrite the textarea with the combined state (Note: this overrides manual edits if a file is added/removed)
+    $(textarea).value = sessionFiles[type].map(f => f.text).join('\n\n');
+    
+    if (sessionFiles[type].length > 0) $(clearBtn).classList.remove('hidden');
+    else $(clearBtn).classList.add('hidden');
+    
+    $(container).querySelectorAll('button[data-del]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const idx = parseInt(e.currentTarget.getAttribute('data-idx'), 10);
+        sessionFiles[type].splice(idx, 1);
+        renderFileList(type);
+      });
+    });
+  }
+
   const uploadProjectNotesBtn = document.getElementById('upload-project-notes-btn');
   if (uploadProjectNotesBtn) uploadProjectNotesBtn.addEventListener('click', async () => {
     const res = await cue.pickProfileDocument();
     if (!res || res.canceled) return;
     if (res.error) { showStatus('Document import failed: ' + res.error); return; }
-    $('#project-notes').value = res.text || '';
-    $('#project-notes-filename').textContent = res.fileName;
-    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+    sessionFiles.projectNotes.push(...res.files);
+    renderFileList('projectNotes');
+    const toastName = res.files.length > 1 ? res.files.length + ' files' : res.files[0].fileName;
+    showStatus('Imported ' + toastName + ' — press Done to save.');
+  });
+  const clearProjectNotesBtn = document.getElementById('clear-project-notes-btn');
+  if (clearProjectNotesBtn) clearProjectNotesBtn.addEventListener('click', () => {
+    sessionFiles.projectNotes = []; renderFileList('projectNotes');
+    $('#project-notes').value = '';
   });
 
   const uploadResumeBtn = document.getElementById('upload-resume-btn');
@@ -1505,16 +1544,31 @@
     const res = await cue.pickProfileDocument();
     if (!res || res.canceled) return;
     if (res.error) { showStatus('Resume import failed: ' + res.error); return; }
-    $('#resume-text').value = res.text || '';
-    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+    sessionFiles.resume.push(...res.files);
+    renderFileList('resume');
+    const toastName = res.files.length > 1 ? res.files.length + ' files' : res.files[0].fileName;
+    showStatus('Imported ' + toastName + ' — press Done to save.');
   });
+  const clearResumeBtn = document.getElementById('clear-resume-btn');
+  if (clearResumeBtn) clearResumeBtn.addEventListener('click', () => {
+    sessionFiles.resume = []; renderFileList('resume');
+    $('#resume-text').value = '';
+  });
+
   const uploadJdBtn = document.getElementById('upload-jd-btn');
   if (uploadJdBtn) uploadJdBtn.addEventListener('click', async () => {
     const res = await cue.pickProfileDocument();
     if (!res || res.canceled) return;
     if (res.error) { showStatus('Job description import failed: ' + res.error); return; }
-    $('#job-description').value = res.text || '';
-    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+    sessionFiles.jd.push(...res.files);
+    renderFileList('jd');
+    const toastName = res.files.length > 1 ? res.files.length + ' files' : res.files[0].fileName;
+    showStatus('Imported ' + toastName + ' — press Done to save.');
+  });
+  const clearJdBtn = document.getElementById('clear-jd-btn');
+  if (clearJdBtn) clearJdBtn.addEventListener('click', () => {
+    sessionFiles.jd = []; renderFileList('jd');
+    $('#job-description').value = '';
   });
 
   function statusText() {

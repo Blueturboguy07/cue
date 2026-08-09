@@ -251,11 +251,19 @@
       <!-- Tab: Profile -->
       <div class="s-body s-tab-pane hidden" data-pane="profile">
         <label class="s-label">Your resume <span class="s-hint">paste full resume, or import a PDF/DOCX</span></label>
-        <div class="s-field s-upload"><span class="s-filename" id="resume-filename"></span><button class="s-upload-btn" id="upload-resume-btn">Import PDF/DOCX</button></div>
+        <div class="s-field s-upload">
+          <span class="s-filename" id="resume-filename"></span>
+          <button class="s-upload-btn" id="upload-resume-btn">Import PDF/DOCX</button>
+          <button class="s-action danger hidden" id="clear-resume-btn" title="Clear">✖</button>
+        </div>
         <textarea id="resume-text" rows="7" spellcheck="false" placeholder="Paste your full resume here. cue will extract Name, Summary, Experience, Skills, Projects, and Education automatically."></textarea>
 
         <label class="s-label">Target job description <span class="s-hint">optional — every answer gets tailored to this role</span></label>
-        <div class="s-field s-upload"><span class="s-filename" id="jd-filename"></span><button class="s-upload-btn" id="upload-jd-btn">Import PDF/DOCX</button></div>
+        <div class="s-field s-upload">
+          <span class="s-filename" id="jd-filename"></span>
+          <button class="s-upload-btn" id="upload-jd-btn">Import PDF/DOCX</button>
+          <button class="s-action danger hidden" id="clear-jd-btn" title="Clear">✖</button>
+        </div>
         <textarea id="job-description" rows="5" spellcheck="false" placeholder="Paste the job description for the role you're interviewing for. cue will highlight your most relevant experience."></textarea>
       </div>
 
@@ -298,7 +306,11 @@
         <textarea id="work-context" rows="4" spellcheck="false" placeholder="e.g. I'm a senior engineer on the Payments team at Acme Corp. We're currently migrating from a monolith to microservices. My focus is the checkout service."></textarea>
 
         <label class="s-label">Project notes <span class="s-hint">paste relevant docs, specs, or notes — cue surfaces these during meetings</span></label>
-        <div class="s-field s-upload" style="margin-bottom:4px"><span class="s-filename" id="project-notes-filename"></span><button class="s-upload-btn" id="upload-project-notes-btn">Import PDF/DOCX</button></div>
+        <div class="s-field s-upload" style="margin-bottom:4px">
+          <span class="s-filename" id="project-notes-filename"></span>
+          <button class="s-upload-btn" id="upload-project-notes-btn">Import PDF/DOCX</button>
+          <button class="s-action danger hidden" id="clear-project-notes-btn" title="Clear">✖</button>
+        </div>
         <textarea id="project-notes" rows="6" spellcheck="false" placeholder="Paste project specs, PRD excerpts, meeting context, or anything cue should know about your current work."></textarea>
 
         <label class="s-label">Meeting notes context <span class="s-hint">optional standing agenda or recurring talking points</span></label>

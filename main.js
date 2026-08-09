@@ -710,19 +710,23 @@ ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // #resume-text / #job-description textareas so settings keep a single source of truth.
 async function pickAndParseDocument() {
   const res = await dialog.showOpenDialog(win, {
-    properties: ['openFile'],
-    filters: [{ name: 'Resume / Job description', extensions: ['pdf', 'docx'] }]
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Documents', extensions: ['pdf', 'docx'] }]
   });
   if (res.canceled || !res.filePaths.length) return null;
-  const filePath = res.filePaths[0];
-  const text = await parseDocumentFile(filePath);
-  return { fileName: path.basename(filePath), text };
+  
+  let files = [];
+  for (const filePath of res.filePaths) {
+    const text = await parseDocumentFile(filePath);
+    files.push({ fileName: path.basename(filePath), text: text });
+  }
+  return { files };
 }
 ipcMain.handle('profile:pickDocument', async () => {
   try {
     const picked = await pickAndParseDocument();
     if (!picked) return { canceled: true };
-    return { canceled: false, fileName: picked.fileName, text: picked.text };
+    return { canceled: false, files: picked.files };
   } catch (e) {
     return { canceled: false, error: (e && e.message) || String(e) };
   }
