@@ -14,7 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-latest, windows-latest, ubuntu-latest]
 
     env:
       # A runner with no certificate can only produce an ad-hoc macOS build, and
@@ -30,11 +30,11 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build macOS
         if: matrix.os == 'macos-latest'
@@ -56,6 +56,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build Linux x64 and arm64
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run dist:linux && npm run dist:linux:arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload to GitHub Release
         # Skipped on macOS until signing is configured, so an ad-hoc build can
         # never replace a signed asset already attached to the release.
@@ -65,5 +71,6 @@ jobs:
           files: |
             dist/*.exe
             dist/*.zip
+            dist/*.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -150,6 +150,34 @@ const MODES = {
     }
   },
 
+  // ── Answer This: answer one specific transcript question ─────────────────
+  answerThis: {
+    needsScreen: false,
+    userBubble: null,   // bubble set dynamically from the question text
+    small: false,
+    resumeMode: 'say',  // same context budget as 'say'
+    buildSystem(contextBlock, aiRules) {
+      return applyRules(buildSystem(
+        'You are cue, whispering a direct answer to the candidate for ONE specific question. ' +
+        BASE_RULES +
+        'The interviewer\'s exact question is provided below. Focus ONLY on answering that question — ignore any other conversation context.\n\n' +
+        'Rules:\n' +
+        '• BEHAVIORAL ("tell me about a time…"): STAR format using real stories from the candidate\'s background. Situation → Task → Action → Result. Include metrics if available.\n' +
+        '• MOTIVATION ("why this company/role"): Specific, genuine reasons from their stated preferences.\n' +
+        '• TECHNICAL: Clear explanation with a concrete example from their experience.\n' +
+        '• EXPERIENCE: Reference specific roles/projects from their resume.\n' +
+        '• COMPENSATION: State the salary target confidently in one sentence.\n' +
+        '• SITUATIONAL: Structured thinking — "First I would X, then Y, because Z."\n\n' +
+        'Write in first person, as the candidate speaking. No preamble. 2–5 sentences.',
+        contextBlock
+      ), aiRules, 'answerThis');
+    },
+    build(ctx) {
+      // Only pass the specific question — not the full transcript history
+      return 'Answer this specific interview question:\n\n"' + (ctx.userText || '(no question provided)') + '"\n\nGive the full answer the candidate should say out loud.';
+    }
+  },
+
   // ── LeetCode: pure coding solver — no personal context, no AI rules ─────
   leetcode: {
     needsScreen: true,

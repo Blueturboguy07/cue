@@ -1,1 +1,49 @@
-{"name":"cue","version":"0.2.2","description":"Open-source cross-platform invisible AI overlay — three separate inputs (screen, mic, system audio) into an LLM. A Cluely-style copilot for meetings and coding problems.","license":"GPL-3.0-or-later","author":"cue","main":"main.js","scripts":{"start":"electron .","test":"node --test test/*.test.js","postinstall":"node scripts/rename-electron.js","pack":"electron-builder --dir","dist":"electron-builder --mac zip","dist:mac":"electron-builder --mac zip","dist:win":"electron-builder --win nsis"},"keywords":["electron","overlay","ai","assistant","windows","cross-platform"],"devDependencies":{"electron":"33.2.1","electron-builder":"^26.15.3","resedit":"^3.0.2"},"engines":{"node":">=22.12.0"},"dependencies":{"@anthropic-ai/sdk":"^0.32.1","@google/genai":"^0.3.0","lucide-static":"^0.468.0","openai":"^4.73.0","ws":"^8.18.0"}}
+{
+  "name": "cue",
+  "version": "0.2.2",
+  "description": "Open-source cross-platform invisible AI overlay — three separate inputs (screen, mic, system audio) into an LLM. A Cluely-style copilot for meetings and coding problems.",
+  "license": "GPL-3.0-or-later",
+  "author": "cue",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "postinstall": "node scripts/rename-electron.js",
+    "prepare:whisper": "node scripts/prepare-whisper-runtime.js",
+    "verify:whisper-runtime": "node scripts/verify-whisper-runtime.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --mac zip",
+    "dist:mac": "electron-builder --mac zip",
+    "dist:win": "electron-builder --win",
+    "pack:win": "electron-builder --win --dir",
+    "dist:linux": "electron-builder --linux AppImage --x64",
+    "dist:linux:arm64": "electron-builder --linux AppImage --arm64"
+  },
+  "keywords": [
+    "electron",
+    "overlay",
+    "ai",
+    "assistant",
+    "windows",
+    "cross-platform"
+  ],
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "^26.15.3",
+    "extract-zip": "^2.0.1",
+    "resedit": "^3.0.2",
+    "tar": "^7.5.22"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@google/genai": "^2.12.0",
+    "lucide-static": "^0.468.0",
+    "mammoth": "^1.8.0",
+    "openai": "^4.73.0",
+    "pdf-parse": "^1.1.1",
+    "ws": "^8.18.0"
+  }
+}

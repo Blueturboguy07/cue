@@ -36,9 +36,77 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for file in main.js preload.js renderer/*.js src/*.js test/*.js; do
+          for file in main.js preload.js electron-builder.cjs renderer/*.js src/*.js scripts/*.js test/*.js; do
             node --check "$file"
           done
 
       - name: Run tests
         run: npm test
+
+  package-windows:
+    name: Package Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Package Windows app
+        run: npm run pack:win
+
+  # Exercises the local whisper runtime end to end: download, checksum, launch.
+  #
+  # Limited to pushes and to PRs labelled whisper-runtime, because it needs the
+  # network and would otherwise sit on the critical path of every unrelated change.
+  #
+  # macOS is deliberately not in this matrix. Windows and Linux fetch immutable
+  # GitHub *release assets*, so their pinned checksums hold. macOS builds from
+  # source via https://github.com/.../archive/refs/tags/<tag>.zip — a GitHub
+  # auto-generated archive, which is NOT byte-stable: GitHub can recompress it,
+  # the SHA-256 changes, and the pin fails permanently through no fault of ours.
+  # That is exactly what happened here. Re-adding macOS needs the source archive
+  # mirrored somewhere immutable first, not a fresh hash that will rot again.
+  runtime-smoke:
+    name: Local runtime (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: >-
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'whisper-runtime')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore prepared runtime
+        uses: actions/cache@v4
+        with:
+          path: .cache/whisper-runtime
+          key: whisper-runtime-1.9.1-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Prepare pinned runtime
+        run: npm run prepare:whisper
+
+      - name: Launch runtime smoke test
+        run: npm run verify:whisper-runtime

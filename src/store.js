@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
+const { normalizeBaseUrl } = require('./openai-compatible');
 
 const FILE = path.join(app.getPath('userData'), 'cue-data.json');
 
@@ -11,9 +12,18 @@ const MAX_AI_RULES_CHARS = 2000;
 
 const DEFAULTS = {
   provider: 'openai',
+  sttProvider: 'auto',
+  localWhisper: {
+    modelId: 'base.en',
+    language: 'auto',
+    threads: 0
+  },
   smart: false,
   appMode: '',
-  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', ollama: '', groq: '' },
+  baseUrl: '',
+  minimaxRegion: 'global_en',
+  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '' , azure: '' },
+  azureEndpoint: '',
   // Tab 2: Profile
   resumeText: '',
   jobDescription: '',
@@ -38,9 +48,12 @@ const DEFAULTS = {
   models: {
     openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
     anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
-    gemini: { fast: 'gemini-2.0-flash', smart: 'gemini-2.0-flash' },
-    ollama: { fast: 'llama3.2', smart: 'llama3.2' },
-    groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' }
+    gemini: { fast: 'gemini-3.5-flash', smart: 'gemini-3.5-flash' },
+    custom: { fast: '', smart: '' },
+    ollama: { fast: 'llama3.2', smart: 'llama3.3' },
+    groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' },
+    minimax: { fast: 'MiniMax-M2.7', smart: 'MiniMax-M3' },
+    azure: { fast: 'gpt-4o-mini', smart: 'gpt-4o' }
   }
 };
 
@@ -66,6 +79,8 @@ function load() {
   if (data) return data;
   try { data = deepMerge(DEFAULTS, JSON.parse(fs.readFileSync(FILE, 'utf8'))); }
   catch { data = deepMerge(DEFAULTS, {}); }
+
+
   return data;
 }
 function save() { try { fs.writeFileSync(FILE, JSON.stringify(data, null, 2)); } catch (e) { /* ignore */ } }
@@ -73,5 +88,12 @@ function save() { try { fs.writeFileSync(FILE, JSON.stringify(data, null, 2)); }
 module.exports = {
   MAX_AI_RULES_CHARS,
   getSettings() { return load(); },
-  setSettings(patch) { load(); data = deepMerge(data, patch || {}); save(); return data; }
+  setSettings(patch) {
+    load();
+    const nextSettings = deepMerge(data, patch || {});
+    nextSettings.baseUrl = normalizeBaseUrl(nextSettings.baseUrl);
+    data = nextSettings;
+    save();
+    return data;
+  }
 };

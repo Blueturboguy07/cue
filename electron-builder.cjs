@@ -31,13 +31,15 @@ module.exports = {
   productName: "cue",
   asar: false,
   publish: null,
+  artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
   // An allowlist, so anything new has to be added here or it simply is not in
   // the shipped app — and the only symptom is a require() that throws at
   // launch, in a build that ran fine from source.
   files: ["main.js", "preload.js", "src/**/*", "renderer/**/*", "vendor/**/*"],
   directories: { buildResources: "build-resources" },
+  afterPack: "scripts/after-pack.js",
   mac: {
-    target: [{ target: "zip", arch: ["arm64"] }],
+    target: [{ target: "zip", arch: ["x64", "arm64"] }],
     category: "public.app-category.productivity",
     // With a real cert, let electron-builder discover it and apply the hardened
     // runtime (notarization is refused without it). Without one, identity:null
@@ -61,5 +63,18 @@ module.exports = {
   },
   win: {
     target: [{ target: "nsis", arch: ["x64"] }],
+    artifactName: "${productName}-win-${arch}.${ext}",
+  },
+  // A per-user install with a visible directory step: cue is a personal overlay,
+  // not a machine-wide service, so it should never need an elevation prompt.
+  nsis: {
+    oneClick: false,
+    perMachine: false,
+    allowToChangeInstallationDirectory: true,
+    shortcutName: "cue",
+  },
+  linux: {
+    target: [{ target: "AppImage", arch: ["x64", "arm64"] }],
+    category: "Utility",
   },
 };

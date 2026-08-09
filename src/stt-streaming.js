@@ -4,6 +4,7 @@
 // This module manages a persistent WebSocket connection for real-time transcription
 // with sub-200ms latency, interim results, and automatic reconnection.
 
+const { looksLikeHallucination } = require('./stt');
 const { pcmToWav } = require('./wav');
 
 // ============================================================================
@@ -229,6 +230,7 @@ class DeepgramStreamingSTT {
     this._maxReconnectAttempts = 5;
     this._reconnectDelay = 1000;
     this._keepAliveInterval = null;
+    this._committed = ''; // is_final segments not yet closed out by speech_final
   }
 
   async connect() {
@@ -295,19 +297,39 @@ class DeepgramStreamingSTT {
     if (msg.type === 'Results') {
       const alt = msg.channel?.alternatives?.[0];
       if (!alt) return;
-      const text = alt.transcript;
-      if (!text || !text.trim()) return;
+      const text = (alt.transcript || '').trim();
 
+      // Deepgram splits one spoken sentence into several is_final segments and only sets
+      // speech_final on the last one. Accumulate the is_final pieces and emit a single turn
+      // at speech_final so a sentence is not fragmented across transcript rows.
+      if (msg.speech_final) {
+        const full = ((this._committed || '') + ' ' + text).trim();
+        this._committed = '';
+        if (full && !looksLikeHallucination(full)) this.onTranscript(full);
+        this.onInterim('');
+        return;
+      }
+      if (!text) return;
       if (msg.is_final) {
-        this.onTranscript(text.trim());
+        this._committed = ((this._committed || '') + ' ' + text).trim();
+        this.onInterim(this._committed);
       } else {
-        this.onInterim(text.trim());
+        this.onInterim(((this._committed || '') + ' ' + text).trim());
       }
     } else if (msg.type === 'UtteranceEnd') {
-      // Can be used to signal end of a speaking turn
+      // Safety net: if endpointing never produced a speech_final, flush whatever is_final
+      // segments we accumulated so the turn is not silently dropped.
+      this._flushCommitted();
     } else if (msg.type === 'Error') {
       this.onError({ provider: 'deepgram', message: msg.description || msg.message, status: msg.variant });
     }
+  }
+
+  _flushCommitted() {
+    const full = (this._committed || '').trim();
+    this._committed = '';
+    if (full && !looksLikeHallucination(full)) this.onTranscript(full);
+    this.onInterim('');
   }
 
   sendAudio(pcmBuffer) {
@@ -331,6 +353,7 @@ class DeepgramStreamingSTT {
   }
 
   disconnect() {
+    this._flushCommitted();
     this._clearKeepAlive();
     if (this.ws) {
       // Send CloseStream message for clean shutdown
@@ -382,10 +405,15 @@ async function transcribeBatchGemini(apiKey, wav) {
 
 function createStreamingSTT(settings, channel, callbacks) {
   const keys = settings.apiKeys || {};
+  const selectedProvider = settings.sttProvider || 'auto';
   const { onTranscript, onInterim, onError, onStatusChange } = callbacks;
 
+  if (selectedProvider === 'local' || selectedProvider === 'gemini') {
+    return { type: 'batch', provider: selectedProvider, instance: null };
+  }
+
   // Priority 1: Deepgram (purpose-built for streaming STT, lowest latency)
-  if (keys.deepgram) {
+  if ((selectedProvider === 'auto' || selectedProvider === 'deepgram') && keys.deepgram) {
     const stt = new DeepgramStreamingSTT(keys.deepgram, {
       model: 'nova-3',
       onTranscript: (text) => onTranscript(channel, text),
@@ -397,7 +425,7 @@ function createStreamingSTT(settings, channel, callbacks) {
   }
 
   // Priority 2: OpenAI Realtime API (excellent quality, slightly higher latency)
-  if (keys.openai) {
+  if ((selectedProvider === 'auto' || selectedProvider === 'openai') && keys.openai) {
     const stt = new OpenAIRealtimeSTT(keys.openai, {
       model: 'gpt-realtime-whisper', // only this model gives true streaming deltas
       onTranscript: (text) => onTranscript(channel, text),
@@ -409,7 +437,11 @@ function createStreamingSTT(settings, channel, callbacks) {
   }
 
   // Priority 3: Batch fallback (Gemini or Whisper via old system)
-  return { type: 'batch', provider: keys.gemini ? 'gemini' : 'none', instance: null };
+  return {
+    type: 'batch',
+    provider: selectedProvider === 'auto' && keys.gemini ? 'gemini' : 'none',
+    instance: null
+  };
 }
 
 module.exports = {

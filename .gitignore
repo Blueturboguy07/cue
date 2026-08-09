@@ -4,6 +4,7 @@ node_modules/
 # Build output
 dist/
 out/
+.cache/
 
 # Native binaries
 native/systemaudio

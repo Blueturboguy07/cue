@@ -46,6 +46,8 @@
       <button class="tb-hide" id="hide-btn"><span class="chev"></span><span>Hide</span></button>
       <div class="tb-divider"></div>
       <button class="tb-stop" id="stop-btn" title="Start / stop listening"></button>
+      <div class="tb-divider"></div>
+      <button class="tb-quit" id="quit-btn" title="Quit cue (⌘⇧X)"></button>
     </div>
 
     <!-- Main assistant panel -->
@@ -59,49 +61,64 @@
       </div>
 
       <div id="panel" class="glass no-drag">
-        <div id="messages"></div>
 
-        <div id="transcript-wrap" class="transcript-wrap hidden">
-          <div id="transcript-list" class="transcript-list"></div>
-        </div>
+        <!-- Two-column layout: responses (left) + live transcript sidebar (right) -->
+        <div id="panel-columns">
 
-        <div id="action-row">
-          <button class="act act-primary" data-mode="say"
-            title="Suggests what to say next based on the conversation">
-            <span class="ic"></span><span>What should I say?</span>
-            <span class="shortcut-hint" id="say-shortcut-hint"></span>
-          </button>
-          <span class="sep">•</span>
-          <button class="act act-secondary" data-mode="assist"
-            title="Scans your screen and conversation to decide what you need">
-            <span class="ic"></span><span>Assist</span>
-            <span class="shortcut-hint" id="assist-shortcut-hint"></span>
-          </button>
-          <span class="sep">•</span>
-          <button class="act" data-mode="followup"><span class="ic"></span><span>Follow-up</span></button>
-          <span class="sep">•</span>
-          <button class="act" data-mode="recap"><span class="ic"></span><span>Recap</span></button>
-          <span class="sep">•</span>
-          <button class="act" id="transcript-toggle-btn" title="Show/hide what was heard"><span class="ic"></span><span>Transcript</span></button>
-          <span class="sep">•</span>
-          <button class="act act-clear" id="clear-transcript-btn" title="Clear transcript and start fresh"><span class="ic"></span><span>Clear</span></button>
-        </div>
+          <!-- Left column: AI responses -->
+          <div id="panel-main">
+            <div id="messages"></div>
 
-        <div id="composer">
-          <div id="input-area">
-            <div id="placeholder">Ask about your screen or conversation, or <span class="keycap">⌘</span><span class="keycap">⏎</span> for Assist</div>
-            <textarea id="input" rows="1" spellcheck="false"></textarea>
+            <div id="action-row">
+              <button class="act act-primary" data-mode="say"
+                title="Suggests what to say next based on the conversation">
+                <span class="ic"></span><span>What should I say?</span>
+                <span class="shortcut-hint" id="say-shortcut-hint"></span>
+              </button>
+              <span class="sep">•</span>
+              <button class="act act-secondary" data-mode="assist"
+                title="Scans your screen and conversation to decide what you need">
+                <span class="ic"></span><span>Assist</span>
+                <span class="shortcut-hint" id="assist-shortcut-hint"></span>
+              </button>
+              <span class="sep">•</span>
+              <button class="act" data-mode="followup"><span class="ic"></span><span>Follow-up</span></button>
+              <span class="sep">•</span>
+              <button class="act" data-mode="recap"><span class="ic"></span><span>Recap</span></button>
+            </div>
+
+            <div id="composer">
+              <div id="input-area">
+                <div id="placeholder">Ask about your screen or conversation, or <span class="keycap">⌘</span><span class="keycap">⏎</span> for Assist</div>
+                <textarea id="input" rows="1" spellcheck="false"></textarea>
+              </div>
+              <div id="composer-bottom">
+                <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
+                <button id="history-btn" class="history-btn" title="View conversation history"><span class="ic"></span></button>
+                <button id="more-btn" class="more-btn" title="Settings"></button>
+                <div class="spacer"></div>
+                <button id="send-btn" title="Send"></button>
+              </div>
+            </div>
+
+            <!-- Populated by JS based on active mode -->
+            <div id="prep-status" class="prep-status"></div>
           </div>
-          <div id="composer-bottom">
-            <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
-            <button id="more-btn" class="more-btn" title="Settings"></button>
-            <div class="spacer"></div>
-            <button id="send-btn" title="Send"></button>
-          </div>
-        </div>
+        </div><!-- /panel-columns -->
+      </div>
+    </div>
 
-        <!-- Populated by JS based on active mode -->
-        <div id="prep-status" class="prep-status"></div>
+    <!-- Transcript history sidebar — floats OUTSIDE main panel, toggled by history button -->
+    <div id="transcript-sidebar" class="transcript-sidebar hidden">
+      <div class="ts-header">
+        <span class="ts-title">Conversation History</span>
+        <button class="ts-close-btn" id="close-sidebar-btn" title="Close history">✕</button>
+      </div>
+      <div id="ts-list" class="ts-list">
+        <div class="ts-placeholder">Conversation history will appear here when listening.</div>
+      </div>
+      <div class="ts-footer">
+        <button class="ts-clear-btn" id="clear-transcript-btn" title="Clear all history">Clear History</button>
       </div>
     </div>
   </div>
@@ -117,6 +134,7 @@
       <!-- Tab bar -->
       <div class="s-tabs">
         <button class="s-tab on" data-tab="keys">🔑 Keys</button>
+        <button class="s-tab" data-tab="transcription">Audio</button>
         <button class="s-tab" data-tab="profile">📄 Profile</button>
         <button class="s-tab s-tab-interview" data-tab="prep">🎯 Interview Prep</button>
         <button class="s-tab s-tab-work hidden" data-tab="work">📋 Work Context</button>
@@ -131,8 +149,11 @@
           <button data-provider="openai">OpenAI</button>
           <button data-provider="anthropic">Anthropic</button>
           <button data-provider="gemini">Gemini</button>
+          <button data-provider="custom">Custom</button>
           <button data-provider="ollama">Ollama</button>
           <button data-provider="groq">Groq</button>
+          <button data-provider="minimax">MiniMax</button>
+          <button data-provider="azure">Azure AI</button>
         </div>
 
         <label class="s-label">API keys &amp; URLs <span class="s-hint">stored locally · never sent to any server</span></label>
@@ -140,8 +161,26 @@
         <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
         <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
         <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
+        <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
+        <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
+
+        <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
+        <div class="s-seg" id="minimax-region-seg">
+          <button data-region="global_en">Global</button>
+          <button data-region="cn_zh">China</button>
+        </div>
+
+        <div id="custom-endpoint-settings" class="hidden">
+          <label class="s-label" for="base-url">Custom endpoint <span class="s-hint">OpenAI-compatible chat API</span></label>
+          <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
+          <div class="s-help">Your Custom key and LLM requests are sent to this URL. Speech-to-text continues to use Deepgram, OpenAI, or Gemini.</div>
+        </div>
         <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
         <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
+        <div class="s-field"><span>Azure AI Foundry</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
+
+        <label class="s-label">Azure endpoint <span class="s-hint">Azure OpenAI: https://&lt;resource&gt;.openai.azure.com/openai · AI Foundry: https://&lt;host&gt;.cognitiveservices.azure.com (cue adds /openai/v1)</span></label>
+        <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
 
         <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
         <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
@@ -157,12 +196,65 @@
         </div>
       </div>
 
+      <!-- Tab: Transcription -->
+      <div class="s-body s-tab-pane hidden" data-pane="transcription">
+        <label class="s-label">Speech-to-text provider</label>
+        <div class="s-seg s-seg-wrap" id="stt-provider-seg">
+          <button data-stt-provider="auto">Auto</button>
+          <button data-stt-provider="local">Local</button>
+          <button data-stt-provider="deepgram">Deepgram</button>
+          <button data-stt-provider="openai">OpenAI</button>
+          <button data-stt-provider="gemini">Gemini</button>
+        </div>
+        <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider.</div>
+
+        <div class="whisper-card">
+          <div class="whisper-runtime-row">
+            <span class="s-label">whisper.cpp runtime</span>
+            <span id="whisper-runtime-status" class="whisper-badge">Checking…</span>
+          </div>
+
+          <label class="s-label" for="whisper-model">Local model</label>
+          <select id="whisper-model" class="s-select"></select>
+          <div id="whisper-model-detail" class="s-note"></div>
+
+          <div id="whisper-progress-wrap" class="whisper-progress-wrap hidden">
+            <progress id="whisper-progress" max="100" value="0"></progress>
+            <span id="whisper-progress-label">0%</span>
+          </div>
+
+          <div class="whisper-actions">
+            <button id="whisper-download" class="s-action">Download</button>
+            <button id="whisper-cancel" class="s-action hidden">Cancel</button>
+            <button id="whisper-import" class="s-action">Import…</button>
+            <button id="whisper-delete" class="s-action danger" disabled>Delete</button>
+          </div>
+
+          <div class="s-field">
+            <span>Language</span>
+            <select id="whisper-language" class="s-select compact">
+              <option value="auto">Auto-detect</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <div class="s-field">
+            <span>CPU threads</span>
+            <input id="whisper-threads" type="number" min="0" max="64" step="1" value="0" />
+          </div>
+          <div class="s-note">Use 0 for whisper.cpp's default. English-only models always use English regardless of the language setting.</div>
+        </div>
+
+        <div class="s-status" id="whisper-status"></div>
+      </div>
+
       <!-- Tab: Profile -->
       <div class="s-body s-tab-pane hidden" data-pane="profile">
-        <label class="s-label">Your resume <span class="s-hint">paste full resume — cue parses it into sections</span></label>
+        <label class="s-label">Your resume <span class="s-hint">paste full resume, or import a PDF/DOCX</span></label>
+        <div class="s-field s-upload"><span class="s-filename" id="resume-filename"></span><button class="s-upload-btn" id="upload-resume-btn">Import PDF/DOCX</button></div>
         <textarea id="resume-text" rows="7" spellcheck="false" placeholder="Paste your full resume here. cue will extract Name, Summary, Experience, Skills, Projects, and Education automatically."></textarea>
 
         <label class="s-label">Target job description <span class="s-hint">optional — every answer gets tailored to this role</span></label>
+        <div class="s-field s-upload"><span class="s-filename" id="jd-filename"></span><button class="s-upload-btn" id="upload-jd-btn">Import PDF/DOCX</button></div>
         <textarea id="job-description" rows="5" spellcheck="false" placeholder="Paste the job description for the role you're interviewing for. cue will highlight your most relevant experience."></textarea>
       </div>
 

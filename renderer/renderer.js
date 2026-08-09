@@ -10,6 +10,7 @@
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
+  $('#quit-btn').innerHTML = icon('x', { size: 14 });
   document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
   document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
   document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
@@ -17,14 +18,13 @@
   $('#smart-toggle .ic').innerHTML = icon('zap', { size: 14 });
   $('#more-btn').innerHTML = icon('more-horizontal', { size: 18 });
   $('#send-btn').innerHTML = icon('play', { size: 15 });
-  const transcriptIC = document.querySelector('#transcript-toggle-btn .ic');
-  if (transcriptIC) transcriptIC.innerHTML = icon('file-text', { size: 15 });
   const clearIC = document.querySelector('#clear-transcript-btn .ic');
   if (clearIC) clearIC.innerHTML = icon('trash-2', { size: 15 });
 
   // ---- state -------------------------------------------------------------
   let settings = null;
   let appMode = 'interview';
+  let whisperOverview = null;
   let busy = false;
   let aiEl = null;       // current streaming <div class="ai-text">
   let caretEl = null;
@@ -84,7 +84,12 @@
     const span = document.createElement('span');
     span.className = 'w';
     span.textContent = t;
-    aiEl.insertBefore(span, caretEl);
+    // Guard: caretEl must be a child of aiEl
+    if (caretEl && caretEl.parentNode === aiEl) {
+      aiEl.insertBefore(span, caretEl);
+    } else {
+      aiEl.appendChild(span);
+    }
   }
 
   function finalizeAi() {
@@ -94,39 +99,23 @@
     aiEl = null; caretEl = null;
   }
 
-  function setBusy(v) { busy = v; $('#send-btn').classList.toggle('busy', v); }
+  let busyFailsafe = null;
+  function setBusy(v) {
+    busy = v;
+    $('#send-btn').classList.toggle('busy', v);
+    clearTimeout(busyFailsafe);
+    // Failsafe: main has a 25s stream watchdog that always sends llm:done/llm:error, but if a
+    // terminal event is ever lost the whole UI stays frozen — self-clear after a generous window.
+    if (v) busyFailsafe = setTimeout(() => { busy = false; $('#send-btn').classList.toggle('busy', false); }, 40000);
+  }
 
   // ---- transcript helpers ------------------------------------------------
-  let transcriptOpen = false;
+  // NOTE: The old transcript-list element was renamed to ts-list.
+  // These helpers are now deprecated but kept for compatibility.
+  // The main sidebar uses appendTranscriptHistoryTurn() instead.
   let transcriptInterimEl = null;
 
-  function appendTranscriptTurn(channel, text, isInterim) {
-    const list = document.getElementById('transcript-list');
-    if (!list) return;
-    const ph = list.querySelector('.transcript-placeholder');
-    if (ph) ph.remove();
-    if (isInterim) {
-      if (!transcriptInterimEl) {
-        transcriptInterimEl = document.createElement('div');
-        transcriptInterimEl.className = 'tc-turn tc-interim';
-        list.appendChild(transcriptInterimEl);
-      }
-      transcriptInterimEl.textContent = (channel === 'them' ? 'Them: ' : 'You: ') + text;
-    } else {
-      const div = document.createElement('div');
-      div.className = 'tc-turn tc-' + channel;
-      div.textContent = (channel === 'them' ? 'Them: ' : 'You: ') + text;
-      list.appendChild(div);
-    }
-    if (transcriptOpen) {
-      const wrap = document.getElementById('transcript-wrap');
-      if (wrap) wrap.scrollTop = wrap.scrollHeight;
-    }
-  }
-
-  function updateTranscriptInterim(channel, text) {
-    appendTranscriptTurn(channel, text, true);
-  }
+  // FIX #1: Updated to use ts-list instead of non-existent transcript-list
 
   function clearTranscriptInterim() {
     if (transcriptInterimEl) {
@@ -136,7 +125,9 @@
   }
 
   // ---- toast helper ------------------------------------------------------
+  // FIX #7: Toast queue system — ensures latest toast wins cleanly without stacking
   let toastTimer = null;
+  let toastFadeTimer = null;
   function showToast(message, ms) {
     let el = document.getElementById('toast');
     if (!el) {
@@ -144,10 +135,15 @@
       el.id = 'toast';
       document.getElementById('app').appendChild(el);
     }
+    // Clear any pending timers to prevent overlap
+    clearTimeout(toastTimer);
+    clearTimeout(toastFadeTimer);
+    // Immediately update content (no stacking)
     el.textContent = message;
     el.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+    toastTimer = setTimeout(() => {
+      el.classList.remove('show');
+    }, ms);
   }
 
   // ---- mode selection ----------------------------------------------------
@@ -179,11 +175,7 @@
         `<span class="sep">•</span>`,
         `<button class="act" data-mode="followup"><span class="ic" id="ic-followup"></span><span>Draft Follow-up</span></button>`,
         `<span class="sep">•</span>`,
-        `<button class="act" data-mode="recap"><span class="ic" id="ic-recap"></span><span>Recap &amp; Tasks</span></button>`,
-        `<span class="sep">•</span>`,
-        `<button class="act" id="transcript-toggle-btn" title="Show/hide what was heard"><span class="ic" id="ic-transcript"></span><span>Transcript</span></button>`,
-        `<span class="sep">•</span>`,
-        `<button class="act act-clear" id="clear-transcript-btn" title="Clear transcript and start fresh"><span class="ic" id="ic-clear"></span><span>Clear</span></button>`
+        `<button class="act" data-mode="recap"><span class="ic" id="ic-recap"></span><span>Recap &amp; Tasks</span></button>`
       ].join('');
     } else {
       actionRow.innerHTML = [
@@ -193,11 +185,7 @@
         `<span class="sep">•</span>`,
         `<button class="act" data-mode="followup"><span class="ic" id="ic-followup"></span><span>Follow-up</span></button>`,
         `<span class="sep">•</span>`,
-        `<button class="act" data-mode="recap"><span class="ic" id="ic-recap"></span><span>Recap</span></button>`,
-        `<span class="sep">•</span>`,
-        `<button class="act" id="transcript-toggle-btn" title="Show/hide what was heard"><span class="ic" id="ic-transcript"></span><span>Transcript</span></button>`,
-        `<span class="sep">•</span>`,
-        `<button class="act act-clear" id="clear-transcript-btn" title="Clear transcript and start fresh"><span class="ic" id="ic-clear"></span><span>Clear</span></button>`
+        `<button class="act" data-mode="recap"><span class="ic" id="ic-recap"></span><span>Recap</span></button>`
       ].join('');
     }
 
@@ -206,9 +194,7 @@
       'ic-say':        () => document.getElementById('ic-say')        && (document.getElementById('ic-say').innerHTML        = icon('wand-sparkles',  { size: 16 })),
       'ic-assist':     () => document.getElementById('ic-assist')     && (document.getElementById('ic-assist').innerHTML     = icon('sparkles',       { size: 16 })),
       'ic-followup':   () => document.getElementById('ic-followup')   && (document.getElementById('ic-followup').innerHTML   = icon('message-circle', { size: 16 })),
-      'ic-recap':      () => document.getElementById('ic-recap')      && (document.getElementById('ic-recap').innerHTML      = icon('refresh-cw',     { size: 16 })),
-      'ic-transcript': () => document.getElementById('ic-transcript') && (document.getElementById('ic-transcript').innerHTML = icon('file-text',      { size: 15 })),
-      'ic-clear':      () => document.getElementById('ic-clear')      && (document.getElementById('ic-clear').innerHTML      = icon('trash-2',        { size: 15 }))
+      'ic-recap':      () => document.getElementById('ic-recap')      && (document.getElementById('ic-recap').innerHTML      = icon('refresh-cw',     { size: 16 }))
     };
     Object.values(icMap).forEach((fn) => fn());
 
@@ -216,7 +202,6 @@
     actionRow.querySelectorAll('.act').forEach((btn) => {
       if (btn.dataset.mode) btn.addEventListener('click', () => runMode(btn.dataset.mode, ''));
     });
-    rebindTranscriptBtns();
 
     // Prep status bar
     const prepStatus = $('#prep-status');
@@ -281,12 +266,320 @@
   const placeholder = $('#placeholder');
   const composer = $('#composer');
 
+  // ========== SMART AUTO-FILL SYSTEM ==========
+  // Track whether the current input text came from STT auto-fill (Them channel)
+  let inputFromSTT = false;
+  let sttFillTimer = null;
+  let questionFinalizeTimer = null;
+  let softClearTimer = null;
+  let userSpeechStart = null;
+
+  // Question history for undo (Ctrl+Z)
+  const questionHistory = [];
+  const MAX_QUESTION_HISTORY = 10;
+
+  // ---- Question completeness detection ----
+  function isLikelyCompleteQuestion(text) {
+    const trimmed = (text || '').trim();
+    
+    // Must be substantial (not just filler words)
+    if (trimmed.length < 12) return false;
+    
+    // High confidence: ends with question mark
+    if (/\?$/.test(trimmed)) return true;
+    
+    // High confidence: behavioral interview patterns (these are complete even without ?)
+    const behavioralPatterns = [
+      /tell me about a time/i,
+      /give me an example/i,
+      /describe a (situation|time|project|challenge)/i,
+      /walk me through/i,
+      /can you (tell|describe|explain|share)/i,
+      /what (was|were|is|are) your/i,
+      /how (did|do|would) you/i,
+      /why (did|do|are|should)/i,
+      /what (did|do|would) you/i,
+      /tell me about yourself/i,
+      /tell me about your/i,
+      /what.{1,30}(biggest|greatest|most|hardest|proudest)/i,
+      /have you ever/i
+    ];
+    if (behavioralPatterns.some(p => p.test(trimmed))) return true;
+    
+    // Medium confidence: question starters with substantial content
+    const questionStarters = /^(what|how|why|when|where|who|which|tell|describe|explain|can|could|would|should|have|did|do|is|are|was|were)/i;
+    if (questionStarters.test(trimmed) && trimmed.length > 25) return true;
+    
+    // Medium confidence: ends with common question endings
+    if (/(about that|for us|to us|with you|for you|about it|to share|you handle|you approach|your experience|your background)\s*$/i.test(trimmed)) return true;
+    
+    return false;
+  }
+
+  // ---- Get question confidence level ----
+  function getQuestionConfidence(text) {
+    const trimmed = (text || '').trim();
+    if (trimmed.length < 8) return 'low';
+    if (/\?$/.test(trimmed)) return 'high';
+    if (isLikelyCompleteQuestion(trimmed)) return 'medium';
+    if (trimmed.length > 20) return 'accumulating';
+    return 'low';
+  }
+
+  // ---- Update visual state based on question readiness ----
+  // FIX #8: Batch class updates to avoid flicker
+  function updateQuestionReadyState() {
+    const text = input.value;
+    const confidence = getQuestionConfidence(text);
+    
+    // Batch the class changes to minimize repaints
+    const shouldBeReady = confidence === 'high' || confidence === 'medium';
+    const shouldBeAccumulating = confidence === 'accumulating';
+    
+    // Only update if state actually changed
+    const isReady = composer.classList.contains('stt-ready');
+    const isAccumulating = composer.classList.contains('stt-accumulating');
+    
+    if (shouldBeReady !== isReady || shouldBeAccumulating !== isAccumulating) {
+      composer.classList.remove('stt-ready', 'stt-accumulating');
+      if (shouldBeReady) {
+        composer.classList.add('stt-ready');
+      } else if (shouldBeAccumulating) {
+        composer.classList.add('stt-accumulating');
+      }
+    }
+    
+    updateSendButtonState(); // FIX #9: Keep send button in sync
+  }
+  
+  // FIX #9: Send button visual "ready" state
+  function updateSendButtonState() {
+    const sendBtn = document.getElementById('send-btn');
+    if (!sendBtn) return;
+    
+    const hasText = input.value.trim().length > 0;
+    const isReady = composer.classList.contains('stt-ready');
+    
+    sendBtn.classList.toggle('ready', hasText && isReady);
+    sendBtn.classList.toggle('has-text', hasText);
+  }
+
+  // ---- Save question to history for undo ----
+  function saveToQuestionHistory(text) {
+    if (!text || text.trim().length < 5) return;
+    
+    // Don't save duplicates
+    const last = questionHistory[questionHistory.length - 1];
+    if (last && last.text === text.trim()) return;
+    
+    questionHistory.push({
+      text: text.trim(),
+      timestamp: Date.now()
+    });
+    
+    // Keep only recent history
+    while (questionHistory.length > MAX_QUESTION_HISTORY) {
+      questionHistory.shift();
+    }
+    
+    updateHistoryBadge(); // FIX #14: Update badge when history changes
+  }
+  
+  // FIX #14: History button badge showing count
+  function updateHistoryBadge() {
+    const historyBtn = document.getElementById('history-btn');
+    if (!historyBtn) return;
+    
+    // Remove existing badge if any
+    let badge = historyBtn.querySelector('.history-badge');
+    
+    const count = questionHistory.length;
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'history-badge';
+        historyBtn.appendChild(badge);
+      }
+      badge.textContent = count > 9 ? '9+' : count;
+      badge.style.display = '';
+    } else if (badge) {
+      badge.style.display = 'none';
+    }
+  }
+
+  // ---- Restore last question from history (Ctrl+Z) ----
+  function restoreLastQuestion() {
+    const last = questionHistory.pop();
+    if (last) {
+      input.value = last.text;
+      inputFromSTT = true;
+      lastSTTValue = last.text; // FIX #8: Track restored value for edit detection
+      composer.classList.add('stt-filling');
+      updateQuestionReadyState();
+      syncPlaceholder();
+      updateHistoryBadge(); // Update badge after removing from history
+      showToast('Question restored', 1500);
+      return true;
+    }
+    showToast('No question to restore', 1500);
+    return false;
+  }
+
+  // ---- Auto-fill the input box with transcribed speech from interviewer ----
+  function autoFillInputFromSTT(text) {
+    // If user has manually typed something different, don't overwrite
+    if (!inputFromSTT && input.value.trim().length > 0) return;
+
+    // Cancel any pending soft-clear (interviewer is still talking)
+    clearTimeout(softClearTimer);
+    composer.classList.remove('stt-dimmed');
+
+    const current = input.value.trim();
+    const newText = current ? current + ' ' + text : text;
+    input.value = newText;
+    inputFromSTT = true;
+    lastSTTValue = newText; // FIX #6: Track the STT value for edit detection
+    syncPlaceholder();
+
+    // Show filling state
+    composer.classList.add('stt-filling');
+    updateQuestionReadyState();
+    updateSendButtonState(); // FIX #9: Update send button state
+
+    // Reset the idle timer — after 2s of silence, check if question is complete
+    clearTimeout(questionFinalizeTimer);
+    questionFinalizeTimer = setTimeout(() => {
+      if (isLikelyCompleteQuestion(input.value)) {
+        composer.classList.add('stt-ready');
+        updateSendButtonState(); // FIX #9: Update send button when ready
+        // Subtle notification that question is ready
+        showToast('Press Enter to answer', 2500);
+      }
+    }, 1800);
+
+    // After 8s of no new words, save to history and keep stable
+    clearTimeout(sttFillTimer);
+    sttFillTimer = setTimeout(() => {
+      saveToQuestionHistory(input.value);
+      composer.classList.remove('stt-filling');
+      // Keep stt-ready if applicable
+      updateQuestionReadyState();
+      updateSendButtonState(); // FIX #9
+    }, 8000);
+  }
+
+  // ---- Soft clear: don't immediately wipe question when user speaks ----
+  function softClearSTTFill() {
+    // When the user speaks (You channel), don't immediately clear
+    // Instead, dim the input and wait — they might just be acknowledging
+    if (!inputFromSTT) return;
+    
+    // FIX #3: Reset userSpeechStart at the beginning before setting new timestamp
+    // This ensures we always track from fresh when a new soft-clear cycle begins
+    const now = Date.now();
+    if (!userSpeechStart) {
+      userSpeechStart = now;
+    }
+
+    // Dim the input to show it's in "pending clear" state
+    composer.classList.add('stt-dimmed');
+    
+    // Clear the finalization timer (user is responding)
+    clearTimeout(questionFinalizeTimer);
+
+    // Re-armed on every 'you' final, so this fires ~800ms after the user stops.
+    // The 2s test below is measured from the FIRST final of this cycle, so a brief
+    // acknowledgement ("mm-hm") leaves the question on screen while a sustained
+    // answer clears it. Firing at 2.5s instead would make that test always true.
+    clearTimeout(softClearTimer);
+    softClearTimer = setTimeout(() => {
+      const speechDuration = userSpeechStart ? Date.now() - userSpeechStart : 0;
+      if (speechDuration > 2000) {
+        // User has been speaking for a while — they're answering, clear the box
+        saveToQuestionHistory(input.value);
+        input.value = '';
+        inputFromSTT = false;
+        composer.classList.remove('stt-filling', 'stt-dimmed', 'stt-ready', 'stt-accumulating');
+        syncPlaceholder();
+        updateSendButtonState(); // FIX #9: Update send button state
+        userSpeechStart = null;
+      }
+    }, 800);
+  }
+
+  // ---- Hard clear (called when user explicitly clears or types) ----
+  // FIX #10: Add option to show toast when clearing
+  function hardClearSTTFill(showUndoHint = false) {
+    const hadContent = input.value.trim().length > 0;
+    saveToQuestionHistory(input.value);
+    input.value = '';
+    inputFromSTT = false;
+    lastSTTValue = ''; // FIX #6: Clear the tracked STT value
+    userSpeechStart = null;
+    composer.classList.remove('stt-filling', 'stt-dimmed', 'stt-ready', 'stt-accumulating');
+    clearTimeout(softClearTimer);
+    clearTimeout(questionFinalizeTimer);
+    clearTimeout(sttFillTimer);
+    clearInputInterim(); // FIX #5: Clear interim when clearing input
+    syncPlaceholder();
+    updateSendButtonState(); // FIX #9
+    updateHistoryBadge(); // FIX #14
+    
+    // FIX #10: Show undo hint when explicitly cleared
+    if (showUndoHint && hadContent) {
+      const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
+      showToast(`Cleared · ${undoHint}`, 2000);
+    }
+  }
+
+  // ---- Reset soft-clear state (interviewer spoke again) ----
+  // FIX #16: Reset userSpeechStart properly when cancelSoftClear is called
+  function cancelSoftClear() {
+    userSpeechStart = null; // Reset timestamp so next soft-clear starts fresh
+    clearTimeout(softClearTimer);
+    composer.classList.remove('stt-dimmed');
+  }
+
   function syncPlaceholder() {
     placeholder.classList.toggle('hidden', input.value.length > 0 || document.activeElement === input);
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 140) + 'px';
   }
-  input.addEventListener('input', syncPlaceholder);
+  
+  // FIX #6: Track last STT value to detect substantial edits vs minor corrections
+  let lastSTTValue = '';
+  
+  input.addEventListener('input', () => {
+    const currentValue = input.value;
+    
+    // FIX #5: Clear interim text when user starts typing
+    clearInputInterim();
+    
+    // FIX #6: Only detach from STT mode if edit is substantial
+    // Minor corrections (typo fixes, small additions) should keep STT mode
+    if (inputFromSTT && lastSTTValue) {
+      const lengthDiff = Math.abs(currentValue.length - lastSTTValue.length);
+      const isCleared = currentValue.trim().length === 0;
+      const isSubstantialChange = lengthDiff > lastSTTValue.length * 0.3 || isCleared;
+      
+      if (isSubstantialChange) {
+        // User made a major change — detach from STT mode
+        saveToQuestionHistory(lastSTTValue);
+        inputFromSTT = false;
+        lastSTTValue = '';
+        composer.classList.remove('stt-filling', 'stt-dimmed', 'stt-ready', 'stt-accumulating');
+        clearTimeout(softClearTimer);
+        clearTimeout(questionFinalizeTimer);
+      }
+      // Minor edits: keep inputFromSTT = true, just update visual state
+    } else if (!inputFromSTT) {
+      // User typing from scratch — standard behavior
+      composer.classList.remove('stt-filling', 'stt-dimmed', 'stt-ready', 'stt-accumulating');
+    }
+    
+    syncPlaceholder();
+    updateSendButtonState(); // FIX #9: Update send button on input change
+  });
   input.addEventListener('focus', () => { composer.classList.add('focused'); placeholder.classList.add('hidden'); });
   input.addEventListener('blur', () => { composer.classList.remove('focused'); syncPlaceholder(); });
   $('#input-area').addEventListener('click', () => input.focus());
@@ -294,14 +587,66 @@
   function send() {
     const text = input.value.trim();
     if (!text) { runMode('assist', ''); return; }
-    input.value = ''; syncPlaceholder();
-    runMode('ask', text);
+    const wasFromSTT = inputFromSTT;
+    
+    // Save to history before clearing (in case user wants to redo)
+    saveToQuestionHistory(text);
+    
+    input.value = '';
+    inputFromSTT = false;
+    lastSTTValue = ''; // FIX #6: Clear tracked STT value
+    userSpeechStart = null;
+    composer.classList.remove('stt-filling', 'stt-dimmed', 'stt-ready', 'stt-accumulating');
+    clearTimeout(softClearTimer);
+    clearTimeout(questionFinalizeTimer);
+    clearTimeout(sttFillTimer);
+    syncPlaceholder();
+    updateSendButtonState(); // FIX #9
+    
+    // If text came from STT (interviewer question), use answerThis mode
+    // Otherwise use ask mode (user typed their own question)
+    runMode(wasFromSTT ? 'answerThis' : 'ask', text);
   }
   $('#send-btn').addEventListener('click', send);
   input.addEventListener('keydown', (e) => {
+    // Ctrl+Z / Cmd+Z: restore last question if input is empty
+    if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !input.value.trim()) {
+      e.preventDefault();
+      restoreLastQuestion();
+      return;
+    }
+    // Escape: clear the input (with undo hint)
+    if (e.key === 'Escape' && input.value.trim()) {
+      e.preventDefault();
+      hardClearSTTFill(true); // FIX #10: Show undo hint
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) { e.preventDefault(); send(); }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runMode('assist', ''); }
   });
+  
+  // FIX #13: Global keyboard shortcut for force-answer (Ctrl+Shift+A / Cmd+Shift+A)
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+Shift+A / Cmd+Shift+A: Force answer current question immediately
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      if (input.value.trim()) {
+        send();
+      } else if (inputFromSTT || composer.classList.contains('stt-filling')) {
+        // Even if question seems incomplete, force send
+        send();
+      } else {
+        showToast('No question to answer', 1500);
+      }
+    }
+  });
+  
+  // FIX #4: Add tooltip with keyboard shortcuts to send button
+  const sendBtn = document.getElementById('send-btn');
+  if (sendBtn) {
+    const forceKey = isWindows ? 'Ctrl+Shift+A' : '⌘⇧A';
+    sendBtn.title = `Send · ${forceKey} to force answer`;
+  }
 
   // Smart toggle
   const smartBtn = $('#smart-toggle');
@@ -312,58 +657,51 @@
   });
 
   // Hide / collapse
-  $('#hide-btn').addEventListener('click', () => {
+  function toggleHide() {
     const collapsed = $('#panel').classList.toggle('collapsed');
     $('#hide-btn').classList.toggle('collapsed', collapsed);
     $('#live-dot').style.display = collapsed ? 'none' : '';
-  });
+  }
+  $('#hide-btn').addEventListener('click', toggleHide);
+  cue.on('hide:toggle', toggleHide);
 
   // Stop = start/stop listening. Kick off system-audio capture straight from the click so
   // the user-gesture is fresh for getDisplayMedia (loopback capture needs it).
   $('#stop-btn').addEventListener('click', async () => {
     const turningOn = !$('#stop-btn').classList.contains('active');
     if (turningOn) {
-      await startSystemAudio();
+      // startSystemAudio may fail (user cancels, no permission) — that's OK,
+      // mic will still work and capture will toggle regardless
+      try { await startSystemAudio(); } catch (_) { /* handled inside startSystemAudio */ }
     }
-    await cue.captureToggle();
+    const active = await cue.captureToggle();
+    if (turningOn && !active) stopSystemAudio();
   });
 
-  // Transcript + Clear transcript buttons — rebindable after action-row rebuild
-  function rebindTranscriptBtns() {
-    const toggleBtn = document.getElementById('transcript-toggle-btn');
-    if (toggleBtn) {
-      toggleBtn.addEventListener('click', () => {
-        transcriptOpen = !transcriptOpen;
-        const wrap = document.getElementById('transcript-wrap');
-        if (wrap) {
-          wrap.classList.toggle('hidden', !transcriptOpen);
-          if (transcriptOpen) {
-            const list = document.getElementById('transcript-list');
-            if (list && !list.children.length) {
-              const ph = document.createElement('div');
-              ph.className = 'transcript-placeholder';
-              ph.textContent = 'Nothing heard yet — start listening to begin.';
-              list.appendChild(ph);
-            }
-            if (wrap) wrap.scrollTop = wrap.scrollHeight;
-          }
-        }
-      });
-    }
-    const clearBtn = document.getElementById('clear-transcript-btn');
-    if (clearBtn) {
-      clearBtn.addEventListener('click', async () => {
-        await cue.clearTranscript();
-        clearMessages();
-        if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
-        const list = document.getElementById('transcript-list');
-        if (list) list.innerHTML = '';
-        transcriptInterimEl = null;
-        showToast('Transcript cleared', 3000);
-      });
-    }
+  // Transcript toggle removed — sidebar now auto-opens with listening
+
+  // Clear transcript
+  const clearTranscriptBtn = document.getElementById('clear-transcript-btn');
+  if (clearTranscriptBtn) {
+    clearTranscriptBtn.addEventListener('click', async () => {
+      // Save current input to history before clearing (for undo)
+      saveToQuestionHistory(input.value);
+      
+      await cue.clearTranscript();
+      clearMessages();
+      // Also clear the floating interim bar
+      if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
+      // FIX #1: Use ts-list instead of non-existent transcript-list
+      const list = document.getElementById('ts-list');
+      if (list) list.innerHTML = '<div class="ts-placeholder">Conversation history will appear here when listening.</div>';
+      transcriptInterimEl = null;
+      clearTranscriptSidebar(); // clear the history sidebar too
+      hardClearSTTFill(); // clear the input box too
+      
+      const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
+      showToast(`Transcript cleared · ${undoHint}`, 3500);
+    });
   }
-  rebindTranscriptBtns();
 
   // ---- capture: mic (renderer side) — uses AudioWorklet (modern, off-main-thread) ----
   let audioCtx = null, micStream = null, micWorklet = null;
@@ -429,9 +767,13 @@
   }
 
   // ---- capture: system/meeting audio (getDisplayMedia loopback, in cue's process) ----
-  let sysStream = null, sysCtx = null, sysWorklet = null;
+  let sysStream = null, sysCtx = null, sysWorklet = null, sysStarting = false;
   async function startSystemAudio() {
-    if (sysStream) return;
+    // Called both from the stop-btn click (fresh user gesture for getDisplayMedia) and from the
+    // capture:state handler. getDisplayMedia is async, so `if (sysStream) return` alone loses the
+    // race and can open a second loopback stream that is then orphaned.
+    if (sysStream || sysStarting) return;
+    sysStarting = true;
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
       cue.log('system audio unavailable: getDisplayMedia not supported');
       showStatus('Meeting audio capture is not available on this device build.');
@@ -439,15 +781,15 @@
     }
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+
       stream.getVideoTracks().forEach((t) => t.stop()); // we only want the audio
       const tracks = stream.getAudioTracks();
       if (!tracks.length) {
         cue.log('system audio: no loopback track on this platform');
         stream.getTracks().forEach((t) => t.stop());
-        const msg = isWindows
-          ? 'No system-audio loopback track detected. On Windows, make sure your default audio device is not set to exclusive mode. Go to Sound Settings → your playback device → Properties → Advanced → uncheck "Allow applications to take exclusive control".'
-          : 'No system-audio loopback track was detected.';
-        showStatus(msg);
+        showStatus(cue.platform === 'win32'
+          ? 'No system-audio loopback track detected. Make sure "Share audio" is checked in the screen share dialog, and that your audio device is not in exclusive mode.'
+          : 'No system-audio loopback track detected. Meeting audio needs macOS 14.4+ — your screen and microphone still work.');
         return;
       }
       sysStream = stream;
@@ -482,6 +824,8 @@
       const message = err && err.message ? err.message : String(err);
       cue.log('system audio error: ' + message);
       showStatus('Meeting audio could not be started. Grant screen/audio access to cue and try again.');
+    } finally {
+      sysStarting = false;
     }
   }
   function stopSystemAudio() {
@@ -529,18 +873,178 @@
     label.className = 'stt-status stt-' + sttState;
   }
 
+  // ---- transcript history sidebar (hidden by default, manual toggle) ----
+  let tsSidebarInterimEl = null;
+  let sidebarOpen = false;
+  // Track last committed row per channel — all chunks from same speaker go in one row
+  const tsLastRow = { you: null, them: null };
+  const tsRowTimer = { you: null, them: null };
+  const TS_SENTENCE_GAP_MS = 10000; // 10s silence = new row
+
+  function showSidebar() {
+    const sidebar = document.getElementById('transcript-sidebar');
+    const historyBtn = document.getElementById('history-btn');
+    if (sidebar) sidebar.classList.remove('hidden');
+    if (historyBtn) historyBtn.classList.add('active');
+    const panelWrap = document.getElementById('panel-wrap');
+    if (panelWrap) panelWrap.classList.add('sidebar-open');
+    sidebarOpen = true;
+  }
+
+  function hideSidebar() {
+    const sidebar = document.getElementById('transcript-sidebar');
+    const historyBtn = document.getElementById('history-btn');
+    if (sidebar) sidebar.classList.add('hidden');
+    if (historyBtn) historyBtn.classList.remove('active');
+    const panelWrap = document.getElementById('panel-wrap');
+    if (panelWrap) panelWrap.classList.remove('sidebar-open');
+    sidebarOpen = false;
+  }
+
+  function toggleSidebar() {
+    if (sidebarOpen) {
+      hideSidebar();
+    } else {
+      showSidebar();
+      // FIX #7: Scroll to bottom when opening sidebar
+      const list = document.getElementById('ts-list');
+      if (list) {
+        requestAnimationFrame(() => {
+          list.scrollTop = list.scrollHeight;
+        });
+      }
+    }
+  }
+
+  // History button toggle
+  const historyBtn = document.getElementById('history-btn');
+  if (historyBtn) {
+    historyBtn.innerHTML = icon('message-square-text', { size: 15 });
+    historyBtn.addEventListener('click', toggleSidebar);
+  }
+
+  // Close sidebar button
+  const closeSidebarBtn = document.getElementById('close-sidebar-btn');
+  if (closeSidebarBtn) {
+    closeSidebarBtn.addEventListener('click', hideSidebar);
+  }
+
+  function appendTranscriptHistoryTurn(channel, text, isInterim) {
+    const list = document.getElementById('ts-list');
+    if (!list) return;
+
+    // Remove placeholder on first real turn
+    const ph = list.querySelector('.ts-placeholder');
+    if (ph) ph.remove();
+
+    if (isInterim) {
+      // Update the single floating interim row
+      if (!tsSidebarInterimEl) {
+        tsSidebarInterimEl = document.createElement('div');
+        tsSidebarInterimEl.className = 'ts-turn ts-' + channel + ' ts-interim-row';
+        const chLabel = document.createElement('span');
+        chLabel.className = 'ts-channel';
+        chLabel.textContent = channel === 'them' ? 'Them' : 'You';
+        const txt = document.createElement('span');
+        txt.className = 'ts-text ts-interim';
+        tsSidebarInterimEl.appendChild(chLabel);
+        tsSidebarInterimEl.appendChild(txt);
+        list.appendChild(tsSidebarInterimEl);
+      }
+      tsSidebarInterimEl.querySelector('.ts-text').textContent = text;
+    } else {
+      // Remove interim row
+      if (tsSidebarInterimEl) { tsSidebarInterimEl.remove(); tsSidebarInterimEl = null; }
+
+      const existingRow = tsLastRow[channel];
+      const useExisting = existingRow && existingRow.isConnected;
+
+      if (useExisting) {
+        // Append to existing row — accumulates sentence fragments
+        const txt = existingRow.querySelector('.ts-text');
+        if (txt) {
+          txt.textContent = txt.textContent ? txt.textContent + ' ' + text : text;
+        }
+      } else {
+        // Start a new row (no buttons — just clean history view)
+        const row = document.createElement('div');
+        row.className = 'ts-turn ts-' + channel;
+
+        const chLabel = document.createElement('span');
+        chLabel.className = 'ts-channel';
+        chLabel.textContent = channel === 'them' ? 'Them' : 'You';
+
+        const txt = document.createElement('span');
+        txt.className = 'ts-text';
+        txt.textContent = text;
+
+        row.appendChild(chLabel);
+        row.appendChild(txt);
+        list.appendChild(row);
+        tsLastRow[channel] = row;
+      }
+
+      // Reset silence timer
+      clearTimeout(tsRowTimer[channel]);
+      tsRowTimer[channel] = setTimeout(() => { tsLastRow[channel] = null; }, TS_SENTENCE_GAP_MS);
+
+      // When THIS channel speaks, reset the OTHER channel's row
+      const other = channel === 'you' ? 'them' : 'you';
+      clearTimeout(tsRowTimer[other]);
+      tsLastRow[other] = null;
+
+      list.scrollTop = list.scrollHeight;
+    }
+  }
+
+  function clearTranscriptSidebar() {
+    const list = document.getElementById('ts-list');
+    if (list) list.innerHTML = '<div class="ts-placeholder">Conversation history will appear here when listening.</div>';
+    tsSidebarInterimEl = null;
+    tsLastRow.you = null; tsLastRow.them = null;
+    clearTimeout(tsRowTimer.you); clearTimeout(tsRowTimer.them);
+  }
+
   // ---- events from main --------------------------------------------------
-  cue.on('capture:state', ({ active, streaming }) => {
+  cue.on('capture:state', ({ active, streaming, mode }) => {
     setLiveDotState(active ? 'idle' : 'off');
     $('#stop-btn').classList.toggle('active', active);
+    // FIX #4: Add .listening class to composer when capture is active
+    composer.classList.toggle('listening', active);
+    // Update history button to show active state when listening
+    const historyBtn = document.getElementById('history-btn');
+    if (historyBtn) {
+      historyBtn.classList.toggle('listening', active);
+    }
     // startSystemAudio() is called directly from the stop-button click handler
     // so that the getDisplayMedia request has a fresh user gesture.
     // Here we only start the mic (no gesture required) and stop everything on deactivate.
-    if (active) { startMic(); } else { stopMic(); stopSystemAudio(); }
+    if (active) {
+      startMic();
+      // Don't auto-open sidebar — user can toggle it manually
+    } else {
+      stopMic();
+      stopSystemAudio();
+      // FIX #2: Clear interim element when capture stops
+      if (interimEl) {
+        interimEl.textContent = '';
+        interimEl.classList.remove('show');
+      }
+      // Don't auto-close sidebar — let user keep it open if they want
+    }
     updateSttStatus({ active, streaming });
     // Work Mode recording indicator
     const recIndicator = document.getElementById('work-recording-indicator');
     if (recIndicator) recIndicator.classList.toggle('hidden', !(appMode === 'work' && active && settings && settings.persistTranscripts));
+
+    if (active) { startMic(); } else { stopMic(); stopSystemAudio(); }
+    if (active && mode === 'local') {
+      sttState = 'local';
+      const label = document.getElementById('stt-status');
+      if (label) { label.textContent = 'local'; label.className = 'stt-status stt-local'; }
+    } else {
+      updateSttStatus({ active, streaming });
+    }
   });
 
   // ---- real-time transcript display (interim + final) ----
@@ -549,28 +1053,83 @@
     if (!interimEl) {
       interimEl = document.createElement('div');
       interimEl.className = 'interim-transcript';
-      const panel = document.getElementById('panel');
+      // Insert into panel-main (the left column), before the action row
+      const panelMain = document.getElementById('panel-main');
       const actionRow = document.getElementById('action-row');
-      panel.insertBefore(interimEl, actionRow);
+      if (panelMain && actionRow && actionRow.parentNode === panelMain) {
+        panelMain.insertBefore(interimEl, actionRow);
+      } else if (panelMain) {
+        panelMain.appendChild(interimEl);
+      } else {
+        document.getElementById('panel').appendChild(interimEl);
+      }
     }
     return interimEl;
   }
+  // FIX #12: Show interim text in input box (grayed/italic) before final arrives
+  let inputInterimEl = null;
+  function showInterimInInput(text) {
+    if (!inputInterimEl) {
+      inputInterimEl = document.createElement('span');
+      inputInterimEl.className = 'input-interim';
+      // FIX #2: Insert into composer (not input-area) for correct positioning
+      composer.appendChild(inputInterimEl);
+    }
+    inputInterimEl.textContent = text;
+    inputInterimEl.style.display = text ? 'block' : 'none';
+  }
+  function clearInputInterim() {
+    if (inputInterimEl) {
+      inputInterimEl.textContent = '';
+      inputInterimEl.style.display = 'none';
+    }
+  }
+  
   cue.on('stt:interim', ({ channel, text }) => {
     setLiveDotState('transcribing');
     const el = getOrCreateInterimEl();
     const label = channel === 'them' ? 'Them' : 'You';
     el.textContent = `${label}: ${text}`;
     el.classList.add('show');
-    updateTranscriptInterim(channel, text);
+    appendTranscriptHistoryTurn(channel, text, true); // update sidebar interim
+    
+    // FIX #12: Show interviewer's interim speech in input area
+    if (channel === 'them' && !input.value.trim()) {
+      showInterimInInput(text);
+    }
   });
   cue.on('stt:final', ({ channel, text }) => {
     setLiveDotState('idle');
     // Clear interim when we get a final
     if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
     clearTranscriptInterim();
+    clearInputInterim(); // FIX #12: Clear interim text from input area
+    // sidebar: the final turn is added via the 'transcript' event below
   });
-  cue.on('stt:status', ({ channel, status }) => {
-    cue.log(`[stt] ${channel} ${status}`);
+  cue.on('stt:status', ({ channel, status, provider }) => {
+    cue.log(`[stt] ${provider || channel || 'unknown'} ${status}`);
+    if (provider === 'local') {
+      const label = document.getElementById('stt-status');
+      const localLabels = {
+        loading: 'loading local',
+        ready: 'local',
+        transcribing: 'local',
+        stopping: 'stopping',
+        off: 'off',
+        error: 'error'
+      };
+      sttState = status === 'ready' || status === 'transcribing' ? 'local' : status;
+      if (label) {
+        label.textContent = localLabels[status] || status;
+        label.className = 'stt-status stt-' + sttState;
+      }
+      if (status === 'loading') $('#stop-btn').classList.add('active');
+      if (status === 'off' || status === 'error') $('#stop-btn').classList.remove('active');
+      if (status === 'loading' || status === 'transcribing' || status === 'stopping') setLiveDotState('transcribing');
+      if (status === 'ready') setLiveDotState('idle');
+      if (status === 'off') setLiveDotState('off');
+      return;
+    }
     if (status === 'connected') {
       sttState = 'streaming';
       const label = document.getElementById('stt-status');
@@ -613,7 +1172,10 @@
     aiEl.appendChild(caretEl);
     group.appendChild(aiEl);
     messages.appendChild(group);
-    sep.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Use requestAnimationFrame so the DOM is fully updated before scrolling
+    requestAnimationFrame(() => {
+      if (sep && sep.isConnected) sep.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
     setBusy(true);
   });
   cue.on('llm:token', ({ text }) => appendToken(text));
@@ -623,7 +1185,16 @@
     aiEl.dataset.raw = message; finalizeAi(); setBusy(false);
   });
   cue.on('transcript', ({ channel, text }) => {
-    appendTranscriptTurn(channel, text, false);
+    if (!text || text.trim().length < 2 || /^[?!.,;:\-…]+$/.test(text.trim())) return;
+    appendTranscriptHistoryTurn(channel, text, false);
+    // Auto-fill the input box with Them (interviewer) speech
+    if (channel === 'them') {
+      cancelSoftClear(); // Interviewer is speaking, cancel any pending clear
+      autoFillInputFromSTT(text);
+    } else {
+      // User spoke — soft clear (don't immediately wipe, wait to see if they're really answering)
+      softClearSTTFill();
+    }
   });
   let statusTimer = null;
   function showStatus(message) {
@@ -631,8 +1202,16 @@
     if (!el) {
       el = document.createElement('div');
       el.id = 'cue-status';
-      const panel = document.getElementById('panel');
-      panel.insertBefore(el, document.getElementById('action-row'));
+      // Insert into panel-main before the action row
+      const panelMain = document.getElementById('panel-main');
+      const actionRow = document.getElementById('action-row');
+      if (panelMain && actionRow && actionRow.parentNode === panelMain) {
+        panelMain.insertBefore(el, actionRow);
+      } else if (panelMain) {
+        panelMain.appendChild(el);
+      } else {
+        document.getElementById('panel').appendChild(el);
+      }
     }
     el.textContent = message;
     el.classList.add('show');
@@ -700,23 +1279,59 @@
     if (btn) btn.title = 'Fast: ' + fast + ' · Smart: ' + smart + ' (higher quality, ~2× slower)';
   }
 
+  // ---- microphone permission banner --------------------------------------
+  function showMicPermissionBanner() {
+    let banner = document.getElementById('mic-perm-banner');
+    if (banner) { banner.classList.add('show'); return; }
+    banner = document.createElement('div');
+    banner.id = 'mic-perm-banner';
+    banner.className = 'show';
+    banner.innerHTML =
+      '<div class="mic-perm-text">' +
+        '<strong>🎙️ Microphone access required</strong><br>' +
+        'cue needs microphone permission to hear you during calls. Grant access in System Settings, then restart cue.' +
+      '</div>' +
+      '<div class="mic-perm-actions"></div>';
+    const actions = banner.querySelector('.mic-perm-actions');
+    if (cue.platform === 'darwin') {
+      const openBtn = document.createElement('button');
+      openBtn.textContent = 'Open Microphone Settings';
+      openBtn.addEventListener('click', () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'));
+      actions.appendChild(openBtn);
+    }
+    const dismissBtn = document.createElement('button');
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.className = 'dismiss';
+    dismissBtn.addEventListener('click', () => banner.classList.remove('show'));
+    actions.appendChild(dismissBtn);
+    const panel = document.getElementById('panel');
+    panel.insertBefore(banner, document.getElementById('action-row'));
+  }
+
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
   function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
+  async function closeSettings() {
+    if (await saveSettings()) scrim.classList.add('hidden');
+  }
+  function openSettings() {
+    fillSettings();
+    scrim.classList.remove('hidden');
+    refreshWhisperModels();
+  }
   function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
   $('#more-btn').addEventListener('click', openSettings);
-  $('#s-close').addEventListener('click', closeSettings);
-  scrim.addEventListener('click', (e) => { if (e.target === scrim) closeSettings(); });
+  $('#s-close').addEventListener('click', () => { void closeSettings(); });
+  scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
 
   const switchModeBtn = document.getElementById('switch-mode-btn');
   if (switchModeBtn) switchModeBtn.addEventListener('click', () => { closeSettings(); showModeSelect(); });
 
   // Tab switching
   document.querySelectorAll('.s-tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      if (!tab.classList.contains('on')) {
-        saveSettings().catch((err) => console.error('[cue] tab auto-save error', err));
-      }
+    tab.addEventListener('click', async () => {
+      if (tab.classList.contains('on')) return;
+      if (!(await saveSettings())) return;
       document.querySelectorAll('.s-tab').forEach(t => t.classList.remove('on'));
       document.querySelectorAll('.s-tab-pane').forEach(p => p.classList.add('hidden'));
       tab.classList.add('on');
@@ -725,6 +1340,10 @@
     });
   });
 
+  function updateCustomProviderFields() {
+    $('#custom-endpoint-settings').classList.toggle('hidden', settings.provider !== 'custom');
+  }
+
   function fillSettings() {
     // Keys tab
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
@@ -732,12 +1351,26 @@
     $('#key-anthropic').value = settings.apiKeys.anthropic || '';
     $('#key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-deepgram').value = settings.apiKeys.deepgram || '';
+    $('#key-custom').value = settings.apiKeys.custom || '';
+    $('#base-url').value = settings.baseUrl || '';
+    updateCustomProviderFields();
     $('#key-ollama').value = settings.apiKeys.ollama || '';
     $('#key-groq').value = settings.apiKeys.groq || '';
+    $('#key-minimax').value = settings.apiKeys.minimax || '';
+    document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.classList.toggle('on', b.dataset.region === (settings.minimaxRegion || 'global_en')));
+    $('#key-azure').value = settings.apiKeys.azure || '';
+    $('#azure-endpoint').value = settings.azureEndpoint || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     fillAppLinkCallers();
     $('#s-status').textContent = statusText();
+    // Transcription tab
+    document.querySelectorAll('#stt-provider-seg button').forEach((button) => {
+      button.classList.toggle('on', button.dataset.sttProvider === (settings.sttProvider || 'auto'));
+    });
+    const localWhisper = settings.localWhisper || { modelId: 'base.en', language: 'auto', threads: 0 };
+    $('#whisper-language').value = localWhisper.language || 'auto';
+    $('#whisper-threads').value = Number(localWhisper.threads) || 0;
     // Profile tab
     $('#resume-text').value = settings.resumeText || '';
     $('#job-description').value = settings.jobDescription || '';
@@ -799,27 +1432,202 @@
     }
   }
 
+  const uploadResumeBtn = document.getElementById('upload-resume-btn');
+  if (uploadResumeBtn) uploadResumeBtn.addEventListener('click', async () => {
+    const res = await cue.pickProfileDocument();
+    if (!res || res.canceled) return;
+    if (res.error) { showStatus('Resume import failed: ' + res.error); return; }
+    $('#resume-text').value = res.text || '';
+    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+  });
+  const uploadJdBtn = document.getElementById('upload-jd-btn');
+  if (uploadJdBtn) uploadJdBtn.addEventListener('click', async () => {
+    const res = await cue.pickProfileDocument();
+    if (!res || res.canceled) return;
+    if (res.error) { showStatus('Job description import failed: ' + res.error); return; }
+    $('#job-description').value = res.text || '';
+    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+  });
+
   function statusText() {
     const k = settings.apiKeys;
-    const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.deepgram && 'Deepgram', k.ollama && 'Ollama', k.groq && 'Groq'].filter(Boolean);
-    const stt = k.deepgram ? 'Deepgram (streaming)' : (k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none')));
+    const labels = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', azure: 'Azure AI Foundry' };
+    const has = Object.keys(labels).filter((p) => k[p]).map((p) => labels[p]);
+    // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
+    // is reported as-is so the status line matches what will actually be used.
+    const selectedSttProvider = settings.sttProvider || 'auto';
+    const automaticStt = k.deepgram ? 'Deepgram (streaming)' : (k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none')));
+    const stt = selectedSttProvider === 'auto' ? automaticStt : selectedSttProvider;
     const ready = [
       settings.resumeText ? '✓ resume' : null,
       settings.jobDescription ? '✓ JD' : null,
       settings.starStories ? '✓ stories' : null,
       settings.salaryTarget ? '✓ salary' : null
     ].filter(Boolean);
-    return `${settings.provider} · STT: ${stt}` + (ready.length ? ' · ' + ready.join(' · ') : '');
+    return `${labels[settings.provider] || settings.provider} · STT: ${stt}` + (ready.length ? ' · ' + ready.join(' · ') : '');
   }
 
   document.querySelectorAll('#provider-seg button').forEach((b) => b.addEventListener('click', () => {
     settings.provider = b.dataset.provider;
     document.querySelectorAll('#provider-seg button').forEach((x) => x.classList.toggle('on', x === b));
+    updateCustomProviderFields();
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     $('#s-status').textContent = statusText();
     updateSmartTooltip();
   }));
+  document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.addEventListener('click', () => {
+    settings.minimaxRegion = b.dataset.region;
+    document.querySelectorAll('#minimax-region-seg button').forEach((x) => x.classList.toggle('on', x === b));
+  }));
+
+  document.querySelectorAll('#stt-provider-seg button').forEach((button) => button.addEventListener('click', () => {
+    settings.sttProvider = button.dataset.sttProvider;
+    document.querySelectorAll('#stt-provider-seg button').forEach((candidate) => {
+      candidate.classList.toggle('on', candidate === button);
+    });
+    $('#s-status').textContent = statusText();
+  }));
+
+  function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const value = bytes / (1024 ** unitIndex);
+    return `${value >= 10 || unitIndex < 2 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+  }
+
+  function getSelectedWhisperModel() {
+    if (!whisperOverview) return null;
+    return whisperOverview.models.find((model) => model.id === $('#whisper-model').value) || null;
+  }
+
+  function renderWhisperModelState() {
+    const model = getSelectedWhisperModel();
+    if (!model) return;
+    const language = model.englishOnly ? 'English only' : 'Multilingual';
+    const recommendation = model.recommended ? ' · recommended default' : '';
+    const partial = model.partialBytes > 0 && !model.installed
+      ? ` · ${formatBytes(model.partialBytes)} ready to resume`
+      : '';
+    $('#whisper-model-detail').textContent = `${formatBytes(model.bytes)} · ${language} · ${model.quantization} · ${model.hardwareTier}${recommendation}${partial}`;
+
+    const progressWrap = $('#whisper-progress-wrap');
+    const progressPercent = model.bytes > 0 ? Math.floor((model.partialBytes / model.bytes) * 100) : 0;
+    progressWrap.classList.toggle('hidden', !model.downloading);
+    $('#whisper-progress').value = progressPercent;
+    $('#whisper-progress-label').textContent = `${progressPercent}%`;
+    $('#whisper-download').disabled = model.installed || model.downloading;
+    $('#whisper-download').textContent = model.installed ? 'Installed' : (model.partialBytes ? 'Resume' : 'Download');
+    $('#whisper-cancel').classList.toggle('hidden', !model.downloading);
+    $('#whisper-import').disabled = model.downloading;
+    $('#whisper-delete').disabled = (model.installedBytes === 0 && model.partialBytes === 0) || model.downloading;
+  }
+
+  async function refreshWhisperModels() {
+    const status = $('#whisper-status');
+    try {
+      const previousSelection = $('#whisper-model').value || settings.localWhisper?.modelId || 'base.en';
+      whisperOverview = await cue.whisperModels();
+      const runtimeBadge = $('#whisper-runtime-status');
+      runtimeBadge.classList.toggle('ready', whisperOverview.runtime.available);
+      runtimeBadge.classList.toggle('error', !whisperOverview.runtime.available);
+      runtimeBadge.textContent = whisperOverview.runtime.available
+        ? `Ready · v${whisperOverview.runtime.version} · ${whisperOverview.runtime.target}`
+        : 'Not prepared';
+      runtimeBadge.title = whisperOverview.runtime.message || '';
+
+      const select = $('#whisper-model');
+      select.innerHTML = '';
+      for (const model of whisperOverview.models) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        option.textContent = `${model.label} — ${formatBytes(model.bytes)}${model.recommended ? ' (recommended)' : ''}${model.installed ? ' ✓' : ''}`;
+        select.appendChild(option);
+      }
+      const selectionExists = whisperOverview.models.some((model) => model.id === previousSelection);
+      select.value = selectionExists ? previousSelection : 'base.en';
+      if (!settings.localWhisper) settings.localWhisper = {};
+      settings.localWhisper.modelId = select.value;
+      status.textContent = whisperOverview.runtime.available
+        ? 'Model files are verified before they can be loaded.'
+        : whisperOverview.runtime.message;
+      renderWhisperModelState();
+    } catch (error) {
+      status.textContent = `Could not load local model information: ${error.message}`;
+    }
+  }
+
+  $('#whisper-model').addEventListener('change', () => {
+    if (!settings.localWhisper) settings.localWhisper = {};
+    settings.localWhisper.modelId = $('#whisper-model').value;
+    renderWhisperModelState();
+  });
+
+  $('#whisper-download').addEventListener('click', async () => {
+    const model = getSelectedWhisperModel();
+    if (!model) return;
+    model.downloading = true;
+    renderWhisperModelState();
+    $('#whisper-status').textContent = `Downloading ${model.id}. You can cancel and resume later.`;
+    try {
+      await cue.whisperModelDownload(model.id);
+      $('#whisper-status').textContent = `${model.id} downloaded and verified.`;
+    } catch (error) {
+      $('#whisper-status').textContent = error.message.includes('cancelled')
+        ? `${model.id} download paused. Progress was kept.`
+        : `Download failed: ${error.message}`;
+    } finally {
+      await refreshWhisperModels();
+    }
+  });
+
+  $('#whisper-cancel').addEventListener('click', async () => {
+    const model = getSelectedWhisperModel();
+    if (model) await cue.whisperModelCancel(model.id);
+  });
+
+  $('#whisper-import').addEventListener('click', async () => {
+    const model = getSelectedWhisperModel();
+    if (!model) return;
+    $('#whisper-status').textContent = `Verifying imported ${model.id}…`;
+    try {
+      const result = await cue.whisperModelImport(model.id);
+      $('#whisper-status').textContent = result.cancelled ? 'Import cancelled.' : `${model.id} imported and verified.`;
+    } catch (error) {
+      $('#whisper-status').textContent = `Import failed: ${error.message}`;
+    } finally {
+      await refreshWhisperModels();
+    }
+  });
+
+  $('#whisper-delete').addEventListener('click', async () => {
+    const model = getSelectedWhisperModel();
+    if (!model || !window.confirm(`Delete the ${model.id} model (${formatBytes(model.bytes)}) from this computer?`)) return;
+    try {
+      await cue.whisperModelDelete(model.id);
+      $('#whisper-status').textContent = `${model.id} deleted.`;
+    } catch (error) {
+      $('#whisper-status').textContent = `Delete failed: ${error.message}`;
+    } finally {
+      await refreshWhisperModels();
+    }
+  });
+
+  cue.on('whisper:download-progress', (progress) => {
+    if (!whisperOverview) return;
+    const model = whisperOverview.models.find((candidate) => candidate.id === progress.modelId);
+    if (!model) return;
+    model.partialBytes = progress.receivedBytes;
+    model.downloading = true;
+    if ($('#whisper-model').value === progress.modelId) {
+      $('#whisper-progress-wrap').classList.remove('hidden');
+      $('#whisper-progress').value = progress.percent;
+      $('#whisper-progress-label').textContent = `${progress.percent}%`;
+      $('#whisper-model-detail').textContent = `${formatBytes(progress.receivedBytes)} of ${formatBytes(progress.totalBytes)}`;
+    }
+  });
+  cue.on('whisper:models-changed', () => refreshWhisperModels());
 
   async function saveSettings() {
     // Keys
@@ -827,11 +1635,21 @@
     settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
     settings.apiKeys.gemini = $('#key-gemini').value.trim();
     settings.apiKeys.deepgram = $('#key-deepgram').value.trim();
+    settings.apiKeys.custom = $('#key-custom').value.trim();
+    settings.baseUrl = $('#base-url').value.trim();
     settings.apiKeys.ollama = $('#key-ollama').value.trim();
     settings.apiKeys.groq = $('#key-groq').value.trim();
+    settings.apiKeys.minimax = $('#key-minimax').value.trim();
+    settings.apiKeys.azure = $('#key-azure').value.trim();
+    settings.azureEndpoint = $('#azure-endpoint').value.trim();
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
+    // Transcription
+    if (!settings.localWhisper) settings.localWhisper = {};
+    settings.localWhisper.modelId = $('#whisper-model').value || settings.localWhisper.modelId || 'base.en';
+    settings.localWhisper.language = $('#whisper-language').value || 'auto';
+    settings.localWhisper.threads = Math.max(0, Math.min(64, Number.parseInt($('#whisper-threads').value, 10) || 0));
     // Profile
     settings.resumeText = $('#resume-text').value.trim();
     settings.jobDescription = $('#job-description').value.trim();
@@ -854,9 +1672,18 @@
     // Q&A
     settings.salaryTarget = $('#salary-target').value.trim();
     settings.questionsToAsk = $('#questions-to-ask').value.trim();
-    await cue.settingsSet(settings);
-    updatePrepStatus();
-    updateSmartTooltip();
+    try {
+      settings = await cue.settingsSet(settings);
+      $('#s-status').textContent = statusText();
+      updatePrepStatus();
+      updateSmartTooltip();
+      return true;
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      $('#s-status').textContent = message;
+      $('#base-url').focus();
+      return false;
+    }
   }
 
   // ---- example conversation (matches the reference screenshot) ------------
@@ -880,7 +1707,7 @@
   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim, #mode-select-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim, #mode-select-scrim'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
@@ -954,7 +1781,7 @@
     {
       icon: '🔑',
       title: 'Connect an AI provider',
-      body: 'cue uses <strong>your own</strong> API key — pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, or <span class="hl">Google Gemini</span>. Get a key from your provider, then paste it into cue\'s Settings.<br><br><strong>Tip:</strong> For the <em>best</em> real-time listening, add a <span class="hl">Deepgram</span> key (lowest latency streaming transcription). Otherwise, an OpenAI key enables streaming via the Realtime API, and Gemini/Whisper work as batch fallbacks.',
+      body: 'cue uses <strong>your own</strong> API key — pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, <span class="hl">Google Gemini</span>, or <span class="hl">Azure AI Foundry</span>. Get a key from your provider, then paste it into cue\'s Settings.<br><br><strong>Tip:</strong> For the <em>best</em> real-time listening, add a <span class="hl">Deepgram</span> key (lowest latency streaming transcription). Otherwise, an OpenAI key enables streaming via the Realtime API, and Gemini/Whisper work as batch fallbacks.',
       buttons: [{ label: 'Open cue Settings', action: () => { finishOnboard(); openSettings(); } }]
     },
     {
@@ -1029,6 +1856,8 @@
     smartBtn.classList.toggle('on', !!settings.smart);
     showExample();
     syncPlaceholder();
+    updateHistoryBadge(); // FIX #3: Initialize badge on boot
+    updateSendButtonState(); // Initialize send button state
 
     // Fix placeholder shortcut hint to match platform
     if (isWindows) {
