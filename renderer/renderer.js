@@ -1653,14 +1653,24 @@
       const h = measureFit();
       if (h !== lastFit) { lastFit = h; cue.fitWindow(h); }
     };
-    setInterval(pushFit, 150);
-    // Modals must get the full window in the same frame they open, not a poll
-    // tick later — otherwise the settings sheet visibly jumps as it re-centers.
+    // Event-driven instead of polling: a ResizeObserver on the content elements
+    // fires exactly when the visible UI grows/shrinks (messages, collapse, the
+    // sidebar toggling), and a MutationObserver on the scrims catches modals
+    // opening/closing — those flip a class rather than resize, and must apply in
+    // the same frame or the settings sheet visibly jumps as it re-centers. The
+    // observed elements are content-sized, so resizing the window can't feed back
+    // into them (no observer loop).
+    const resizeObserver = new ResizeObserver(pushFit);
+    ['#toolbar', '#panel-wrap', '#panel', '#transcript-sidebar'].forEach((s) => {
+      const el = $(s);
+      if (el) resizeObserver.observe(el);
+    });
     const scrimObserver = new MutationObserver(pushFit);
     ['#settings-scrim', '#onboard-scrim', '#consent-scrim'].forEach((s) => {
       const el = $(s);
       if (el) scrimObserver.observe(el, { attributes: true, attributeFilter: ['class'] });
     });
+    pushFit(); // initial fit
   } else {
     document.addEventListener('mousemove', (e) => setIgnore(!overUI(e.clientX, e.clientY)));
     setIgnore(true); // start fully click-through; hovering the panel re-enables it
