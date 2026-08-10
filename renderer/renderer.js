@@ -21,6 +21,24 @@
   const clearIC = document.querySelector('#clear-transcript-btn .ic');
   if (clearIC) clearIC.innerHTML = icon('trash-2', { size: 15 });
 
+  // Paint brand icons for providers
+  document.querySelectorAll('.provider-icon[data-brand]').forEach((el) => {
+    const brand = el.dataset.brand;
+    if (brand) el.innerHTML = icon(brand, { size: 20 });
+  });
+  document.querySelectorAll('.s-stt-icon[data-brand]').forEach((el) => {
+    const brand = el.dataset.brand;
+    if (brand) el.innerHTML = icon(brand, { size: 18 });
+  });
+  document.querySelectorAll('.s-tab-icon[data-brand]').forEach((el) => {
+    const brand = el.dataset.brand;
+    if (brand) el.innerHTML = icon(brand, { size: 14 });
+  });
+  document.querySelectorAll('.s-upload-icon[data-brand]').forEach((el) => {
+    const brand = el.dataset.brand;
+    if (brand) el.innerHTML = icon(brand, { size: 18 });
+  });
+
   // ---- state -------------------------------------------------------------
   let settings = null;
   let whisperOverview = null;
@@ -780,8 +798,6 @@
     const historyBtn = document.getElementById('history-btn');
     if (sidebar) sidebar.classList.remove('hidden');
     if (historyBtn) historyBtn.classList.add('active');
-    const panelWrap = document.getElementById('panel-wrap');
-    if (panelWrap) panelWrap.classList.add('sidebar-open');
     sidebarOpen = true;
   }
 
@@ -790,8 +806,6 @@
     const historyBtn = document.getElementById('history-btn');
     if (sidebar) sidebar.classList.add('hidden');
     if (historyBtn) historyBtn.classList.remove('active');
-    const panelWrap = document.getElementById('panel-wrap');
-    if (panelWrap) panelWrap.classList.remove('sidebar-open');
     sidebarOpen = false;
   }
 
@@ -1133,7 +1147,8 @@
     const cap = 2000;
     counter.textContent = String(n);
     counter.classList.toggle('over', n >= cap);
-    counter.parentElement.classList.toggle('s-counter-warn', n >= cap - 100);
+    counter.parentElement.classList.toggle('warn', n >= cap - 100);
+    counter.parentElement.classList.toggle('over', n >= cap);
   }
   const aiRulesEl = document.getElementById('ai-rules');
   if (aiRulesEl) aiRulesEl.addEventListener('input', updateAiRulesCounter);
@@ -1224,6 +1239,7 @@
 
   function updateCustomProviderFields() {
     $('#custom-endpoint-settings').classList.toggle('hidden', settings.provider !== 'custom');
+    $('#minimax-region-settings').classList.toggle('hidden', settings.provider !== 'minimax');
   }
 
   function fillSettings() {
@@ -1246,6 +1262,8 @@
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     fillAppLinkCallers();
     $('#s-status').textContent = statusText();
+    // Update key status indicators
+    updateKeyStatusIndicators();
     // Transcription tab
     document.querySelectorAll('#stt-provider-seg button').forEach((button) => {
       button.classList.toggle('on', button.dataset.sttProvider === (settings.sttProvider || 'auto'));
@@ -1268,6 +1286,27 @@
     $('#salary-target').value = settings.salaryTarget || '';
     $('#questions-to-ask').value = settings.questionsToAsk || '';
   }
+  
+  // Update the visual key status indicators (green dot when key is present)
+  function updateKeyStatusIndicators() {
+    const keyInputs = document.querySelectorAll('.s-key-input[type="password"]');
+    keyInputs.forEach((input) => {
+      const statusEl = input.nextElementSibling;
+      if (statusEl && statusEl.classList.contains('s-key-status')) {
+        statusEl.classList.toggle('has-key', input.value && input.value.length > 0);
+      }
+    });
+  }
+  
+  // Update key status on input change
+  document.querySelectorAll('.s-key-input[type="password"]').forEach((input) => {
+    input.addEventListener('input', () => {
+      const statusEl = input.nextElementSibling;
+      if (statusEl && statusEl.classList.contains('s-key-status')) {
+        statusEl.classList.toggle('has-key', input.value && input.value.length > 0);
+      }
+    });
+  });
 
   // Whoever cue has been told it may answer questions for. Empty is the normal
   // state — nothing appears here until something has asked and been allowed.
