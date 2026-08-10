@@ -21,8 +21,11 @@
   --r-pill: 999px;
   --r-keycap: 6px;
 
-  --font: -apple-system, 'SF Pro Text', 'SF Pro Display', system-ui, 'Segoe UI', sans-serif;
-  --mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+  /* Native UI font per OS. Explicit Linux families (after system-ui) so text
+     renders consistently even where fontconfig's generic-family resolution is
+     misconfigured and `system-ui` doesn't resolve. */
+  --font: -apple-system, 'SF Pro Text', 'SF Pro Display', system-ui, 'Segoe UI', Cantarell, 'Noto Sans', Ubuntu, 'DejaVu Sans', 'Liberation Sans', sans-serif;
+  --mono: 'SF Mono', ui-monospace, 'JetBrains Mono', 'Cascadia Code', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace;
 }
 
 * { box-sizing: border-box; }
@@ -234,8 +237,10 @@ button:focus { outline: none; }
 
 /* ============================ Action row ============================ */
 #action-row {
-  display: flex; align-items: center; flex-wrap: nowrap; gap: 4px;
+  display: flex; align-items: center; gap: 4px;
   margin-top: 6px; white-space: nowrap;
+  /* wrap instead of clipping when the panel narrows (history sidebar open) */
+  flex-wrap: wrap;
 }
 .act {
   display: inline-flex; align-items: center; gap: 6px;
@@ -774,10 +779,11 @@ button:focus { outline: none; }
 .prep-item {
   font-size: 11px; font-weight: 500; padding: 2px 8px;
   border-radius: var(--r-pill); border: 1px solid transparent;
-  transition: all 140ms ease; cursor: default;
+  transition: all 140ms ease; cursor: pointer;
 }
 .prep-item.loaded { color: rgba(34,197,94,0.9); border-color: rgba(34,197,94,0.25); background: rgba(34,197,94,0.08); }
 .prep-item.missing { color: var(--tx-mut); opacity: 0.55; }
+.prep-item:hover { opacity: 1; color: var(--tx-2); border-color: rgba(255,255,255,0.20); background: rgba(255,255,255,0.06); }
 
 /* ============================ Response history ============================ */
 .response-group { display: flex; flex-direction: column; }
@@ -850,3 +856,34 @@ button:focus { outline: none; }
 .cs-title { font-size: 15px; font-weight: 620; color: var(--tx-1); line-height: 1.35; }
 .cs-body { margin-top: 10px; color: var(--tx-mut); font-size: 12.5px; line-height: 1.5; white-space: pre-line; }
 .cs-actions { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }
+
+/* ============================ Linux ============================ */
+/* On Linux the window is resized to hug the visible UI (no click-through API),
+   so viewport-relative caps would feed back into the fit loop. Pin them to
+   their 700x600 equivalents. */
+body.on-linux #messages { max-height: 300px; }
+body.on-linux #settings { max-height: 528px; }
+
+/* Keys tab: one provider's fields at a time (renderer toggles .hidden) */
+.prov-group { display: flex; flex-direction: column; gap: 8px; }
+.prov-group.hidden { display: none; }
+
+/* Linux shows scrollbars permanently (no macOS-style overlay), so style them
+   thin and translucent, and let the settings tabs wrap instead of scrolling. */
+body.on-linux ::-webkit-scrollbar { width: 8px; height: 8px; }
+body.on-linux ::-webkit-scrollbar-track { background: transparent; }
+body.on-linux ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 4px; }
+body.on-linux ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.32); }
+body.on-linux ::-webkit-scrollbar-corner { background: transparent; }
+body.on-linux .s-tabs { flex-wrap: wrap; overflow-x: visible; }
+
+/* Linux system fonts are a touch wider than macOS SF Pro, so the action row
+   overflows ~35px and wraps to two lines at full width. Tighten only the Linux
+   spacing so it fits one row again, while flex-wrap still lets it break when the
+   panel narrows (history sidebar open). */
+body.on-linux #action-row { gap: 2px; }
+body.on-linux #action-row .act { padding-left: 4px; padding-right: 4px; }
+body.on-linux #action-row .act-primary { padding-left: 8px; padding-right: 8px; }
+body.on-linux #action-row .sep { margin: 0; }
+body.on-linux #action-row .shortcut-hint { margin-left: 2px; }
+

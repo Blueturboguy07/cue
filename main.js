@@ -12,6 +12,18 @@ const { createStreamingSTT } = require('./src/stt-streaming');
 const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
 const { buildInterviewContext, detectCategory } = require('./src/interview-context');
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
+const linuxAudio = require('./src/linux-audio');
+const contentProtection = require('./src/content-protection');
+
+// cue's window class — must match the compositor rule and app.setName() disguise.
+const WINDOW_CLASS = 'MicrosoftEdgeUpdate';
+// Detected once: can this Linux session genuinely hide cue from screen capture,
+// and if so, with which compositor (kwin / hyprland)?
+const captureExclusion = contentProtection.detect();
+// Set true only when the compositor rule was actually written — never claim the
+// window is hidden unless it really is (a false "you're hidden" is the one thing
+// a privacy overlay must not do).
+let linuxProtectionActive = false;
 
 // macOS system-audio loopback (the "them" channel via getDisplayMedia) does not
 // start on Electron 31–38 unless these Chromium features are enabled; without
@@ -20,6 +32,16 @@ const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLi
 // harmless no-op. Must run before app is ready.
 if (process.platform === 'darwin') {
   app.commandLine.appendSwitch('enable-features', 'MacLoopbackAudioForScreenShare,MacSckSystemAudioLoopbackOverride');
+}
+// Linux: GPU compositing under XWayland spams "GetVSyncParametersIfAvailable()
+// failed" and buys nothing for a small mostly-static overlay — software
+// rendering is clean and plenty fast, and keeps transparency working.
+if (process.platform === 'linux') {
+  app.disableHardwareAcceleration();
+  // Pin the window class so the KWin capture-exclusion rule matches
+  // deterministically (WM_CLASS on XWayland, app_id on native Wayland),
+  // independent of when app.setName() runs.
+  app.commandLine.appendSwitch('class', 'MicrosoftEdgeUpdate');
 }
 const { WhisperModelManager } = require('./src/whisper-model-manager');
 const { requireWhisperModel } = require('./src/whisper-model-catalog');
@@ -34,6 +56,7 @@ let win = null;
 const shortcutState = { assist: false, say: false, leetcode: false, quit: false };
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
 
 // -------- Windows version helpers --------
 // WDA_EXCLUDEFROMCAPTURE (setContentProtection) requires Windows 10 build 19041+.
@@ -44,7 +67,12 @@ function getWindowsBuild() {
   return parts[2] || 0; // third segment is the build number
 }
 const WIN_BUILD = getWindowsBuild();
-const WIN_SUPPORTS_CONTENT_PROTECTION = !isWindows || WIN_BUILD >= 19041;
+// setContentProtection is a no-op on Linux, but KWin (KDE Plasma 6.6+ Wayland)
+// can genuinely exclude the window from capture via a window rule — so on Linux
+// "supported" means that mechanism is available (see src/kwin-capture.js).
+const SUPPORTS_CONTENT_PROTECTION = isLinux
+  ? captureExclusion.supported
+  : (!isWindows || WIN_BUILD >= 19041);
 
 let permWin = null;
 
@@ -180,9 +208,10 @@ async function getWhisperOverview() {
 }
 
 // -------- window --------
+const OVERLAY_W = 700, OVERLAY_H = 600;
 function createWindow() {
   const { workArea } = screen.getPrimaryDisplay();
-  const W = 700, H = 600;
+  const W = OVERLAY_W, H = OVERLAY_H;
 
   const savedSettings = store.getSettings();
   let startX = Math.round(workArea.x + (workArea.width - W) / 2);
@@ -228,12 +257,21 @@ function createWindow() {
   // On Windows, WDA_EXCLUDEFROMCAPTURE requires build 19041+ (Windows 10 May 2020 Update).
   // On older builds we skip it silently to avoid a no-op and send a warning to the renderer.
   const shouldProtect = !process.env.CUE_NO_PROTECT;
+  if (isLinux && captureExclusion.supported) {
+    // The compositor enforces the rule; write it when protecting, remove it when
+    // the user opts out so we never leave a stale rule behind. linuxProtectionActive
+    // reflects whether the write actually succeeded — the UI trusts only that.
+    if (shouldProtect) linuxProtectionActive = contentProtection.enable(WINDOW_CLASS, captureExclusion.compositor);
+    else { contentProtection.disable(captureExclusion.compositor); linuxProtectionActive = false; }
+  }
   if (shouldProtect) {
-    if (WIN_SUPPORTS_CONTENT_PROTECTION) {
+    if (!isLinux && SUPPORTS_CONTENT_PROTECTION) {
       win.setContentProtection(true);
-    } else {
+    } else if (!SUPPORTS_CONTENT_PROTECTION) {
       // Will notify the renderer after it loads
-      console.log(`[cue] Windows build ${WIN_BUILD} < 19041 — setContentProtection not supported. Window may appear in screen shares.`);
+      console.log(isLinux
+        ? '[cue] No capture-exclusion mechanism on this session (needs KDE Plasma 6.6+ or Hyprland 0.50+ on Wayland) — the window will appear in screen shares.'
+        : `[cue] Windows build ${WIN_BUILD} < 19041 — setContentProtection not supported. Window may appear in screen shares.`);
     }
   }
 
@@ -259,10 +297,18 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     win.showInactive();
     win.setTitle('Microsoft Edge Update');
-    // Warn about missing content protection on old Windows builds
-    if (isWindows && shouldProtect && !WIN_SUPPORTS_CONTENT_PROTECTION) {
+    // Tell the user where they stand on screen-share hiding.
+    if (shouldProtect && isLinux && linuxProtectionActive) {
+      const via = captureExclusion.compositor === 'hyprland' ? 'Hyprland' : 'KWin';
+      send('status', { message: `Screen-share hiding is on — cue is excluded from screen recordings via ${via} on this session.` });
+    } else if (shouldProtect && isLinux && captureExclusion.supported && !linuxProtectionActive) {
+      // Detection said yes but the compositor rule could not be written.
+      send('status', { message: 'cue could not turn on screen-share hiding (writing the compositor rule failed) — it may be visible if you share your screen.' });
+    } else if (shouldProtect && !SUPPORTS_CONTENT_PROTECTION) {
       send('status', {
-        message: `Heads up: your Windows version (build ${WIN_BUILD}) does not support screen-share hiding. Upgrade to Windows 10 build 19041+ or Windows 11 to enable invisibility in screen shares.`
+        message: isLinux
+          ? 'Heads up: cue can\'t hide from screen shares on this session — it needs KDE Plasma 6.6+ or Hyprland 0.50+ on Wayland. It will be visible if you share your screen.'
+          : `Heads up: your Windows version (build ${WIN_BUILD}) does not support screen-share hiding. Upgrade to Windows 10 build 19041+ or Windows 11 to enable invisibility in screen shares.`
       });
     }
   });
@@ -422,8 +468,21 @@ function routeAudio(channel, pcmBuffer) {
 // Mic + system audio are both captured in the RENDERER (getUserMedia for the mic,
 // getDisplayMedia loopback for system audio) so they run inside cue's own process
 // and use cue's own Screen-Recording grant — no separate helper binary to authorize.
+// Linux is the exception for system audio: Chromium neither implements loopback
+// nor exposes monitor devices there, so MAIN records the PulseAudio/PipeWire
+// monitor with parec (src/linux-audio.js) and feeds routeAudio directly.
+function startLinuxThem() {
+  if (!isLinux) return;
+  const settings = store.getSettings();
+  linuxAudio.startThemCapture(
+    settings.linuxMonitorSource || '',
+    (chunk) => { if (state.capturing) routeAudio('them', chunk); },
+    (message) => send('status', { message })
+  ).catch((error) => console.log('[cue] linux them capture error', error && error.message));
+}
 async function setCapturing(active) {
   if (active === state.capturing) return state.capturing;
+  if (isLinux && !active) linuxAudio.stopThemCapture();
 
   if (active) {
     sttDisabled = false; // reset on re-enable
@@ -432,6 +491,7 @@ async function setCapturing(active) {
       try {
         await startLocalWhisper(settings);
         state.capturing = true;
+        startLinuxThem();
         console.log('[cue] capture started, mode: local');
         send('capture:state', { active: true, streaming: false, mode: 'local' });
         return true;
@@ -451,6 +511,7 @@ async function setCapturing(active) {
     }
 
     state.capturing = true;
+    startLinuxThem();
     // Try streaming first, fall back to batch
     const streaming = initStreamingSTT();
     if (!streaming) {
@@ -613,10 +674,14 @@ ipcMain.handle('whisper:model-import', async (_event, modelId) => {
   send('whisper:models-changed', { modelId });
   return result;
 });
+ipcMain.handle('linux-audio:sources', () => (isLinux ? linuxAudio.listSources() : { sources: [], defaultSink: '' }));
 ipcMain.handle('platform:info', () => ({
   platform: process.platform,
   winBuild: WIN_BUILD,
-  winSupportsContentProtection: WIN_SUPPORTS_CONTENT_PROTECTION
+  supportsContentProtection: SUPPORTS_CONTENT_PROTECTION,
+  linuxCaptureHidden: linuxProtectionActive,
+  linuxCaptureReason: isLinux ? captureExclusion.reason : null,
+  linuxCaptureCompositor: isLinux ? captureExclusion.compositor : null
 }));
 ipcMain.handle('transcript:clear', () => {
   transcript.splice(0, transcript.length);
@@ -625,7 +690,22 @@ ipcMain.handle('transcript:clear', () => {
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
-ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
+// Linux never ignores mouse events: {forward:true} is macOS/Windows-only, and
+// cursor polling goes stale under Wayland (XWayland only sees the pointer while
+// it is over an X11 surface), which would leave the overlay permanently
+// click-through. Instead the renderer keeps the window interactive and asks
+// main to shrink it around the visible UI ('window:fit'), so the empty gaps
+// that mac/win make click-through simply aren't part of the window here.
+ipcMain.on('mouse:ignore', (_e, v) => {
+  if (!win || isLinux) return;
+  win.setIgnoreMouseEvents(!!v, { forward: true });
+});
+ipcMain.on('window:fit', (_e, h) => {
+  if (!isLinux || !win || win.isDestroyed()) return;
+  const target = h < 0 ? OVERLAY_H : Math.max(64, Math.min(Math.round(h), OVERLAY_H));
+  const [w, current] = win.getContentSize();
+  if (current !== target) win.setContentSize(w, target);
+});
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
 ipcMain.on('app:quit', () => app.quit());
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
@@ -826,6 +906,7 @@ app.whenReady().then(async () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  linuxAudio.stopThemCapture(); // no-op unless a parec recorder is running
   // Best effort, deliberately not blocking the quit: the library also removes
   // the instance file from a `process.on('exit')` handler, and a file left
   // behind is harmless anyway because readers check whether the PID is alive.

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('cue', {
   whisperModelDelete: (modelId) => ipcRenderer.invoke('whisper:model-delete', modelId),
   whisperModelImport: (modelId) => ipcRenderer.invoke('whisper:model-import', modelId),
   platformInfo: () => ipcRenderer.invoke('platform:info'),
+  linuxAudioSources: () => ipcRenderer.invoke('linux-audio:sources'),
   ask: (payload) => ipcRenderer.send('ask', payload),
   captureToggle: () => ipcRenderer.invoke('capture:toggle').catch((err) => {
     console.error('[cue] captureToggle error', err);
@@ -20,6 +21,7 @@ contextBridge.exposeInMainWorld('cue', {
   micPcm: (arrayBuffer) => ipcRenderer.send('mic:pcm', arrayBuffer),
   systemPcm: (arrayBuffer) => ipcRenderer.send('system:pcm', arrayBuffer),
   setIgnoreMouse: (v) => ipcRenderer.send('mouse:ignore', v),
+  fitWindow: (h) => ipcRenderer.send('window:fit', h),
   clearTranscript: () => ipcRenderer.invoke('transcript:clear'),
   openPane: (url) => ipcRenderer.send('open-pane', url),
   appLinkState: () => ipcRenderer.invoke('applink:state'),
