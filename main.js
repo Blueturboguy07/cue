@@ -60,6 +60,7 @@ const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy 
 const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
 const RMS_GATE = 180;
 let flushTimer = null;
+let lastAudioLevelSent = 0;  // throttle audio:level to ~20 Hz
 let whisperModelManager = null;
 let localWhisperTranscriber = null;
 let activeWhisperModelId = null;
@@ -451,6 +452,15 @@ function stopStreamingSTT() {
 // -------- audio routing (streaming or batch) --------
 function routeAudio(channel, pcmBuffer) {
   const buf = Buffer.from(pcmBuffer);
+
+  // Send a normalized audio level (~20 Hz) so the renderer can drive the
+  // live-dot box-shadow in real time. RMS gate avoids noise-floor flicker.
+  const now = Date.now();
+  if (now - lastAudioLevelSent > 45) {
+    lastAudioLevelSent = now;
+    const level = Math.min(1, rms16(buf) / 2000);
+    if (level > 0.01 || state.capturing) send('audio:level', { level });
+  }
 
   if (localWhisperTranscriber) {
     localWhisperTranscriber.push(channel, buf);

@@ -73,6 +73,7 @@
   function startAi(small) {
     aiEl = document.createElement('div');
     aiEl.className = 'ai-text' + (small ? ' small' : '');
+    aiEl.style.setProperty('--i', responseCount);
     aiEl.dataset.raw = '';
     caretEl = document.createElement('span');
     caretEl.className = 'ai-caret';
@@ -129,12 +130,39 @@
   // ---- mode selection ----------------------------------------------------
   const modeSelectScrim = $('#mode-select-scrim');
 
+  let modeSelectWalkthroughShown = false;
   function showModeSelect() {
     modeSelectScrim.classList.remove('hidden');
     setIgnore(false);
     document.querySelectorAll('.mode-card').forEach((card) => {
       card.classList.toggle('selected', card.dataset.mode === appMode);
     });
+    if (modeSelectWalkthroughShown) return;
+    modeSelectWalkthroughShown = true;
+    // First-launch walkthrough: animate the title through 3 messages, then
+    // reveal the cards. Clicks skip straight to the cards.
+    const title = $('.ms-title');
+    const subtitle = $('.ms-subtitle');
+    const cards = $('.ms-cards');
+    if (!title || !cards) return;
+    cards.classList.add('walkthrough-hide');
+    title.textContent = 'cue listens to your mic, system audio, and screen';
+    subtitle.textContent = '';
+    let step = 0;
+    const advance = () => {
+      step++;
+      if (step === 1) {
+        title.textContent = 'How will you use cue?';
+        subtitle.textContent = 'Pick a mode. Switch anytime from Settings.';
+        setTimeout(advance, 1800);
+      } else {
+        cards.classList.remove('walkthrough-hide');
+      }
+    };
+    // Click anywhere to skip to the end.
+    const skip = () => { clearTimeout(timer); cards.classList.remove('walkthrough-hide'); };
+    const timer = setTimeout(advance, 1800);
+    modeSelectScrim.addEventListener('click', skip, { once: true });
   }
 
   async function selectMode(mode) {
@@ -162,19 +190,23 @@
     const prepStatus = $('#prep-status');
     if (isWork) {
       prepStatus.innerHTML = [
-        `<span class="prep-item" data-field="workContext">👤 Work Context</span>`,
-        `<span class="prep-item" data-field="projectNotes">📁 Project Notes</span>`,
-        `<span class="prep-item" data-field="meetingNotesContext">🗒️ Meeting Notes</span>`,
-        `<span class="prep-item" data-field="teamRoster">👥 Team Roster</span>`
+        `<span class="prep-item" data-field="workContext"><span class="prep-ic" data-ic="user"></span> Work Context</span>`,
+        `<span class="prep-item" data-field="projectNotes"><span class="prep-ic" data-ic="folder"></span> Project Notes</span>`,
+        `<span class="prep-item" data-field="meetingNotesContext"><span class="prep-ic" data-ic="clipboard-list"></span> Meeting Notes</span>`,
+        `<span class="prep-item" data-field="teamRoster"><span class="prep-ic" data-ic="users"></span> Team Roster</span>`
       ].join('');
     } else {
       prepStatus.innerHTML = [
-        `<span class="prep-item" data-field="resume">📄 Resume</span>`,
-        `<span class="prep-item" data-field="jd">💼 JD</span>`,
-        `<span class="prep-item" data-field="stories">🎯 Stories</span>`,
-        `<span class="prep-item" data-field="salary">💰 Salary</span>`
+        `<span class="prep-item" data-field="resume"><span class="prep-ic" data-ic="file-text"></span> Resume</span>`,
+        `<span class="prep-item" data-field="jd"><span class="prep-ic" data-ic="briefcase"></span> JD</span>`,
+        `<span class="prep-item" data-field="stories"><span class="prep-ic" data-ic="target"></span> Stories</span>`,
+        `<span class="prep-item" data-field="salary"><span class="prep-ic" data-ic="dollar-sign"></span> Salary</span>`
       ].join('');
     }
+    // Paint the lucide icons inside prep-status items (rebuilt above).
+    prepStatus.querySelectorAll('[data-ic]').forEach((el) => {
+      el.innerHTML = icon(el.dataset.ic, { size: 14 });
+    });
 
     // Settings tab visibility
     document.querySelectorAll('.s-tab-interview').forEach((t) => t.classList.toggle('hidden', isWork));
@@ -197,7 +229,7 @@
     if (badge && badgeIcon && badgeLabel) {
       badge.classList.remove('mode-interview', 'mode-work');
       badge.classList.add(isWork ? 'mode-work' : 'mode-interview');
-      badgeIcon.textContent = isWork ? '💼 ' : '🎯 ';
+      badgeIcon.innerHTML = icon(isWork ? 'briefcase' : 'mic', { size: 14 });
       badgeLabel.textContent = isWork ? 'Work Mode' : 'Interview Mode';
     }
   }
@@ -620,11 +652,35 @@
     await cue.settingsSet({ smart: settings.smart });
   });
 
-  // Hide / collapse
+  // Hide / collapse — macOS-style scale+opacity transition.
+  // On collapse: plays overlayOut, then sets display:none.
+  // On expand: removes display:none, plays overlayIn with a spring curve.
   function toggleHide() {
-    const collapsed = $('#panel').classList.toggle('collapsed');
-    $('#hide-btn').classList.toggle('collapsed', collapsed);
-    $('#live-dot').style.display = collapsed ? 'none' : '';
+    const panel = $('#panel');
+    const hideBtn = $('#hide-btn');
+    const collapsing = !panel.classList.contains('collapsed');
+
+    if (collapsing) {
+      // Phase 1: play the collapse animation
+      panel.classList.add('collapsing');
+      panel.addEventListener('animationend', () => {
+        panel.classList.remove('collapsing');
+        panel.classList.add('collapsed');
+      }, { once: true });
+      $('#live-dot').style.display = 'none';
+    } else {
+      // Phase 1: remove display:none so the element is measurable, then animate in
+      panel.classList.remove('collapsed');
+      // Force layout so the expand animation plays from the start
+      void panel.offsetHeight;
+      panel.classList.add('expanding');
+      panel.addEventListener('animationend', () => {
+        panel.classList.remove('expanding');
+      }, { once: true });
+      $('#live-dot').style.display = '';
+    }
+
+    hideBtn.classList.toggle('collapsed', collapsing);
   }
   $('#hide-btn').addEventListener('click', toggleHide);
   cue.on('hide:toggle', toggleHide);
@@ -1053,6 +1109,22 @@
     }
   }
   
+  // Audio-responsive live-dot: the level from routeAudio drives the box-shadow
+  // spread as a CSS custom property so the dot breathes with the mic energy.
+  let liveLevel = 0;
+  cue.on('audio:level', ({ level }) => {
+    liveLevel = level;
+    const dot = document.getElementById('live-dot');
+    if (dot) dot.style.setProperty('--live-level', String(level));
+  });
+  // When capture stops, release the dot back to its resting pulse.
+  cue.on('capture:state', ({ active }) => {
+    if (!active) {
+      const dot = document.getElementById('live-dot');
+      if (dot) dot.style.setProperty('--live-level', '0');
+    }
+  });
+
   cue.on('stt:interim', ({ channel, text }) => {
     setLiveDotState('transcribing');
     const el = getOrCreateInterimEl();
@@ -1160,6 +1232,7 @@
     }
     aiEl = document.createElement('div');
     aiEl.className = 'ai-text' + (small ? ' small' : '');
+    aiEl.style.setProperty('--i', responseCount);
     aiEl.dataset.raw = '';
     caretEl = document.createElement('span');
     caretEl.className = 'ai-caret';
@@ -1312,6 +1385,7 @@
   function openSettings() {
     fillSettings();
     scrim.classList.remove('hidden');
+    scrim.classList.add('visible');
     refreshWhisperModels();
   }
   // Only close when the save actually succeeded, so a failed save surfaces its
@@ -1319,7 +1393,7 @@
   // so callers (the mode switch) can wait for a successful save before moving on.
   async function closeSettings() {
     const ok = await saveSettings();
-    if (ok) scrim.classList.add('hidden');
+    if (ok) scrim.classList.remove('visible');
     return ok;
   }
   $('#more-btn').addEventListener('click', openSettings);
@@ -1720,6 +1794,9 @@
     if (!model) return;
     model.partialBytes = progress.receivedBytes;
     model.downloading = true;
+    // Pulse the whisper card while a model is downloading.
+    const card = document.querySelector('.whisper-card');
+    if (card) card.classList.add('downloading');
     if ($('#whisper-model').value === progress.modelId) {
       $('#whisper-progress-wrap').classList.remove('hidden');
       $('#whisper-progress').value = progress.percent;
@@ -1727,7 +1804,11 @@
       $('#whisper-model-detail').textContent = `${formatBytes(progress.receivedBytes)} of ${formatBytes(progress.totalBytes)}`;
     }
   });
-  cue.on('whisper:models-changed', () => refreshWhisperModels());
+  cue.on('whisper:models-changed', () => {
+    const card = document.querySelector('.whisper-card');
+    if (card) card.classList.remove('downloading');
+    refreshWhisperModels();
+  });
 
   async function saveSettings() {
     // Collect every panel field through the same schema table fillSettings uses.
@@ -1762,6 +1843,7 @@
     addUserBubble('What should I say?');
     const ai = document.createElement('div');
     ai.className = 'ai-text';
+    ai.style.setProperty('--i', 0);
     ai.textContent = '“A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.”';
     messages.appendChild(ai);
   }
