@@ -74,17 +74,19 @@ That's the whole setup on Windows. There's no permission dance — grant the mic
 
 To build a standalone app:
 ```bash
-npm run pack        # unpacked app in dist/ (either OS)
+npm run pack        # unpacked app in dist/ (any OS)
 npm run pack:win    # unpacked Windows app -> dist/win-unpacked/cue.exe
+npm run pack:linux  # unpacked Linux app   -> dist/linux-unpacked/cue
 npm run dist:mac    # macOS zip            -> dist/
 npm run dist:win    # Windows installer    -> dist/cue-win-x64.exe
 ```
-> **macOS note:** the packaged app is **ad-hoc signed** unless a Developer ID certificate is configured. macOS ties permission grants to the exact build, so **rebuilding resets the mic/screen permissions** — you'll grant them again. For everyday use, build once and keep it. Windows has no equivalent problem.
+> **macOS note:** the packaged app is **ad-hoc signed** unless a Developer ID certificate is configured. macOS ties permission grants to the exact build, so **rebuilding resets the mic/screen permissions** — you'll grant them again. For everyday use, build once and keep it. Windows and Linux have no equivalent problem.
 To build a packaged app:
 ```bash
-npm run dist:mac    # macOS build
-npm run dist:win    # Windows build
-npm run dist:linux  # Linux x64 AppImage
+npm run dist:mac          # macOS build
+npm run dist:win          # Windows build
+npm run dist:linux        # Linux x64 AppImage
+npm run dist:linux:arm64  # Linux arm64 AppImage
 ```
 
 Packaged builds include a pinned `whisper.cpp` runtime. When running from source, prepare the matching runtime once:
@@ -110,6 +112,8 @@ cue can't help until your OS lets it see and hear. When you first use a feature 
 **On macOS — two grants.** System Settings → **Privacy & Security** → **Microphone** and **Screen Recording** → turn on **cue**. macOS may ask you to **quit & reopen** cue — let it. Screen Recording covers both the screenshot features and meeting-audio capture.
 
 **On Windows — one grant.** Only the microphone needs permission: Settings → **Privacy & security** → **Microphone** → turn on **Microphone access** *and* **Let desktop apps access your microphone**. Screenshots and meeting audio need no permission at all — they work immediately, using Windows loopback capture.
+
+**On Linux.** Microphone access and desktop screen capture are managed by your desktop environment / display server (X11 or Wayland via PipeWire). Note: OS-level screen-share window protection (`setContentProtection`) is not supported on Linux by Electron, so the overlay window remains visible during full-screen shares (use window or area share to omit it).
 
 ### Step 2 — Add your AI key (bring your own)
 

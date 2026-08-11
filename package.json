@@ -17,7 +17,8 @@
     "dist:win": "electron-builder --win",
     "pack:win": "electron-builder --win --dir",
     "dist:linux": "electron-builder --linux AppImage --x64",
-    "dist:linux:arm64": "electron-builder --linux AppImage --arm64"
+    "dist:linux:arm64": "electron-builder --linux AppImage --arm64",
+    "pack:linux": "electron-builder --linux --dir"
   },
   "keywords": [
     "electron",
