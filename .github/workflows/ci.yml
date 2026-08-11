@@ -1,11 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
-      - "codex/**"
+  # push:  # disabled — billing lock blocks all jobs
+  #   branches:
+  #     - main
+  #     - "codex/**"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
