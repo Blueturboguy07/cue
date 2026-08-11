@@ -1,6 +1,7 @@
 /* cue renderer — UI state, mic capture, IPC, streaming render. */
 (function () {
   const { icon } = window.ICONS;
+  const DI = window.CueDocumentIntake; // pure intake state machine (document-intake.js)
   const cue = window.cue; // exposed by preload
   const $ = (s) => document.querySelector(s);
   const isWindows = cue.platform === 'win32';
@@ -11,10 +12,11 @@
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
   $('#quit-btn').innerHTML = icon('x', { size: 14 });
-  document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
-  document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
-  document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
-  document.querySelector('.act[data-mode="recap"] .ic').innerHTML = icon('refresh-cw', { size: 16 });
+  // Paint icons on action buttons via data-ic so both interview and work sets get painted.
+  document.querySelectorAll('.act[data-ic] .ic').forEach((el) => {
+    const icName = el.closest('.act') && el.closest('.act').dataset.ic;
+    if (icName) el.innerHTML = icon(icName, { size: 16 });
+  });
   $('#smart-toggle .ic').innerHTML = icon('zap', { size: 14 });
   $('#more-btn').innerHTML = icon('more-horizontal', { size: 18 });
   $('#send-btn').innerHTML = icon('play', { size: 15 });
@@ -23,6 +25,7 @@
 
   // ---- state -------------------------------------------------------------
   let settings = null;
+  let appMode = 'interview';
   let whisperOverview = null;
   let busy = false;
   let aiEl = null;       // current streaming <div class="ai-text">
@@ -70,6 +73,7 @@
   function startAi(small) {
     aiEl = document.createElement('div');
     aiEl.className = 'ai-text' + (small ? ' small' : '');
+    aiEl.style.setProperty('--i', responseCount);
     aiEl.dataset.raw = '';
     caretEl = document.createElement('span');
     caretEl.className = 'ai-caret';
@@ -123,27 +127,119 @@
     }
   }
 
-  // ---- toast helper ------------------------------------------------------
-  // FIX #7: Toast queue system — ensures latest toast wins cleanly without stacking
-  let toastTimer = null;
-  let toastFadeTimer = null;
-  function showToast(message, ms) {
-    let el = document.getElementById('toast');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'toast';
-      document.getElementById('app').appendChild(el);
-    }
-    // Clear any pending timers to prevent overlap
-    clearTimeout(toastTimer);
-    clearTimeout(toastFadeTimer);
-    // Immediately update content (no stacking)
-    el.textContent = message;
-    el.classList.add('show');
-    toastTimer = setTimeout(() => {
-      el.classList.remove('show');
-    }, ms);
+  // ---- mode selection ----------------------------------------------------
+  const modeSelectScrim = $('#mode-select-scrim');
+
+  let modeSelectWalkthroughShown = false;
+  function showModeSelect() {
+    modeSelectScrim.classList.remove('hidden');
+    setIgnore(false);
+    document.querySelectorAll('.mode-card').forEach((card) => {
+      card.classList.toggle('selected', card.dataset.mode === appMode);
+    });
+    if (modeSelectWalkthroughShown) return;
+    modeSelectWalkthroughShown = true;
+    // First-launch walkthrough: animate the title through 3 messages, then
+    // reveal the cards. Clicks skip straight to the cards.
+    const title = $('.ms-title');
+    const subtitle = $('.ms-subtitle');
+    const cards = $('.ms-cards');
+    if (!title || !cards) return;
+    cards.classList.add('walkthrough-hide');
+    title.textContent = 'cue listens to your mic, system audio, and screen';
+    subtitle.textContent = '';
+    let step = 0;
+    const advance = () => {
+      step++;
+      if (step === 1) {
+        title.textContent = 'How will you use cue?';
+        subtitle.textContent = 'Pick a mode. Switch anytime from Settings.';
+        setTimeout(advance, 1800);
+      } else {
+        cards.classList.remove('walkthrough-hide');
+      }
+    };
+    // Click anywhere to skip to the end.
+    const skip = () => { clearTimeout(timer); cards.classList.remove('walkthrough-hide'); };
+    const timer = setTimeout(advance, 1800);
+    modeSelectScrim.addEventListener('click', skip, { once: true });
   }
+
+  async function selectMode(mode) {
+    if (appMode !== null && appMode !== mode) {
+      await performClearTranscript(false, false);
+    }
+    appMode = mode;
+    settings.appMode = mode;
+    await cue.settingsSet({ appMode: mode });
+    applyMode(mode);
+    modeSelectScrim.classList.add('hidden');
+  }
+
+  function applyMode(mode) {
+    const isWork = mode === 'work';
+
+    // Show/hide the static mode-specific button groups instead of rebuilding
+    // innerHTML — buttons added by other features survive mode switches.
+    const intBtns = document.querySelector('.interview-btns');
+    const workBtns = document.querySelector('.work-btns');
+    if (intBtns) intBtns.classList.toggle('hidden', isWork);
+    if (workBtns) workBtns.classList.toggle('hidden', !isWork);
+
+    // Prep status bar
+    const prepStatus = $('#prep-status');
+    if (isWork) {
+      prepStatus.innerHTML = [
+        `<span class="prep-item" data-field="workContext"><span class="prep-ic" data-ic="user"></span> Work Context</span>`,
+        `<span class="prep-item" data-field="projectNotes"><span class="prep-ic" data-ic="folder"></span> Project Notes</span>`,
+        `<span class="prep-item" data-field="meetingNotesContext"><span class="prep-ic" data-ic="clipboard-list"></span> Meeting Notes</span>`,
+        `<span class="prep-item" data-field="teamRoster"><span class="prep-ic" data-ic="users"></span> Team Roster</span>`
+      ].join('');
+    } else {
+      prepStatus.innerHTML = [
+        `<span class="prep-item" data-field="resume"><span class="prep-ic" data-ic="file-text"></span> Resume</span>`,
+        `<span class="prep-item" data-field="jd"><span class="prep-ic" data-ic="briefcase"></span> JD</span>`,
+        `<span class="prep-item" data-field="stories"><span class="prep-ic" data-ic="target"></span> Stories</span>`,
+        `<span class="prep-item" data-field="salary"><span class="prep-ic" data-ic="dollar-sign"></span> Salary</span>`
+      ].join('');
+    }
+    // Paint the lucide icons inside prep-status items (rebuilt above).
+    prepStatus.querySelectorAll('[data-ic]').forEach((el) => {
+      el.innerHTML = icon(el.dataset.ic, { size: 14 });
+    });
+
+    // Settings tab visibility
+    document.querySelectorAll('.s-tab-interview').forEach((t) => t.classList.toggle('hidden', isWork));
+    document.querySelectorAll('.s-tab-work').forEach((t) => t.classList.toggle('hidden', !isWork));
+
+    // Shortcut hints
+    const sayHintEl = document.getElementById('say-shortcut-hint');
+    const assistHintEl = document.getElementById('assist-shortcut-hint');
+    const workAssistHintEl = document.getElementById('work-assist-shortcut-hint');
+    if (sayHintEl) sayHintEl.textContent = isWindows ? 'Ctrl+Shift+↵' : '⌘⇧↵';
+    if (assistHintEl) assistHintEl.textContent = isWindows ? 'Ctrl+↵' : '⌘↵';
+    if (workAssistHintEl) workAssistHintEl.textContent = isWindows ? 'Ctrl+↵' : '⌘↵';
+
+    updatePrepStatus();
+
+    // Toolbar mode badge
+    const badge = document.getElementById('mode-badge');
+    const badgeIcon = document.getElementById('mode-badge-icon');
+    const badgeLabel = document.getElementById('mode-badge-label');
+    if (badge && badgeIcon && badgeLabel) {
+      badge.classList.remove('mode-interview', 'mode-work');
+      badge.classList.add(isWork ? 'mode-work' : 'mode-interview');
+      badgeIcon.innerHTML = icon(isWork ? 'briefcase' : 'mic', { size: 14 });
+      badgeLabel.textContent = isWork ? 'Work Mode' : 'Interview Mode';
+    }
+  }
+
+  document.querySelectorAll('.mode-card').forEach((card) => {
+    card.addEventListener('click', () => selectMode(card.dataset.mode));
+  });
+
+  const modeBadge = document.getElementById('mode-badge');
+  if (modeBadge) modeBadge.addEventListener('click', () => showModeSelect());
 
   // ---- actions -----------------------------------------------------------
   function runMode(mode, text) {
@@ -344,10 +440,16 @@
     clearTimeout(questionFinalizeTimer);
     questionFinalizeTimer = setTimeout(() => {
       if (isLikelyCompleteQuestion(input.value)) {
-        composer.classList.add('stt-ready');
-        updateSendButtonState(); // FIX #9: Update send button when ready
-        // Subtle notification that question is ready
-        showToast('Press Enter to answer', 2500);
+        if (settings.autoAnswer) {
+          // Auto-Answer mode: instantly trigger the AI instead of waiting
+          composer.classList.remove('stt-ready', 'stt-filling');
+          runMode('assist', '');
+        } else {
+          composer.classList.add('stt-ready');
+          updateSendButtonState(); // FIX #9: Update send button when ready
+          // Subtle notification that question is ready
+          showToast('Press Enter to answer', 2500);
+        }
       }
     }, 1800);
 
@@ -550,11 +652,35 @@
     await cue.settingsSet({ smart: settings.smart });
   });
 
-  // Hide / collapse
+  // Hide / collapse — macOS-style scale+opacity transition.
+  // On collapse: plays overlayOut, then sets display:none.
+  // On expand: removes display:none, plays overlayIn with a spring curve.
   function toggleHide() {
-    const collapsed = $('#panel').classList.toggle('collapsed');
-    $('#hide-btn').classList.toggle('collapsed', collapsed);
-    $('#live-dot').style.display = collapsed ? 'none' : '';
+    const panel = $('#panel');
+    const hideBtn = $('#hide-btn');
+    const collapsing = !panel.classList.contains('collapsed');
+
+    if (collapsing) {
+      // Phase 1: play the collapse animation
+      panel.classList.add('collapsing');
+      panel.addEventListener('animationend', () => {
+        panel.classList.remove('collapsing');
+        panel.classList.add('collapsed');
+      }, { once: true });
+      $('#live-dot').style.display = 'none';
+    } else {
+      // Phase 1: remove display:none so the element is measurable, then animate in
+      panel.classList.remove('collapsed');
+      // Force layout so the expand animation plays from the start
+      void panel.offsetHeight;
+      panel.classList.add('expanding');
+      panel.addEventListener('animationend', () => {
+        panel.classList.remove('expanding');
+      }, { once: true });
+      $('#live-dot').style.display = '';
+    }
+
+    hideBtn.classList.toggle('collapsed', collapsing);
   }
   $('#hide-btn').addEventListener('click', toggleHide);
   cue.on('hide:toggle', toggleHide);
@@ -574,26 +700,30 @@
 
   // Transcript toggle removed — sidebar now auto-opens with listening
 
-  // Clear transcript
+  // Clear transcript helper
+  async function performClearTranscript(saveUndo = true, showToastMsg = false) {
+    if (saveUndo) saveToQuestionHistory(input.value);
+    
+    await cue.clearTranscript();
+    clearMessages();
+    if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
+    const list = document.getElementById('ts-list');
+    if (list) list.innerHTML = '<div class="ts-placeholder">Conversation history will appear here when listening.</div>';
+    transcriptInterimEl = null;
+    clearTranscriptSidebar();
+    hardClearSTTFill();
+    
+    if (showToastMsg) {
+      const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
+      showToast(`Transcript cleared · ${undoHint}`, 3500);
+    }
+  }
+
+  // Clear transcript button
   const clearTranscriptBtn = document.getElementById('clear-transcript-btn');
   if (clearTranscriptBtn) {
     clearTranscriptBtn.addEventListener('click', async () => {
-      // Save current input to history before clearing (for undo)
-      saveToQuestionHistory(input.value);
-      
-      await cue.clearTranscript();
-      clearMessages();
-      // Also clear the floating interim bar
-      if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
-      // FIX #1: Use ts-list instead of non-existent transcript-list
-      const list = document.getElementById('ts-list');
-      if (list) list.innerHTML = '<div class="ts-placeholder">Conversation history will appear here when listening.</div>';
-      transcriptInterimEl = null;
-      clearTranscriptSidebar(); // clear the history sidebar too
-      hardClearSTTFill(); // clear the input box too
-      
-      const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
-      showToast(`Transcript cleared · ${undoHint}`, 3500);
+      await performClearTranscript(true, true);
     });
   }
 
@@ -954,6 +1084,10 @@
       // Don't auto-close sidebar — let user keep it open if they want
     }
     updateSttStatus({ active, streaming });
+    // Work Mode recording indicator
+    const recIndicator = document.getElementById('work-recording-indicator');
+    if (recIndicator) recIndicator.classList.toggle('hidden', !(appMode === 'work' && active && settings && settings.persistTranscripts));
+
     if (active) { startMic(); } else { stopMic(); stopSystemAudio(); }
     if (active && mode === 'local') {
       sttState = 'local';
@@ -1002,6 +1136,22 @@
     }
   }
   
+  // Audio-responsive live-dot: the level from routeAudio drives the box-shadow
+  // spread as a CSS custom property so the dot breathes with the mic energy.
+  let liveLevel = 0;
+  cue.on('audio:level', ({ level }) => {
+    liveLevel = level;
+    const dot = document.getElementById('live-dot');
+    if (dot) dot.style.setProperty('--live-level', String(level));
+  });
+  // When capture stops, release the dot back to its resting pulse.
+  cue.on('capture:state', ({ active }) => {
+    if (!active) {
+      const dot = document.getElementById('live-dot');
+      if (dot) dot.style.setProperty('--live-level', '0');
+    }
+  });
+
   cue.on('stt:interim', ({ channel, text }) => {
     setLiveDotState('transcribing');
     const el = getOrCreateInterimEl();
@@ -1015,13 +1165,39 @@
       showInterimInInput(text);
     }
   });
-  cue.on('stt:final', ({ channel, text }) => {
+  let sentimentUtteranceCount = 0;
+  let analyzingSentiment = false;
+
+  cue.on('stt:final', async ({ channel, text }) => {
     setLiveDotState('idle');
     // Clear interim when we get a final
     if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
     clearTranscriptInterim();
     clearInputInterim(); // FIX #12: Clear interim text from input area
     // sidebar: the final turn is added via the 'transcript' event below
+    
+    if (window.checkStakeholderFlashcards) {
+      window.checkStakeholderFlashcards(text);
+    }
+
+    if (settings.appMode === 'work' && settings.enableSentimentDetection && cue.analyzeSentiment) {
+      sentimentUtteranceCount++;
+      if (sentimentUtteranceCount >= 10 && !analyzingSentiment) {
+        sentimentUtteranceCount = 0;
+        analyzingSentiment = true;
+        try {
+          const recentText = transcript.slice(-15).map(t => `${t.channel === 'me' ? 'Me' : 'Speaker'}: ${t.text}`).join('\n');
+          const suggestion = await cue.analyzeSentiment(recentText);
+          if (suggestion && suggestion.toUpperCase() !== 'NO') {
+            if (window.showToast) window.showToast(`💡 ${suggestion}`);
+          }
+        } catch (e) {
+          console.error('[sentiment]', e);
+        } finally {
+          analyzingSentiment = false;
+        }
+      }
+    }
   });
   cue.on('stt:status', ({ channel, status, provider }) => {
     cue.log(`[stt] ${provider || channel || 'unknown'} ${status}`);
@@ -1083,6 +1259,7 @@
     }
     aiEl = document.createElement('div');
     aiEl.className = 'ai-text' + (small ? ' small' : '');
+    aiEl.style.setProperty('--i', responseCount);
     aiEl.dataset.raw = '';
     caretEl = document.createElement('span');
     caretEl.className = 'ai-caret';
@@ -1091,7 +1268,9 @@
     messages.appendChild(group);
     // Use requestAnimationFrame so the DOM is fully updated before scrolling
     requestAnimationFrame(() => {
-      if (sep && sep.isConnected) sep.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (sep && sep.isConnected) {
+        messages.scrollTo({ top: sep.offsetTop, behavior: 'smooth' });
+      }
     });
     setBusy(true);
   });
@@ -1166,7 +1345,15 @@
   if (aiRulesEl) aiRulesEl.addEventListener('input', updateAiRulesCounter);
   function updatePrepStatus() {
     if (!settings) return;
-    const fields = {
+    const isWork = appMode === 'work';
+    const fields = isWork ? {
+      workContext:         !!(settings.workContext && settings.workContext.trim()),
+      projectNotes:        !!(settings.projectNotes && settings.projectNotes.trim()),
+      meetingNotesContext: !!(settings.meetingNotesContext && settings.meetingNotesContext.trim()),
+      teamRoster:          !!(settings.teamRoster && settings.teamRoster.trim()),
+      managerNotes:        !!(settings.managerNotes && settings.managerNotes.trim()),
+      keyStakeholders:     !!(settings.keyStakeholders && settings.keyStakeholders.trim())
+    } : {
       resume:  !!(settings.resumeText && settings.resumeText.trim()),
       jd:      !!(settings.jobDescription && settings.jobDescription.trim()),
       stories: !!(settings.starStories && settings.starStories.trim()),
@@ -1222,19 +1409,53 @@
 
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
-  function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
-  async function closeSettings() {
-    if (await saveSettings()) scrim.classList.add('hidden');
-  }
   function openSettings() {
     fillSettings();
     scrim.classList.remove('hidden');
+    scrim.classList.add('visible');
     refreshWhisperModels();
   }
-  function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
+  // Only close when the save actually succeeded, so a failed save surfaces its
+  // error instead of silently discarding the user's edits. Returns the save result
+  // so callers (the mode switch) can wait for a successful save before moving on.
+  async function closeSettings() {
+    const ok = await saveSettings();
+    if (ok) scrim.classList.remove('visible');
+    return ok;
+  }
   $('#more-btn').addEventListener('click', openSettings);
+  $('#quit-btn').addEventListener('click', () => { cue.quit(); });
   $('#s-close').addEventListener('click', () => { void closeSettings(); });
   scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
+
+  // Sentiment detection: a one-time cost confirmation when the toggle is flipped
+  // on, so users understand the ongoing API usage before enabling it.
+  const sentimentToggle = $('#enable-sentiment-toggle');
+  if (sentimentToggle) sentimentToggle.addEventListener('change', (e) => {
+    if (!e.target.checked) return;
+    const provider = (settings && settings.provider) || 'OpenAI';
+    const model = (settings && settings.models && settings.models[settings.provider] && settings.models[settings.provider].fast) || 'default';
+    const confirmed = confirm(
+      'Enable background sentiment detection?\n\n' +
+      'This will periodically send transcript snippets to your AI provider (' + provider + ' / ' + model + ') ' +
+      'during meetings. This may increase API costs.\n\n' +
+      'You can disable it anytime in Settings → Q&A.'
+    );
+    if (!confirmed) e.target.checked = false;
+  });
+
+  const switchModeBtn = document.getElementById('switch-mode-btn');
+  if (switchModeBtn) switchModeBtn.addEventListener('click', () => {
+    // Show the mode picker only after a successful save — otherwise the failed
+    // save keeps the settings scrim open and both scrims would stack.
+    void closeSettings().then((ok) => { if (ok) showModeSelect(); });
+  });
+
+  // Fill lucide icons (settings tabs, mode cards, mode-screen logo mark) — the
+  // app's icon system, not emoji. Per-element size via data-ic-size.
+  document.querySelectorAll('[data-ic]').forEach((el) => {
+    el.innerHTML = icon(el.dataset.ic, { size: Number(el.dataset.icSize) || 16 });
+  });
 
   // Tab switching
   document.querySelectorAll('.s-tab').forEach((tab) => {
@@ -1254,46 +1475,16 @@
   }
 
   function fillSettings() {
-    // Keys tab
-    document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
-    $('#key-openai').value = settings.apiKeys.openai || '';
-    $('#key-anthropic').value = settings.apiKeys.anthropic || '';
-    $('#key-gemini').value = settings.apiKeys.gemini || '';
-    $('#key-deepgram').value = settings.apiKeys.deepgram || '';
-    $('#key-custom').value = settings.apiKeys.custom || '';
-    $('#base-url').value = settings.baseUrl || '';
-    updateCustomProviderFields();
-    $('#key-ollama').value = settings.apiKeys.ollama || '';
-    $('#key-groq').value = settings.apiKeys.groq || '';
-    $('#key-minimax').value = settings.apiKeys.minimax || '';
-    document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.classList.toggle('on', b.dataset.region === (settings.minimaxRegion || 'global_en')));
-    $('#key-azure').value = settings.apiKeys.azure || '';
-    $('#azure-endpoint').value = settings.azureEndpoint || '';
-    const m = settings.models[settings.provider] || { fast: '', smart: '' };
-    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
+    // Every panel field is mapped in renderer/settings-schema.js — one table, so
+    // fill and collect cannot drift. Cross-field wiring that follows the fill:
+    CueSettingsSchema.fill(document, settings);
     fillAppLinkCallers();
     $('#s-status').textContent = statusText();
-    // Transcription tab
-    document.querySelectorAll('#stt-provider-seg button').forEach((button) => {
-      button.classList.toggle('on', button.dataset.sttProvider === (settings.sttProvider || 'auto'));
-    });
-    const localWhisper = settings.localWhisper || { modelId: 'base.en', language: 'auto', threads: 0 };
-    $('#whisper-language').value = localWhisper.language || 'auto';
-    $('#whisper-threads').value = Number(localWhisper.threads) || 0;
-    // Profile tab
-    $('#resume-text').value = settings.resumeText || '';
-    $('#job-description').value = settings.jobDescription || '';
-    // Interview Prep tab
-    $('#star-stories').value = settings.starStories || '';
-    $('#why-company').value = settings.whyCompany || '';
-    $('#why-leaving').value = settings.whyLeaving || '';
-    $('#work-style').value = settings.workStyle || '';
-    // Style tab
-    $('#ai-rules').value = settings.aiRules || '';
+    updateCustomProviderFields();
     updateAiRulesCounter();
-    // Q&A tab
-    $('#salary-target').value = settings.salaryTarget || '';
-    $('#questions-to-ask').value = settings.questionsToAsk || '';
+    loadSessionFiles('resume', settings.resumeFiles);
+    loadSessionFiles('jd', settings.jdFiles);
+    loadSessionFiles('projectNotes', settings.projectNotesFiles);
   }
 
   // Whoever cue has been told it may answer questions for. Empty is the normal
@@ -1332,21 +1523,126 @@
     }
   }
 
-  const uploadResumeBtn = document.getElementById('upload-resume-btn');
-  if (uploadResumeBtn) uploadResumeBtn.addEventListener('click', async () => {
+  // --- Document Import State ---
+  // The textarea is the single source of truth (persisted as resumeText & co.); the
+  // file list is metadata over it. Each row knows which file contributed which text,
+  // so removing a row can surgically remove just that text without ever clobbering
+  // pasted or previously saved content. The lists themselves are persisted too, so
+  // the rows and the ✖ buttons survive an app restart. The state machine itself is
+  // pure and lives in renderer/document-intake.js; this file holds only the DOM
+  // wiring and the session state.
+  let sessionFiles = { projectNotes: [], resume: [], jd: [] };
+  const FILE_FIELDS = {
+    projectNotes: { container: '#project-notes-filename', textarea: '#project-notes', clearBtn: '#clear-project-notes-btn' },
+    resume: { container: '#resume-filename', textarea: '#resume-text', clearBtn: '#clear-resume-btn' },
+    jd: { container: '#jd-filename', textarea: '#job-description', clearBtn: '#clear-jd-btn' }
+  };
+
+  function renderFileList(type) {
+    const f = FILE_FIELDS[type];
+    if (!f) return;
+    const container = $(f.container);
+    container.textContent = '';
+    sessionFiles[type].forEach((file, i) => {
+      const item = document.createElement('div');
+      item.className = 's-file-item';
+      const label = document.createElement('span');
+      label.className = 's-file-name';
+      label.textContent = '📄 ' + file.fileName;
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 's-action danger';
+      del.title = 'Remove this file';
+      del.textContent = '✖';
+      del.dataset.del = type;
+      del.dataset.idx = String(i);
+      item.append(label, del);
+      container.appendChild(item);
+    });
+    syncClearButton(type);
+  }
+
+  // Keep the ✖ clear button visible whenever the field actually has content,
+  // including text restored from saved settings that was never in sessionFiles.
+  function syncClearButton(type) {
+    const f = FILE_FIELDS[type];
+    if (!f) return;
+    $(f.clearBtn).classList.toggle('hidden', !DI.hasContent($(f.textarea).value));
+  }
+
+  function loadSessionFiles(type, list) {
+    sessionFiles[type] = DI.sanitizeList(list);
+    renderFileList(type);
+  }
+
+  // One delegated listener per list container: rows are rebuilt on every render, so
+  // a single container-level click handler avoids rebinding N listeners each time.
+  function bindFileListContainer(type) {
+    const f = FILE_FIELDS[type];
+    if (!f) return;
+    $(f.container).addEventListener('click', (e) => {
+      const btn = e.target.closest && e.target.closest('button[data-del]');
+      if (!btn || btn.dataset.del !== type) return;
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (!sessionFiles[type][idx]) return;
+      const { list, value } = DI.deleteFile(sessionFiles[type], idx, $(f.textarea).value);
+      sessionFiles[type] = list;
+      $(f.textarea).value = value;
+      renderFileList(type);
+    });
+  }
+  bindFileListContainer('projectNotes');
+  bindFileListContainer('resume');
+  bindFileListContainer('jd');
+
+  // Append imported text to the field instead of replacing it: pasted or previously
+  // saved content is preserved, and a per-file row can later remove just its text.
+  async function importDocuments(type) {
+    const f = FILE_FIELDS[type];
     const res = await cue.pickProfileDocument();
     if (!res || res.canceled) return;
-    if (res.error) { showStatus('Resume import failed: ' + res.error); return; }
-    $('#resume-text').value = res.text || '';
-    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+    if (res.error && !res.files) { showStatus(DI.FIELD_LABELS[type] + ' import failed: ' + res.error); return; }
+    const files = res.files || [];
+    const errors = res.errors || [];
+    if (files.length) {
+      const { list, addedText } = DI.appendFiles(sessionFiles[type], files);
+      sessionFiles[type] = list;
+      const textarea = $(f.textarea);
+      textarea.value = DI.mergeIntoValue(textarea.value, addedText);
+      renderFileList(type);
+    }
+    const message = DI.importStatus(type, files, errors);
+    if (message) showStatus(message);
+  }
+
+  const uploadProjectNotesBtn = document.getElementById('upload-project-notes-btn');
+  if (uploadProjectNotesBtn) uploadProjectNotesBtn.addEventListener('click', () => void importDocuments('projectNotes'));
+  const clearProjectNotesBtn = document.getElementById('clear-project-notes-btn');
+  if (clearProjectNotesBtn) clearProjectNotesBtn.addEventListener('click', () => {
+    const { list, value } = DI.clearField();
+    sessionFiles.projectNotes = list;
+    $('#project-notes').value = value;
+    renderFileList('projectNotes');
   });
+
+  const uploadResumeBtn = document.getElementById('upload-resume-btn');
+  if (uploadResumeBtn) uploadResumeBtn.addEventListener('click', () => void importDocuments('resume'));
+  const clearResumeBtn = document.getElementById('clear-resume-btn');
+  if (clearResumeBtn) clearResumeBtn.addEventListener('click', () => {
+    const { list, value } = DI.clearField();
+    sessionFiles.resume = list;
+    $('#resume-text').value = value;
+    renderFileList('resume');
+  });
+
   const uploadJdBtn = document.getElementById('upload-jd-btn');
-  if (uploadJdBtn) uploadJdBtn.addEventListener('click', async () => {
-    const res = await cue.pickProfileDocument();
-    if (!res || res.canceled) return;
-    if (res.error) { showStatus('Job description import failed: ' + res.error); return; }
-    $('#job-description').value = res.text || '';
-    showStatus('Imported ' + res.fileName + ' — press Save to keep it.');
+  if (uploadJdBtn) uploadJdBtn.addEventListener('click', () => void importDocuments('jd'));
+  const clearJdBtn = document.getElementById('clear-jd-btn');
+  if (clearJdBtn) clearJdBtn.addEventListener('click', () => {
+    const { list, value } = DI.clearField();
+    sessionFiles.jd = list;
+    $('#job-description').value = value;
+    renderFileList('jd');
   });
 
   function statusText() {
@@ -1379,6 +1675,11 @@
   document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.addEventListener('click', () => {
     settings.minimaxRegion = b.dataset.region;
     document.querySelectorAll('#minimax-region-seg button').forEach((x) => x.classList.toggle('on', x === b));
+  }));
+
+  document.querySelectorAll('#work-persona-seg button').forEach((b) => b.addEventListener('click', () => {
+    settings.workPersona = b.dataset.persona;
+    document.querySelectorAll('#work-persona-seg button').forEach((x) => x.classList.toggle('on', x === b));
   }));
 
   document.querySelectorAll('#stt-provider-seg button').forEach((button) => button.addEventListener('click', () => {
@@ -1520,6 +1821,9 @@
     if (!model) return;
     model.partialBytes = progress.receivedBytes;
     model.downloading = true;
+    // Pulse the whisper card while a model is downloading.
+    const card = document.querySelector('.whisper-card');
+    if (card) card.classList.add('downloading');
     if ($('#whisper-model').value === progress.modelId) {
       $('#whisper-progress-wrap').classList.remove('hidden');
       $('#whisper-progress').value = progress.percent;
@@ -1527,42 +1831,25 @@
       $('#whisper-model-detail').textContent = `${formatBytes(progress.receivedBytes)} of ${formatBytes(progress.totalBytes)}`;
     }
   });
-  cue.on('whisper:models-changed', () => refreshWhisperModels());
+  cue.on('whisper:models-changed', () => {
+    const card = document.querySelector('.whisper-card');
+    if (card) card.classList.remove('downloading');
+    refreshWhisperModels();
+  });
 
   async function saveSettings() {
-    // Keys
-    settings.apiKeys.openai = $('#key-openai').value.trim();
-    settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
-    settings.apiKeys.gemini = $('#key-gemini').value.trim();
-    settings.apiKeys.deepgram = $('#key-deepgram').value.trim();
-    settings.apiKeys.custom = $('#key-custom').value.trim();
-    settings.baseUrl = $('#base-url').value.trim();
-    settings.apiKeys.ollama = $('#key-ollama').value.trim();
-    settings.apiKeys.groq = $('#key-groq').value.trim();
-    settings.apiKeys.minimax = $('#key-minimax').value.trim();
-    settings.apiKeys.azure = $('#key-azure').value.trim();
-    settings.azureEndpoint = $('#azure-endpoint').value.trim();
-    if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
-    settings.models[settings.provider].fast = $('#model-fast').value.trim();
-    settings.models[settings.provider].smart = $('#model-smart').value.trim();
-    // Transcription
+    // Collect every panel field through the same schema table fillSettings uses.
+    for (const { path, value } of CueSettingsSchema.collect(document, settings)) {
+      CueSettingsSchema.setPath(settings, path, value);
+    }
+    // Not symmetric panel fields, so outside the schema table: the whisper model
+    // list is populated asynchronously by refreshWhisperModels, and the imported
+    // file lists live in sessionFiles (loaded from settings in fillSettings).
     if (!settings.localWhisper) settings.localWhisper = {};
     settings.localWhisper.modelId = $('#whisper-model').value || settings.localWhisper.modelId || 'base.en';
-    settings.localWhisper.language = $('#whisper-language').value || 'auto';
-    settings.localWhisper.threads = Math.max(0, Math.min(64, Number.parseInt($('#whisper-threads').value, 10) || 0));
-    // Profile
-    settings.resumeText = $('#resume-text').value.trim();
-    settings.jobDescription = $('#job-description').value.trim();
-    // Interview Prep
-    settings.starStories = $('#star-stories').value.trim();
-    settings.whyCompany = $('#why-company').value.trim();
-    settings.whyLeaving = $('#why-leaving').value.trim();
-    settings.workStyle = $('#work-style').value.trim();
-    // Style tab
-    settings.aiRules = $('#ai-rules').value.trim();
-    // Q&A
-    settings.salaryTarget = $('#salary-target').value.trim();
-    settings.questionsToAsk = $('#questions-to-ask').value.trim();
+    settings.resumeFiles = sessionFiles.resume.map((x) => ({ fileName: x.fileName, text: x.text }));
+    settings.jdFiles = sessionFiles.jd.map((x) => ({ fileName: x.fileName, text: x.text }));
+    settings.projectNotesFiles = sessionFiles.projectNotes.map((x) => ({ fileName: x.fileName, text: x.text }));
     try {
       settings = await cue.settingsSet(settings);
       $('#s-status').textContent = statusText();
@@ -1583,6 +1870,7 @@
     addUserBubble('What should I say?');
     const ai = document.createElement('div');
     ai.className = 'ai-text';
+    ai.style.setProperty('--i', 0);
     ai.textContent = '“A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.”';
     messages.appendChild(ai);
   }
@@ -1598,7 +1886,7 @@
   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim, #mode-select-scrim'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
@@ -1715,7 +2003,15 @@
     settings = await cue.settingsGet();
     const platformInfo = await cue.platformInfo();
 
-    // R4: shortcut hints
+    // Load and apply saved mode (or prompt to choose)
+    if (settings.appMode) {
+      appMode = settings.appMode;
+      applyMode(appMode);
+    } else {
+      showModeSelect();
+    }
+
+    // R4: shortcut hints (applyMode also sets these, but set here as safe fallback)
     const sayHintEl = document.getElementById('say-shortcut-hint');
     const assistHintEl = document.getElementById('assist-shortcut-hint');
     if (sayHintEl) sayHintEl.textContent = isWindows ? 'Ctrl+Shift+↵' : '⌘⇧↵';
@@ -1752,4 +2048,61 @@
     $('#stop-btn').classList.toggle('active', st.active);
     if (!settings.onboarded) showOnboard();
   })();
+
+  // ============================ Toasts & Flashcards ============================
+  // Single toast implementation (the flashcards feature previously added a second
+  // showToast that shadowed the older #toast version — the older one is removed;
+  // ms stays honored for callers that pass a custom duration).
+  function showToast(message, ms) {
+    let container = document.querySelector('.s-toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.className = 's-toast-container';
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = 's-toast';
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+      toast.classList.add('fade-out');
+      toast.addEventListener('animationend', () => toast.remove());
+    }, ms || 4500);
+  }
+
+  const stakeholderCooldowns = {};
+  
+  function checkStakeholderFlashcards(text) {
+    if (settings.appMode !== 'work') return;
+    const mn = settings.managerNotes || '';
+    const ks = settings.keyStakeholders || '';
+    const combined = (mn + ' ' + ks).trim();
+    if (!combined) return;
+    
+    const words = combined.match(/\b[A-Z][a-z]+\b/g) || [];
+    const uniqueNames = [...new Set(words)].filter(w => w.length > 2);
+    
+    for (const name of uniqueNames) {
+      const regex = new RegExp('\\b' + name + '\\b', 'i'); // case-insensitive match on transcript
+      if (regex.test(text)) {
+        const now = Date.now();
+        if (!stakeholderCooldowns[name] || (now - stakeholderCooldowns[name] > 5 * 60 * 1000)) {
+          stakeholderCooldowns[name] = now;
+          let note = '';
+          if (mn.includes(name)) note = mn;
+          else note = ks;
+          
+          let preview = note.trim();
+          if (preview.length > 80) preview = preview.substring(0, 80) + '...';
+          showToast(`Flashcard: ${name}\n${preview}`);
+          break; // Show at most one flashcard per utterance
+        }
+      }
+    }
+  }
+
+  // Expose to window for stt:final listener to use
+  window.checkStakeholderFlashcards = checkStakeholderFlashcards;
+  window.showToast = showToast;
+
 })();

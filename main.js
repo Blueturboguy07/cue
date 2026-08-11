@@ -1,16 +1,17 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences } = require('electron');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
-const { createSTT } = require('./src/stt');
+const { createSTT, looksLikeHallucination } = require('./src/stt');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 const { createStreamingSTT } = require('./src/stt-streaming');
 const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
-const { buildInterviewContext, detectCategory } = require('./src/interview-context');
+const { buildInterviewContext, buildWorkContext, detectCategory } = require('./src/interview-context');
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 
 // macOS system-audio loopback (the "them" channel via getDisplayMedia) does not
@@ -59,6 +60,7 @@ const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy 
 const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
 const RMS_GATE = 180;
 let flushTimer = null;
+let lastAudioLevelSent = 0;  // throttle audio:level to ~20 Hz
 let whisperModelManager = null;
 let localWhisperTranscriber = null;
 let activeWhisperModelId = null;
@@ -90,9 +92,55 @@ const ringBuffers = {
   them: new AudioRingBuffer(300, 16000)
 };
 
+function isAcousticEcho(youText, recentThemTexts) {
+  const normalize = (t) => t.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  const youWords = normalize(youText);
+  if (youWords.length < 2) return false;
+  
+  const themWords = normalize(recentThemTexts.join(' '));
+  if (themWords.length === 0) return false;
+  
+  const youStr = youWords.join(' ');
+  const themStr = themWords.join(' ');
+  if (themStr.includes(youStr)) return true;
+  
+  if (youWords.length < 4) return false;
+  
+  const themWordSet = new Set(themWords);
+  let matchCount = 0;
+  for (const w of youWords) {
+    if (themWordSet.has(w)) matchCount++;
+  }
+  return (matchCount / youWords.length) >= 0.75;
+}
+
 function pushTranscript(turn) {
+  if (turn.channel === 'you') {
+    const recentThem = transcript.filter(t => t.channel === 'them' && (Date.now() - t.ts < 25000)).map(t => t.text);
+    if (isAcousticEcho(turn.text, recentThem)) {
+       console.log('[main] Discarding acoustic echo:', turn.text);
+       return false;
+    }
+  }
+
   transcript.push(turn);
   if (transcript.length > MAX_TRANSCRIPT_TURNS) transcript.splice(0, transcript.length - MAX_TRANSCRIPT_TURNS);
+  persistTranscriptTurn(turn);
+  return true;
+}
+
+// -------- optional transcript persistence (Work Mode) --------
+function persistTranscriptTurn(turn) {
+  try {
+    const settings = store.getSettings();
+    if (!settings.persistTranscripts) return;
+    const dir = path.join(app.getPath('userData'), 'cue-transcripts');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const date = new Date().toISOString().slice(0, 10);
+    const file = path.join(dir, `transcript-${date}.jsonl`);
+    const line = JSON.stringify({ channel: turn.channel, text: turn.text, ts: turn.ts }) + '\n';
+    fs.appendFileSync(file, line, 'utf8');
+  } catch (_) { /* best-effort — never block audio pipeline */ }
 }
 
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
@@ -110,10 +158,15 @@ function getWhisperRuntime() {
 
 function publishTranscript(channel, text) {
   if (!text || !text.trim()) return;
+  if (looksLikeHallucination(text)) {
+    console.log('[main] Discarding hallucinated transcript:', text);
+    return;
+  }
   const turn = { channel, text: text.trim(), ts: Date.now() };
-  pushTranscript(turn);
-  send('transcript', turn);
-  send('stt:final', { channel, text: turn.text });
+  if (pushTranscript(turn)) {
+    send('transcript', turn);
+    send('stt:final', { channel, text: turn.text });
+  }
 }
 
 async function startLocalWhisper(settings) {
@@ -297,8 +350,9 @@ async function flushChannel(channel) {
     }
     if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
       const turn = { channel, text: res.text.trim(), ts: Date.now() };
-      pushTranscript(turn);
-      send('transcript', turn);
+      if (pushTranscript(turn)) {
+        send('transcript', turn);
+      }
     }
   } catch (e) {
     console.log('[stt] error', e && e.message);
@@ -346,9 +400,10 @@ function initStreamingSTT() {
     const sttInstance = createStreamingSTT(settings, channel, {
       onTranscript: (ch, text) => {
         const turn = { channel: ch, text, ts: Date.now() };
-        pushTranscript(turn);
-        send('transcript', turn);
-        send('stt:final', { channel: ch, text });
+        if (pushTranscript(turn)) {
+          send('transcript', turn);
+          send('stt:final', { channel: ch, text });
+        }
       },
       onInterim: (ch, text) => {
         send('stt:interim', { channel: ch, text });
@@ -397,6 +452,15 @@ function stopStreamingSTT() {
 // -------- audio routing (streaming or batch) --------
 function routeAudio(channel, pcmBuffer) {
   const buf = Buffer.from(pcmBuffer);
+
+  // Send a normalized audio level (~20 Hz) so the renderer can drive the
+  // live-dot box-shadow in real time. RMS gate avoids noise-floor flicker.
+  const now = Date.now();
+  if (now - lastAudioLevelSent > 45) {
+    lastAudioLevelSent = now;
+    const level = Math.min(1, rms16(buf) / 2000);
+    if (level > 0.01 || state.capturing) send('audio:level', { level });
+  }
 
   if (localWhisperTranscriber) {
     localWhisperTranscriber.push(channel, buf);
@@ -492,11 +556,12 @@ async function runFeature(mode, userText) {
   let streamSettled = false; // drop stray tokens from a stream we've already abandoned
   try {
     const settings = store.getSettings();
+    const isWorkMode = settings.appMode === 'work';
     const llm = createLLM(settings);
     const userBubble = def.userBubble !== null
       ? def.userBubble
       : (mode === 'ask' ? userText : mode === 'answerThis' ? `"${(userText || '').slice(0, 60)}${userText && userText.length > 60 ? '…' : ''}"` : null);
-    const category = mode !== 'leetcode' ? detectCategory(transcript) : null;
+    const category = (!isWorkMode && mode !== 'leetcode') ? detectCategory(transcript) : null;
     send('llm:start', { userBubble, small: !!def.small, category });
 
     if (!llm.ready) {
@@ -522,9 +587,10 @@ async function runFeature(mode, userText) {
       }
     }
 
-    const settingsForPrompt = store.getSettings();
-    const contextBlock = buildInterviewContext(settingsForPrompt, mode, transcript);
-    const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '') : (def.system || '');
+    const contextBlock = isWorkMode
+      ? buildWorkContext(settings, mode, transcript)
+      : buildInterviewContext(settings, mode, transcript);
+    const system = def.buildSystem ? def.buildSystem(contextBlock, settings.aiRules || '') : (def.system || '');
     const built = def.build({ transcript, userText: userText || '' });
 
     // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
@@ -623,6 +689,25 @@ ipcMain.handle('transcript:clear', () => {
   return { ok: true };
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
+ipcMain.handle('llm:analyzeSentiment', async (_e, recentText) => {
+  const settings = store.getSettings();
+  const llmInst = createLLM(settings);
+  if (!llmInst || !llmInst.ready) return 'NO';
+  const system = "Analyze the following meeting transcript. Is there strong pushback, objections, or is the conversation going in circles? If YES, reply with a 1-sentence actionable suggestion for the user. If NO, reply EXACTLY with 'NO'.";
+  try {
+    let result = '';
+    await llmInst.stream({
+      system,
+      turns: [{ role: 'user', text: recentText }],
+      maxTokens: 50,
+      onToken: (t) => { result += t; }
+    });
+    return result.trim();
+  } catch (e) {
+    console.error('[sentiment]', e);
+    return 'NO';
+  }
+});
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
@@ -635,21 +720,30 @@ ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // #resume-text / #job-description textareas so settings keep a single source of truth.
 async function pickAndParseDocument() {
   const res = await dialog.showOpenDialog(win, {
-    properties: ['openFile'],
-    filters: [{ name: 'Resume / Job description', extensions: ['pdf', 'docx'] }]
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Documents', extensions: ['pdf', 'docx'] }]
   });
   if (res.canceled || !res.filePaths.length) return null;
-  const filePath = res.filePaths[0];
-  const text = await parseDocumentFile(filePath);
-  return { fileName: path.basename(filePath), text };
+
+  // Parse concurrently so one slow file doesn't stall the rest; each file succeeds
+  // or fails on its own so a single bad file doesn't discard the good ones.
+  const results = await Promise.allSettled(res.filePaths.map((filePath) =>
+    parseDocumentFile(filePath).then((text) => ({ fileName: path.basename(filePath), text }))
+  ));
+  const files = [], errors = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') files.push(r.value);
+    else errors.push({ fileName: path.basename(res.filePaths[i]), error: (r.reason && r.reason.message) || String(r.reason) });
+  });
+  return { files, errors };
 }
 ipcMain.handle('profile:pickDocument', async () => {
   try {
     const picked = await pickAndParseDocument();
     if (!picked) return { canceled: true };
-    return { canceled: false, fileName: picked.fileName, text: picked.text };
+    return { canceled: false, files: picked.files, errors: picked.errors };
   } catch (e) {
-    return { canceled: false, error: (e && e.message) || String(e) };
+    return { canceled: false, files: [], errors: [{ fileName: '(dialog)', error: (e && e.message) || String(e) }] };
   }
 });
 ipcMain.on('app:quit', () => app.quit());
@@ -776,9 +870,7 @@ function launchApp() {
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
       if (!sources.length) return callback();
-      const request = { video: sources[0] };
-      if (isWindows) request.audio = true;
-      else request.audio = 'loopback';
+      const request = { video: sources[0], audio: 'loopback' };
       callback(request);
     }).catch(() => callback());
   }, { useSystemPicker: false });

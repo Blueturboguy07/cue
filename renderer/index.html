@@ -7,6 +7,31 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- Mode selection screen (shown on first launch or when switching) -->
+  <div id="mode-select-scrim" class="hidden">
+    <div id="mode-select">
+      <div class="ms-wordmark"><span class="ms-mark" data-ic="logo" data-ic-size="16"></span><span class="ms-name">cue</span></div>
+      <h1 class="ms-title">How will you use cue?</h1>
+      <p class="ms-subtitle">Pick a mode. Switch anytime from Settings.</p>
+      <div class="ms-cards">
+        <button class="mode-card" id="mode-card-interview" data-mode="interview">
+          <span class="mc-ind" aria-hidden="true"><span class="mc-dot"></span>LISTENING</span>
+          <span class="mc-ic" data-ic="mic" data-ic-size="20"></span>
+          <span class="mc-title">Interview</span>
+          <span class="mc-desc">Real-time coaching for job interviews. Suggests answers, surfaces your stories, and tracks salary targets.</span>
+          <span class="mc-tags"><span>Live answers</span><span>Resume context</span><span>STAR stories</span></span>
+        </button>
+        <button class="mode-card" id="mode-card-work" data-mode="work">
+          <span class="mc-ind" aria-hidden="true"><span class="mc-dot"></span>LISTENING</span>
+          <span class="mc-ic" data-ic="briefcase" data-ic-size="20"></span>
+          <span class="mc-title">Work</span>
+          <span class="mc-desc">Your everyday work copilot. Assists in standups, drafts follow-ups, and keeps notes on your meetings.</span>
+          <span class="mc-tags"><span>Meeting assist</span><span>Follow-up drafts</span><span>Recaps</span></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div id="app">
     <!-- Dedicated drag handle / top bar -->
     <div id="toolbar" class="drag-handle">
@@ -16,10 +41,12 @@
       </div>
       <button class="tb-logo" id="logo-btn" title="cue"></button>
       <div class="tb-divider"></div>
+      <div id="mode-badge" class="tb-mode-badge" title="Current mode — click to switch">
+        <span id="mode-badge-icon"></span><span id="mode-badge-label"></span>
+      </div>
+      <div class="tb-divider"></div>
       <button class="tb-hide" id="hide-btn"><span class="chev"></span><span>Hide</span></button>
-      <div class="tb-divider"></div>
       <button class="tb-stop" id="stop-btn" title="Start / stop listening"></button>
-      <div class="tb-divider"></div>
       <button class="tb-quit" id="quit-btn" title="Quit cue (⌘⇧X)"></button>
     </div>
 
@@ -27,6 +54,12 @@
     <div id="panel-wrap">
       <span id="live-dot" class="off"></span>
       <div id="stt-status" class="stt-status stt-disconnected" title="STT connection status">off</div>
+
+      <!-- Work Mode recording indicator (visible only to user, not shared in screen share) -->
+      <div id="work-recording-indicator" class="hidden">
+        <span class="wri-dot"></span><span class="wri-label">REC</span>
+      </div>
+
       <div id="panel" class="glass no-drag">
 
         <!-- Two-column layout: responses (left) + live transcript sidebar (right) -->
@@ -37,21 +70,36 @@
             <div id="messages"></div>
 
             <div id="action-row">
-              <button class="act act-primary" data-mode="say"
-                title="Suggests what to say next based on the conversation">
-                <span class="ic"></span><span>What should I say?</span>
-                <span class="shortcut-hint" id="say-shortcut-hint"></span>
-              </button>
-              <span class="sep">•</span>
-              <button class="act act-secondary" data-mode="assist"
-                title="Scans your screen and conversation to decide what you need">
-                <span class="ic"></span><span>Assist</span>
-                <span class="shortcut-hint" id="assist-shortcut-hint"></span>
-              </button>
-              <span class="sep">•</span>
-              <button class="act" data-mode="followup"><span class="ic"></span><span>Follow-up</span></button>
-              <span class="sep">•</span>
-              <button class="act" data-mode="recap"><span class="ic"></span><span>Recap</span></button>
+              <!-- Mode-specific button groups: applyMode toggles .hidden instead of
+                   replacing innerHTML, so buttons added by other features survive. -->
+              <span class="mode-btns interview-btns">
+                <button class="act act-primary" data-mode="say" data-ic="wand-sparkles"
+                  title="Suggests what to say next based on the conversation">
+                  <span class="ic"></span><span>What should I say?</span>
+                  <span class="shortcut-hint" id="say-shortcut-hint"></span>
+                </button>
+                <span class="sep"></span>
+                <button class="act act-secondary" data-mode="assist" data-ic="sparkles"
+                  title="Scans your screen and conversation to decide what you need">
+                  <span class="ic"></span><span>Assist</span>
+                  <span class="shortcut-hint" id="assist-shortcut-hint"></span>
+                </button>
+                <span class="sep"></span>
+                <button class="act" data-mode="followup" data-ic="message-circle"><span class="ic"></span><span>Follow-up</span></button>
+                <span class="sep"></span>
+                <button class="act" data-mode="recap" data-ic="refresh-cw"><span class="ic"></span><span>Recap</span></button>
+              </span>
+              <span class="mode-btns work-btns hidden">
+                <button class="act act-primary" data-mode="assist" data-ic="sparkles"
+                  title="Scans your screen and meeting audio to suggest your next response">
+                  <span class="ic"></span><span>Live Assist</span>
+                  <span class="shortcut-hint" id="work-assist-shortcut-hint"></span>
+                </button>
+                <span class="sep"></span>
+                <button class="act" data-mode="followup" data-ic="message-circle"><span class="ic"></span><span>Draft Follow-up</span></button>
+                <span class="sep"></span>
+                <button class="act" data-mode="recap" data-ic="refresh-cw"><span class="ic"></span><span>Recap &amp; Tasks</span></button>
+              </span>
             </div>
 
             <div id="composer">
@@ -68,14 +116,9 @@
               </div>
             </div>
 
-            <div id="prep-status" class="prep-status">
-              <span class="prep-item" data-field="resume">📄 Resume</span>
-              <span class="prep-item" data-field="jd">💼 JD</span>
-              <span class="prep-item" data-field="stories">🎯 Stories</span>
-              <span class="prep-item" data-field="salary">💰 Salary</span>
-            </div>
+            <!-- Populated by JS based on active mode -->
+            <div id="prep-status" class="prep-status"></div>
           </div>
-
         </div><!-- /panel-columns -->
       </div>
     </div>
@@ -96,7 +139,7 @@
   </div>
 
   <!-- Settings -->
-  <div id="settings-scrim" class="hidden">
+  <div id="settings-scrim">
     <div id="settings" class="glass">
       <div class="s-head">
         <div class="s-title">Settings</div>
@@ -105,18 +148,20 @@
 
       <!-- Tab bar -->
       <div class="s-tabs">
-        <button class="s-tab on" data-tab="keys">🔑 Keys</button>
-        <button class="s-tab" data-tab="transcription">Audio</button>
-        <button class="s-tab" data-tab="profile">📄 Profile</button>
-        <button class="s-tab" data-tab="prep">🎯 Interview Prep</button>
-        <button class="s-tab" data-tab="style">✨ Style</button>
-        <button class="s-tab" data-tab="qa">💬 Q&amp;A</button>
+        <button class="s-tab on" data-tab="keys"><span class="s-tab-ic" data-ic="key"></span><span>Keys</span></button>
+        <button class="s-tab" data-tab="transcription"><span class="s-tab-ic" data-ic="audio-lines"></span><span>Audio</span></button>
+        <button class="s-tab s-tab-interview" data-tab="profile"><span class="s-tab-ic" data-ic="file-text"></span><span>Profile</span></button>
+        <button class="s-tab s-tab-work hidden" data-tab="team"><span class="s-tab-ic" data-ic="users"></span><span>Team</span></button>
+        <button class="s-tab s-tab-interview" data-tab="prep"><span class="s-tab-ic" data-ic="target"></span><span>Interview Prep</span></button>
+        <button class="s-tab s-tab-work hidden" data-tab="work"><span class="s-tab-ic" data-ic="clipboard-list"></span><span>Work Context</span></button>
+        <button class="s-tab" data-tab="style"><span class="s-tab-ic" data-ic="palette"></span><span>Style</span></button>
+        <button class="s-tab s-tab-interview" data-tab="qa"><span class="s-tab-ic" data-ic="help-circle"></span><span>Q&amp;A</span></button>
       </div>
 
       <!-- Tab: Keys -->
       <div class="s-body s-tab-pane" data-pane="keys">
         <label class="s-label">Provider</label>
-        <div class="s-seg" id="provider-seg">
+        <div class="s-seg s-seg-wrap" id="provider-seg">
           <button data-provider="openai">OpenAI</button>
           <button data-provider="anthropic">Anthropic</button>
           <button data-provider="gemini">Gemini</button>
@@ -128,12 +173,18 @@
         </div>
 
         <label class="s-label">API keys &amp; URLs <span class="s-hint">stored locally · never sent to any server</span></label>
-        <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
-        <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
-        <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
+        <div class="api-keys-grid">
+          <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
+          <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
+          <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
+          <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
+          <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
+          <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
+          <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
+          <div class="s-field"><span>Azure AI</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
+          <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
+          <div class="s-field"><span>Azure URL</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
+        </div>
 
         <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
         <div class="s-seg" id="minimax-region-seg">
@@ -146,12 +197,6 @@
           <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
           <div class="s-help">Your Custom key and LLM requests are sent to this URL. Speech-to-text continues to use Deepgram, OpenAI, or Gemini.</div>
         </div>
-        <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
-        <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
-        <div class="s-field"><span>Azure AI Foundry</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
-
-        <label class="s-label">Azure endpoint <span class="s-hint">Azure OpenAI: https://&lt;resource&gt;.openai.azure.com/openai · AI Foundry: https://&lt;host&gt;.cognitiveservices.azure.com (cue adds /openai/v1)</span></label>
-        <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
 
         <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
         <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
@@ -161,6 +206,10 @@
         <div class="s-callers" id="applink-callers"></div>
 
         <div class="s-status" id="s-status"></div>
+
+        <div class="s-switch-mode">
+          <button id="switch-mode-btn" class="s-switch-btn">⇄ Switch Mode</button>
+        </div>
       </div>
 
       <!-- Tab: Transcription -->
@@ -217,12 +266,32 @@
       <!-- Tab: Profile -->
       <div class="s-body s-tab-pane hidden" data-pane="profile">
         <label class="s-label">Your resume <span class="s-hint">paste full resume, or import a PDF/DOCX</span></label>
-        <div class="s-field s-upload"><span class="s-filename" id="resume-filename"></span><button class="s-upload-btn" id="upload-resume-btn">Import PDF/DOCX</button></div>
+        <div class="s-field s-upload">
+          <span class="s-filename" id="resume-filename"></span>
+          <button class="s-upload-btn" id="upload-resume-btn">Import PDF/DOCX</button>
+          <button class="s-action danger hidden" id="clear-resume-btn" title="Clear">✖</button>
+        </div>
         <textarea id="resume-text" rows="7" spellcheck="false" placeholder="Paste your full resume here. cue will extract Name, Summary, Experience, Skills, Projects, and Education automatically."></textarea>
 
         <label class="s-label">Target job description <span class="s-hint">optional — every answer gets tailored to this role</span></label>
-        <div class="s-field s-upload"><span class="s-filename" id="jd-filename"></span><button class="s-upload-btn" id="upload-jd-btn">Import PDF/DOCX</button></div>
+        <div class="s-field s-upload">
+          <span class="s-filename" id="jd-filename"></span>
+          <button class="s-upload-btn" id="upload-jd-btn">Import PDF/DOCX</button>
+          <button class="s-action danger hidden" id="clear-jd-btn" title="Clear">✖</button>
+        </div>
         <textarea id="job-description" rows="5" spellcheck="false" placeholder="Paste the job description for the role you're interviewing for. cue will highlight your most relevant experience."></textarea>
+      </div>
+
+      <!-- Tab: Team -->
+      <div class="s-body s-tab-pane hidden" data-pane="team">
+        <label class="s-label">Team roster <span class="s-hint">who's who and their roles</span></label>
+        <textarea id="team-roster" rows="4" spellcheck="false" placeholder="e.g. Alice (Tech Lead), Bob (Backend), Charlie (Design)."></textarea>
+
+        <label class="s-label">Manager notes <span class="s-hint">name, communication style, current priorities</span></label>
+        <textarea id="manager-notes" rows="3" spellcheck="false" placeholder="e.g. Sarah prefers concise updates and focuses heavily on sprint velocity."></textarea>
+
+        <label class="s-label">Key stakeholders <span class="s-hint">people outside your immediate team</span></label>
+        <textarea id="key-stakeholders" rows="3" spellcheck="false" placeholder="e.g. Dave from Marketing needs to be kept in the loop on feature X releases."></textarea>
       </div>
 
       <!-- Tab: Interview Prep -->
@@ -240,6 +309,51 @@
         <textarea id="work-style" rows="3" spellcheck="false" placeholder="e.g. I prefer data-driven decisions, work well with autonomy, value direct feedback, thrive in fast-paced environments..."></textarea>
       </div>
 
+      <!-- Tab: Work Context -->
+      <div class="s-body s-tab-pane hidden" data-pane="work">
+        <label class="s-label">Work Persona <span class="s-hint">how cue should behave during meetings</span></label>
+        <div class="s-seg" id="work-persona-seg" style="margin-bottom: 8px;">
+          <button data-persona="participant">Participant</button>
+          <button data-persona="leader">Leader</button>
+        </div>
+
+        <label class="s-label">Work role &amp; team <span class="s-hint">your role, team, and current projects — used for in-meeting suggestions</span></label>
+        <textarea id="work-context" rows="4" spellcheck="false" placeholder="e.g. I'm a senior engineer on the Payments team at Acme Corp. We're currently migrating from a monolith to microservices. My focus is the checkout service."></textarea>
+
+        <label class="s-label">Project notes <span class="s-hint">paste relevant docs, specs, or notes — cue surfaces these during meetings</span></label>
+        <div class="s-field s-upload" style="margin-bottom:4px">
+          <span class="s-filename" id="project-notes-filename"></span>
+          <button class="s-upload-btn" id="upload-project-notes-btn">Import PDF/DOCX</button>
+          <button class="s-action danger hidden" id="clear-project-notes-btn" title="Clear">✖</button>
+        </div>
+        <textarea id="project-notes" rows="6" spellcheck="false" placeholder="Paste project specs, PRD excerpts, meeting context, or anything cue should know about your current work."></textarea>
+
+        <label class="s-label">Meeting notes context <span class="s-hint">optional standing agenda or recurring talking points</span></label>
+        <textarea id="meeting-notes-context" rows="3" spellcheck="false" placeholder="e.g. Weekly standup: what I did, what I'm doing, blockers. Retrospective: what went well, what to improve."></textarea>
+
+        <div class="s-toggle-row">
+          <div>
+            <div class="s-label" style="margin-top:0">Save meeting transcripts <span class="s-hint">optional — stores transcripts locally on your device</span></div>
+            <div class="s-hint-block" style="margin-top:4px">When enabled, transcripts are saved to a local file on your device only. Nothing is sent to any server. Useful for generating follow-ups after a call. <strong>Inform meeting participants</strong> if required by your local laws.</div>
+          </div>
+          <label class="s-toggle" for="persist-transcripts-toggle">
+            <input type="checkbox" id="persist-transcripts-toggle" role="switch" aria-label="Save meeting transcripts" />
+            <span class="s-toggle-track"><span class="s-toggle-thumb"></span></span>
+          </label>
+        </div>
+
+        <div class="s-toggle-row">
+          <div>
+            <div class="s-label" style="margin-top:0">Enable Pushback &amp; Sentiment Detection <span class="s-hint">optional — background analysis</span></div>
+            <div class="s-hint-block" style="margin-top:4px">When enabled, cue will periodically send snippets of your meeting transcript to the AI in the background to detect pushback and suggest responses. <strong>Warning:</strong> This will continuously ping your LLM API during a meeting and may incur higher API costs.</div>
+          </div>
+          <label class="s-toggle" for="enable-sentiment-toggle">
+            <input type="checkbox" id="enable-sentiment-toggle" role="switch" aria-label="Enable sentiment detection" />
+            <span class="s-toggle-track"><span class="s-toggle-thumb"></span></span>
+          </label>
+        </div>
+      </div>
+
       <!-- Tab: Q&A -->
       <div class="s-body s-tab-pane hidden" data-pane="qa">
         <label class="s-label">Salary target <span class="s-hint">used when asked about compensation</span></label>
@@ -247,6 +361,17 @@
 
         <label class="s-label" style="margin-top:14px;">Questions to ask the interviewer <span class="s-hint">cue will suggest these at the end</span></label>
         <textarea id="questions-to-ask" rows="6" spellcheck="false" placeholder="e.g.&#10;- What does success look like in the first 90 days?&#10;- How does the team handle technical debt?&#10;- What's the biggest challenge the team is facing right now?&#10;- How does feedback and mentorship work here?"></textarea>
+
+        <div class="s-toggle-row" style="margin-top: 14px;">
+          <div>
+            <div class="s-label" style="margin-top:0">Auto-Answer (Mock Interviews) <span class="s-hint">experimental</span></div>
+            <div class="s-hint-block" style="margin-top:4px">Automatically generate a response when cue detects the interviewer has finished asking a question. Recommended for mock interviews only.</div>
+          </div>
+          <label class="s-toggle" for="auto-answer-toggle">
+            <input type="checkbox" id="auto-answer-toggle" role="switch" aria-label="Enable auto-answer" />
+            <span class="s-toggle-track"><span class="s-toggle-thumb"></span></span>
+          </label>
+        </div>
       </div>
 
       <!-- Tab: Style -->
@@ -264,7 +389,6 @@
           These rules tell cue <strong>how</strong> to write, not <strong>what</strong> to say. Use one imperative sentence per line (e.g. <em>Never use em-dashes.</em>). They apply to every mode except coding-problem solves (LeetCode), which stays strict. Stored locally; never sent anywhere except the AI provider when cue answers a question.
         </div>
       </div>
-
 
     </div>
   </div>
@@ -294,13 +418,15 @@
       <div class="cs-title" id="cs-title"></div>
       <div class="cs-body" id="cs-body"></div>
       <div class="cs-actions">
-        <button id="cs-deny" class="ob-ghost">Don’t allow</button>
+        <button id="cs-deny" class="ob-ghost">Don't allow</button>
         <button id="cs-allow" class="ob-primary">Allow</button>
       </div>
     </div>
   </div>
 
   <script src="icons.js"></script>
+  <script src="settings-schema.js"></script>
+  <script src="document-intake.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

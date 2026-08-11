@@ -29,3 +29,7 @@ test-resume.js
 
 # Electron dist cache
 node_modules/electron/dist/electron.exe.bak
+
+#Buff Skills
+.freebuff
+*freebuff

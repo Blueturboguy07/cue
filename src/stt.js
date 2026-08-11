@@ -13,6 +13,21 @@ function looksLikeHallucination(raw) {
   const trimmed = (raw || '').trim();
   if (!trimmed) return true;
   if (/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\s]+$/u.test(trimmed)) return true;
+  
+  // Acoustic echo / stuttering hallucination detection (e.g. "my my my", "going going going")
+  if (/\b(\w+)(?:\s+\1){2,}\b/i.test(trimmed)) return true;
+  
+  // Stuttering hallucination with pairs (e.g. "coming coming to our our weekly weekly")
+  const pairs = trimmed.match(/\b(\w+)\s+\1\b/gi) || [];
+  const glued = trimmed.match(/\b(\w{3,})\1\b/gi) || [];
+  if (pairs.length + glued.length >= 2) {
+    if ((pairs.length + glued.length) >= 3 || trimmed.split(/\s+/).length <= 6) return true;
+  }
+
+  
+  // URL hallucination detection (e.g. ".u.u.comcomcom")
+  if (/(?:\.u\.u\.|comcomcom|www\.www)/i.test(trimmed)) return true;
+
   const t = trimmed.replace(/[.,!?…]+$/g, '').trim().toLowerCase();
   const artifacts = new Set([
     'thank you', 'thank you very much', 'thank you for watching', 'thanks for watching',
