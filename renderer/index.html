@@ -72,21 +72,36 @@
             <div id="messages"></div>
 
             <div id="action-row">
-              <button class="act act-primary" data-mode="say"
-                title="Suggests what to say next based on the conversation">
-                <span class="ic"></span><span>What should I say?</span>
-                <span class="shortcut-hint" id="say-shortcut-hint"></span>
-              </button>
-              <span class="sep">•</span>
-              <button class="act act-secondary" data-mode="assist"
-                title="Scans your screen and conversation to decide what you need">
-                <span class="ic"></span><span>Assist</span>
-                <span class="shortcut-hint" id="assist-shortcut-hint"></span>
-              </button>
-              <span class="sep">•</span>
-              <button class="act" data-mode="followup"><span class="ic"></span><span>Follow-up</span></button>
-              <span class="sep">•</span>
-              <button class="act" data-mode="recap"><span class="ic"></span><span>Recap</span></button>
+              <!-- Mode-specific button groups: applyMode toggles .hidden instead of
+                   replacing innerHTML, so buttons added by other features survive. -->
+              <span class="mode-btns interview-btns">
+                <button class="act act-primary" data-mode="say" data-ic="wand-sparkles"
+                  title="Suggests what to say next based on the conversation">
+                  <span class="ic"></span><span>What should I say?</span>
+                  <span class="shortcut-hint" id="say-shortcut-hint"></span>
+                </button>
+                <span class="sep">•</span>
+                <button class="act act-secondary" data-mode="assist" data-ic="sparkles"
+                  title="Scans your screen and conversation to decide what you need">
+                  <span class="ic"></span><span>Assist</span>
+                  <span class="shortcut-hint" id="assist-shortcut-hint"></span>
+                </button>
+                <span class="sep">•</span>
+                <button class="act" data-mode="followup" data-ic="message-circle"><span class="ic"></span><span>Follow-up</span></button>
+                <span class="sep">•</span>
+                <button class="act" data-mode="recap" data-ic="refresh-cw"><span class="ic"></span><span>Recap</span></button>
+              </span>
+              <span class="mode-btns work-btns hidden">
+                <button class="act act-primary" data-mode="assist" data-ic="sparkles"
+                  title="Scans your screen and meeting audio to suggest your next response">
+                  <span class="ic"></span><span>Live Assist</span>
+                  <span class="shortcut-hint" id="work-assist-shortcut-hint"></span>
+                </button>
+                <span class="sep">•</span>
+                <button class="act" data-mode="followup" data-ic="message-circle"><span class="ic"></span><span>Draft Follow-up</span></button>
+                <span class="sep">•</span>
+                <button class="act" data-mode="recap" data-ic="refresh-cw"><span class="ic"></span><span>Recap &amp; Tasks</span></button>
+              </span>
             </div>
 
             <div id="composer">
@@ -413,6 +428,7 @@
 
   <script src="icons.js"></script>
   <script src="settings-schema.js"></script>
+  <script src="document-intake.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

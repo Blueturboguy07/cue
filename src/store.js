@@ -4,13 +4,26 @@ const path = require('path');
 const { app } = require('electron');
 const { normalizeBaseUrl } = require('./openai-compatible');
 
-const FILE = path.join(app.getPath('userData'), 'cue-data.json');
+// Test seam: a temp data file keeps tests from touching the real user data.
+const FILE = process.env.CUE_DATA_FILE || path.join(app.getPath('userData'), 'cue-data.json');
 
 // Cap on the user's custom response rules. Generous but bounded: anything longer
 // should live in a real prompt file, not in a settings field.
 const MAX_AI_RULES_CHARS = 2000;
 
+// Schema versioning: cue-data.json is upgraded through MIGRATIONS when the on-disk
+// version is older than the code's. When a setting shape changes, bump this and add
+// a migration for the previous version — never mutate DEFAULTS silently, or stored
+// data drifts (the exact bug class the settings schema table fixes).
+const SCHEMA_VERSION = 1;
+
+const MIGRATIONS = {
+  // 0 -> 1: first versioned release; no shape changes yet — defaults fill the gaps.
+  0: (data) => data
+};
+
 const DEFAULTS = {
+  schemaVersion: SCHEMA_VERSION,
   provider: 'openai',
   sttProvider: 'auto',
   localWhisper: {
@@ -86,16 +99,27 @@ function deepMerge(base, over) {
 
 function load() {
   if (data) return data;
-  try { data = deepMerge(DEFAULTS, JSON.parse(fs.readFileSync(FILE, 'utf8'))); }
-  catch { data = deepMerge(DEFAULTS, {}); }
-
-
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch { raw = null; }
+  let version = raw && typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 0;
+  if (version < SCHEMA_VERSION) {
+    for (let v = version; v < SCHEMA_VERSION; v++) {
+      const migrate = MIGRATIONS[v];
+      if (migrate) raw = migrate(raw || {});
+    }
+    data = deepMerge(DEFAULTS, raw || {});
+    data.schemaVersion = SCHEMA_VERSION;
+  } else {
+    data = deepMerge(DEFAULTS, raw || {});
+  }
   return data;
 }
 function save() { try { fs.writeFileSync(FILE, JSON.stringify(data, null, 2)); } catch (e) { /* ignore */ } }
 
 module.exports = {
   MAX_AI_RULES_CHARS,
+  SCHEMA_VERSION,
+  MIGRATIONS,
   getSettings() { return load(); },
   setSettings(patch) {
     load();

@@ -823,14 +823,6 @@ button:focus { outline: none; }
 .tc-them { color: rgba(255,255,255,0.75); }
 .tc-interim { font-style: italic; color: var(--tx-mut); }
 .transcript-placeholder { color: var(--tx-mut); font-size: 12px; font-style: italic; padding: 4px 0; }
-/* Toast */
-#toast {
-  display: none; position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
-  background: rgba(34,197,94,0.18); border: 1px solid rgba(34,197,94,0.35);
-  color: #a7f3c8; font-size: 12.5px; padding: 7px 16px; border-radius: var(--r-pill);
-  z-index: 50; white-space: nowrap; pointer-events: none;
-}
-#toast.show { display: block; animation: fadeUp 200ms ease both; }
 .act-clear:hover { color: #fca5a5 !important; background: rgba(239,68,68,0.08) !important; }
 
 /* ============================ Prep status ============================ */

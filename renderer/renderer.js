@@ -1,6 +1,7 @@
 /* cue renderer — UI state, mic capture, IPC, streaming render. */
 (function () {
   const { icon } = window.ICONS;
+  const DI = window.CueDocumentIntake; // pure intake state machine (document-intake.js)
   const cue = window.cue; // exposed by preload
   const $ = (s) => document.querySelector(s);
   const isWindows = cue.platform === 'win32';
@@ -11,10 +12,11 @@
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
   $('#quit-btn').innerHTML = icon('x', { size: 14 });
-  document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
-  document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
-  document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
-  document.querySelector('.act[data-mode="recap"] .ic').innerHTML = icon('refresh-cw', { size: 16 });
+  // Paint icons on action buttons via data-ic so both interview and work sets get painted.
+  document.querySelectorAll('.act[data-ic] .ic').forEach((el) => {
+    const icName = el.closest('.act') && el.closest('.act').dataset.ic;
+    if (icName) el.innerHTML = icon(icName, { size: 16 });
+  });
   $('#smart-toggle .ic').innerHTML = icon('zap', { size: 14 });
   $('#more-btn').innerHTML = icon('more-horizontal', { size: 18 });
   $('#send-btn').innerHTML = icon('play', { size: 15 });
@@ -124,28 +126,6 @@
     }
   }
 
-  // ---- toast helper ------------------------------------------------------
-  // FIX #7: Toast queue system — ensures latest toast wins cleanly without stacking
-  let toastTimer = null;
-  let toastFadeTimer = null;
-  function showToast(message, ms) {
-    let el = document.getElementById('toast');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'toast';
-      document.getElementById('app').appendChild(el);
-    }
-    // Clear any pending timers to prevent overlap
-    clearTimeout(toastTimer);
-    clearTimeout(toastFadeTimer);
-    // Immediately update content (no stacking)
-    el.textContent = message;
-    el.classList.add('show');
-    toastTimer = setTimeout(() => {
-      el.classList.remove('show');
-    }, ms);
-  }
-
   // ---- mode selection ----------------------------------------------------
   const modeSelectScrim = $('#mode-select-scrim');
 
@@ -170,41 +150,13 @@
 
   function applyMode(mode) {
     const isWork = mode === 'work';
-    const actionRow = $('#action-row');
 
-    if (isWork) {
-      actionRow.innerHTML = [
-        `<button class="act act-primary" data-mode="assist" title="Scans your screen and meeting audio to suggest your next response"><span class="ic" id="ic-assist"></span><span>Live Assist</span><span class="shortcut-hint" id="assist-shortcut-hint"></span></button>`,
-        `<span class="sep">•</span>`,
-        `<button class="act" data-mode="followup"><span class="ic" id="ic-followup"></span><span>Draft Follow-up</span></button>`,
-        `<span class="sep">•</span>`,
-        `<button class="act" data-mode="recap"><span class="ic" id="ic-recap"></span><span>Recap &amp; Tasks</span></button>`
-      ].join('');
-    } else {
-      actionRow.innerHTML = [
-        `<button class="act act-primary" data-mode="say" title="Suggests what to say next based on the conversation"><span class="ic" id="ic-say"></span><span>What should I say?</span><span class="shortcut-hint" id="say-shortcut-hint"></span></button>`,
-        `<span class="sep">•</span>`,
-        `<button class="act act-secondary" data-mode="assist" title="Scans your screen and conversation to decide what you need"><span class="ic" id="ic-assist"></span><span>Assist</span><span class="shortcut-hint" id="assist-shortcut-hint"></span></button>`,
-        `<span class="sep">•</span>`,
-        `<button class="act" data-mode="followup"><span class="ic" id="ic-followup"></span><span>Follow-up</span></button>`,
-        `<span class="sep">•</span>`,
-        `<button class="act" data-mode="recap"><span class="ic" id="ic-recap"></span><span>Recap</span></button>`
-      ].join('');
-    }
-
-    // Re-paint icons after rebuilding action row
-    const icMap = {
-      'ic-say':        () => document.getElementById('ic-say')        && (document.getElementById('ic-say').innerHTML        = icon('wand-sparkles',  { size: 16 })),
-      'ic-assist':     () => document.getElementById('ic-assist')     && (document.getElementById('ic-assist').innerHTML     = icon('sparkles',       { size: 16 })),
-      'ic-followup':   () => document.getElementById('ic-followup')   && (document.getElementById('ic-followup').innerHTML   = icon('message-circle', { size: 16 })),
-      'ic-recap':      () => document.getElementById('ic-recap')      && (document.getElementById('ic-recap').innerHTML      = icon('refresh-cw',     { size: 16 }))
-    };
-    Object.values(icMap).forEach((fn) => fn());
-
-    // Re-bind action buttons (they were re-created)
-    actionRow.querySelectorAll('.act').forEach((btn) => {
-      if (btn.dataset.mode) btn.addEventListener('click', () => runMode(btn.dataset.mode, ''));
-    });
+    // Show/hide the static mode-specific button groups instead of rebuilding
+    // innerHTML — buttons added by other features survive mode switches.
+    const intBtns = document.querySelector('.interview-btns');
+    const workBtns = document.querySelector('.work-btns');
+    if (intBtns) intBtns.classList.toggle('hidden', isWork);
+    if (workBtns) workBtns.classList.toggle('hidden', !isWork);
 
     // Prep status bar
     const prepStatus = $('#prep-status');
@@ -228,11 +180,13 @@
     document.querySelectorAll('.s-tab-interview').forEach((t) => t.classList.toggle('hidden', isWork));
     document.querySelectorAll('.s-tab-work').forEach((t) => t.classList.toggle('hidden', !isWork));
 
-    // Shortcut hints (they're re-created in DOM)
+    // Shortcut hints
     const sayHintEl = document.getElementById('say-shortcut-hint');
     const assistHintEl = document.getElementById('assist-shortcut-hint');
+    const workAssistHintEl = document.getElementById('work-assist-shortcut-hint');
     if (sayHintEl) sayHintEl.textContent = isWindows ? 'Ctrl+Shift+↵' : '⌘⇧↵';
     if (assistHintEl) assistHintEl.textContent = isWindows ? 'Ctrl+↵' : '⌘↵';
+    if (workAssistHintEl) workAssistHintEl.textContent = isWindows ? 'Ctrl+↵' : '⌘↵';
 
     updatePrepStatus();
 
@@ -1361,17 +1315,40 @@
     refreshWhisperModels();
   }
   // Only close when the save actually succeeded, so a failed save surfaces its
-  // error instead of silently discarding the user's edits.
+  // error instead of silently discarding the user's edits. Returns the save result
+  // so callers (the mode switch) can wait for a successful save before moving on.
   async function closeSettings() {
-    if (await saveSettings()) scrim.classList.add('hidden');
+    const ok = await saveSettings();
+    if (ok) scrim.classList.add('hidden');
+    return ok;
   }
   $('#more-btn').addEventListener('click', openSettings);
   $('#quit-btn').addEventListener('click', () => { cue.quit(); });
   $('#s-close').addEventListener('click', () => { void closeSettings(); });
   scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
 
+  // Sentiment detection: a one-time cost confirmation when the toggle is flipped
+  // on, so users understand the ongoing API usage before enabling it.
+  const sentimentToggle = $('#enable-sentiment-toggle');
+  if (sentimentToggle) sentimentToggle.addEventListener('change', (e) => {
+    if (!e.target.checked) return;
+    const provider = (settings && settings.provider) || 'OpenAI';
+    const model = (settings && settings.models && settings.models[settings.provider] && settings.models[settings.provider].fast) || 'default';
+    const confirmed = confirm(
+      'Enable background sentiment detection?\n\n' +
+      'This will periodically send transcript snippets to your AI provider (' + provider + ' / ' + model + ') ' +
+      'during meetings. This may increase API costs.\n\n' +
+      'You can disable it anytime in Settings → Q&A.'
+    );
+    if (!confirmed) e.target.checked = false;
+  });
+
   const switchModeBtn = document.getElementById('switch-mode-btn');
-  if (switchModeBtn) switchModeBtn.addEventListener('click', () => { void closeSettings().then(showModeSelect); });
+  if (switchModeBtn) switchModeBtn.addEventListener('click', () => {
+    // Show the mode picker only after a successful save — otherwise the failed
+    // save keeps the settings scrim open and both scrims would stack.
+    void closeSettings().then((ok) => { if (ok) showModeSelect(); });
+  });
 
   // Fill lucide icons (settings tabs, mode cards, mode-screen logo mark) — the
   // app's icon system, not emoji. Per-element size via data-ic-size.
@@ -1450,25 +1427,15 @@
   // file list is metadata over it. Each row knows which file contributed which text,
   // so removing a row can surgically remove just that text without ever clobbering
   // pasted or previously saved content. The lists themselves are persisted too, so
-  // the rows and the ✖ buttons survive an app restart.
+  // the rows and the ✖ buttons survive an app restart. The state machine itself is
+  // pure and lives in renderer/document-intake.js; this file holds only the DOM
+  // wiring and the session state.
   let sessionFiles = { projectNotes: [], resume: [], jd: [] };
   const FILE_FIELDS = {
-    projectNotes: { container: '#project-notes-filename', textarea: '#project-notes', clearBtn: '#clear-project-notes-btn', label: 'Document' },
-    resume: { container: '#resume-filename', textarea: '#resume-text', clearBtn: '#clear-resume-btn', label: 'Resume' },
-    jd: { container: '#jd-filename', textarea: '#job-description', clearBtn: '#clear-jd-btn', label: 'Job description' }
+    projectNotes: { container: '#project-notes-filename', textarea: '#project-notes', clearBtn: '#clear-project-notes-btn' },
+    resume: { container: '#resume-filename', textarea: '#resume-text', clearBtn: '#clear-resume-btn' },
+    jd: { container: '#jd-filename', textarea: '#job-description', clearBtn: '#clear-jd-btn' }
   };
-
-  // Remove fileText from a field value. File text is appended verbatim on import, so
-  // the last occurrence is the file's own copy; if the user edited it away, the value
-  // is left untouched (the row is still removed — the content is already gone).
-  function removeFileText(value, fileText) {
-    if (!fileText) return value;
-    const idx = value.lastIndexOf(fileText);
-    if (idx === -1) return value;
-    const before = value.slice(0, idx).replace(/[ \t]*\n+[ \t]*$/, '');
-    const after = value.slice(idx + fileText.length).replace(/^[ \t]*\n+[ \t]*/, '');
-    return (before + '\n\n' + after).replace(/\n{3,}/g, '\n\n').trim();
-  }
 
   function renderFileList(type) {
     const f = FILE_FIELDS[type];
@@ -1499,11 +1466,11 @@
   function syncClearButton(type) {
     const f = FILE_FIELDS[type];
     if (!f) return;
-    $(f.clearBtn).classList.toggle('hidden', !$(f.textarea).value.trim().length);
+    $(f.clearBtn).classList.toggle('hidden', !DI.hasContent($(f.textarea).value));
   }
 
   function loadSessionFiles(type, list) {
-    sessionFiles[type] = Array.isArray(list) ? list.map((x) => ({ fileName: x.fileName, text: x.text })) : [];
+    sessionFiles[type] = DI.sanitizeList(list);
     renderFileList(type);
   }
 
@@ -1516,10 +1483,10 @@
       const btn = e.target.closest && e.target.closest('button[data-del]');
       if (!btn || btn.dataset.del !== type) return;
       const idx = parseInt(btn.dataset.idx, 10);
-      const file = sessionFiles[type][idx];
-      if (!file) return;
-      $(f.textarea).value = removeFileText($(f.textarea).value, file.text);
-      sessionFiles[type].splice(idx, 1);
+      if (!sessionFiles[type][idx]) return;
+      const { list, value } = DI.deleteFile(sessionFiles[type], idx, $(f.textarea).value);
+      sessionFiles[type] = list;
+      $(f.textarea).value = value;
       renderFileList(type);
     });
   }
@@ -1533,50 +1500,48 @@
     const f = FILE_FIELDS[type];
     const res = await cue.pickProfileDocument();
     if (!res || res.canceled) return;
-    if (res.error && !res.files) { showStatus(f.label + ' import failed: ' + res.error); return; }
+    if (res.error && !res.files) { showStatus(DI.FIELD_LABELS[type] + ' import failed: ' + res.error); return; }
     const files = res.files || [];
     const errors = res.errors || [];
     if (files.length) {
-      sessionFiles[type].push(...files);
-      const added = files.map((x) => x.text).filter(Boolean).join('\n\n');
+      const { list, addedText } = DI.appendFiles(sessionFiles[type], files);
+      sessionFiles[type] = list;
       const textarea = $(f.textarea);
-      if (added) textarea.value = textarea.value.trim() ? textarea.value.trim() + '\n\n' + added : added;
+      textarea.value = DI.mergeIntoValue(textarea.value, addedText);
       renderFileList(type);
     }
-    if (errors.length) {
-      const first = errors[0];
-      showStatus(f.label + ' import: ' + files.length + ' of ' + (files.length + errors.length) + ' succeeded; ' + first.fileName + ' failed — ' + first.error);
-    } else if (files.length) {
-      const name = files.length > 1 ? files.length + ' files' : files[0].fileName;
-      showStatus('Imported ' + name + ' — press Done to save.');
-    }
+    const message = DI.importStatus(type, files, errors);
+    if (message) showStatus(message);
   }
 
   const uploadProjectNotesBtn = document.getElementById('upload-project-notes-btn');
   if (uploadProjectNotesBtn) uploadProjectNotesBtn.addEventListener('click', () => void importDocuments('projectNotes'));
   const clearProjectNotesBtn = document.getElementById('clear-project-notes-btn');
   if (clearProjectNotesBtn) clearProjectNotesBtn.addEventListener('click', () => {
-    sessionFiles.projectNotes = [];
+    const { list, value } = DI.clearField();
+    sessionFiles.projectNotes = list;
+    $('#project-notes').value = value;
     renderFileList('projectNotes');
-    $('#project-notes').value = '';
   });
 
   const uploadResumeBtn = document.getElementById('upload-resume-btn');
   if (uploadResumeBtn) uploadResumeBtn.addEventListener('click', () => void importDocuments('resume'));
   const clearResumeBtn = document.getElementById('clear-resume-btn');
   if (clearResumeBtn) clearResumeBtn.addEventListener('click', () => {
-    sessionFiles.resume = [];
+    const { list, value } = DI.clearField();
+    sessionFiles.resume = list;
+    $('#resume-text').value = value;
     renderFileList('resume');
-    $('#resume-text').value = '';
   });
 
   const uploadJdBtn = document.getElementById('upload-jd-btn');
   if (uploadJdBtn) uploadJdBtn.addEventListener('click', () => void importDocuments('jd'));
   const clearJdBtn = document.getElementById('clear-jd-btn');
   if (clearJdBtn) clearJdBtn.addEventListener('click', () => {
-    sessionFiles.jd = [];
+    const { list, value } = DI.clearField();
+    sessionFiles.jd = list;
+    $('#job-description').value = value;
     renderFileList('jd');
-    $('#job-description').value = '';
   });
 
   function statusText() {
@@ -1976,7 +1941,10 @@
   })();
 
   // ============================ Toasts & Flashcards ============================
-  function showToast(message) {
+  // Single toast implementation (the flashcards feature previously added a second
+  // showToast that shadowed the older #toast version — the older one is removed;
+  // ms stays honored for callers that pass a custom duration).
+  function showToast(message, ms) {
     let container = document.querySelector('.s-toast-container');
     if (!container) {
       container = document.createElement('div');
@@ -1990,7 +1958,7 @@
     setTimeout(() => {
       toast.classList.add('fade-out');
       toast.addEventListener('animationend', () => toast.remove());
-    }, 4500);
+    }, ms || 4500);
   }
 
   const stakeholderCooldowns = {};
