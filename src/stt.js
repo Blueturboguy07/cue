@@ -2,6 +2,7 @@
 // no audio API — we transcribe with whatever audio-capable key is available, and
 // fall back across providers. Returns { text, provider } or { text:'', error }.
 const { pcmToWav } = require('./wav');
+const { formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT } = require('./llm');
 
 const BASE_VOCAB = 'CI/CD, Docker, Kubernetes, Terraform, Jenkins, AWS, Azure, GCP, ' +
   'CodeCommit, CodePipeline, CodeBuild, CodeDeploy, DevOps, SRE, microservices, deployment, ' +
@@ -48,7 +49,7 @@ async function transcribeGemini(apiKey, wav) {
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
   const res = await ai.models.generateContent({
-    model: 'gemini-3.5-flash',
+    model: CURRENT_GEMINI_DEFAULT,
     contents: [{ role: 'user', parts: [
       { text: 'Transcribe this audio verbatim. Return only the spoken words with no commentary. If there is no clear speech, return an empty response.' },
       { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }
@@ -93,11 +94,13 @@ function createSTT(settings) {
           if (looksLikeHallucination(text)) return { text: '', provider: c.p };
           return { text, provider: c.p };
         } catch (e) {
-          let msg = (e && e.message) || String(e);
-          const isQuota = (e && e.status === 429) || (e && e.code === 'RESOURCE_EXHAUSTED') || msg.includes('Quota exceeded');
-          if (isQuota) msg = 'Quota exceeded. Check your plan and billing details.';
-          lastErr = { status: e && e.status, code: e && e.code, message: msg, provider: c.p };
-          if (isQuota) {
+          // Shares detection/wording with the LLM error path (src/llm.js) so a
+          // 404 (dead/misspelled model) or 429 (quota) reads the same whether it
+          // came from a chat request or a transcription request.
+          const quota = isQuotaError(e);
+          const message = formatProviderErrorMessage(e, c.p);
+          lastErr = { status: e && e.status, code: e && e.code, message, provider: c.p };
+          if (quota) {
             lastProvider = c.p;
             disabledUntil = now + 30000;
             break;

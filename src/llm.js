@@ -4,35 +4,87 @@
 const { createCompatibleClientOptions } = require('./openai-compatible');
 
 const CUSTOM_PROVIDER = 'custom';
+// gemini-2.0-flash was Google's default here until it was deprecated (Feb 2026)
+// and fully retired (Mar 3 2026) — every request against it now 404s with a
+// generic "exception parsing response" body. gemini-2.5-flash is the model
+// Google's own SDK examples standardize on and is documented as free-tier
+// available, so it is the single default used everywhere in this file.
+const CURRENT_GEMINI_DEFAULT = 'gemini-2.5-flash';
 const DEFAULT_MODELS = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-5-haiku-latest',
-  gemini: 'gemini-2.0-flash',
+  gemini: CURRENT_GEMINI_DEFAULT,
   ollama: 'llama3.2',
   groq: 'llama-3.1-8b-instant',
   minimax: 'MiniMax-M2.7',
   azure: 'gpt-4o-mini'
 };
 
-const PROVIDER_LABELS = { azure: 'Azure AI Foundry' };
+// Gemini model ids that Google has since deprecated/retired. A settings file
+// saved before this fix can still have one of these persisted on disk, so
+// createLLM migrates them at read time rather than only fixing the default —
+// otherwise an existing user would keep re-hitting the same 404 forever.
+const DEAD_GEMINI_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0)(?:-|$)/i;
+
+const PROVIDER_LABELS = { azure: 'Azure AI Foundry', openai: 'OpenAI', minimax: 'MiniMax' };
 
 function normalizeProviderName(provider) {
   if (!provider) return 'provider';
   if (PROVIDER_LABELS[provider]) return PROVIDER_LABELS[provider];
-  if (PROVIDER_LABELS[provider]) return PROVIDER_LABELS[provider];
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
-function formatProviderErrorMessage(error, provider) {
+// Pulled out so both the LLM and STT error paths (llm.js and stt.js) agree on
+// what counts as a rate-limit/quota failure instead of drifting independently.
+function isQuotaError(error) {
   const status = error && (error.status || error.statusCode || error.response?.status);
   const code = error && (error.code || error.error?.code);
   const rawMessage = (error && (error.message || String(error))) || '';
   const text = `${rawMessage} ${status || ''} ${code || ''}`.toLowerCase();
-  const isQuota = status === 429 || code === 'insufficient_quota' || code === 'rate_limit_exceeded' || /quota|billing|rate limit|exceeded your current quota/i.test(text);
-  if (isQuota) {
-    const label = normalizeProviderName(provider);
-    return `${label} quota or rate-limit hit. Check your plan/billing for the API key, wait a moment, or switch to another provider in Settings.`;
+  return status === 429 || code === 429 || code === 'insufficient_quota' || code === 'rate_limit_exceeded' ||
+    code === 'RESOURCE_EXHAUSTED' || /quota|billing|rate limit|exceeded your current quota|resource_exhausted|too many requests/i.test(text);
+}
+
+function isNotFoundError(error) {
+  const status = error && (error.status || error.statusCode || error.response?.status);
+  const code = error && (error.code || error.error?.code);
+  const rawMessage = (error && (error.message || String(error))) || '';
+  const text = `${rawMessage} ${status || ''} ${code || ''}`.toLowerCase();
+  return status === 404 || code === 404 || /\b404\b|is not found for api version|model not found/i.test(text);
+}
+
+// Gemini 429 bodies often carry a google.rpc.RetryInfo detail like
+// {"retryDelay":"38s"} inside the JSON error text. Not every quota error has
+// one (OpenAI/Anthropic don't), so this is best-effort and returns null when
+// absent instead of guessing a wait time.
+function extractRetryDelaySeconds(rawMessage) {
+  const match = /retryDelay"?\s*:\s*"?(\d+(?:\.\d+)?)\s*s/i.exec(String(rawMessage || ''));
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+function formatRetryWait(seconds) {
+  if (seconds < 60) return `${Math.ceil(seconds)}s`;
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+function formatProviderErrorMessage(error, provider, model) {
+  const label = normalizeProviderName(provider);
+  const rawMessage = (error && (error.message || String(error))) || '';
+
+  if (isQuotaError(error)) {
+    const retrySeconds = extractRetryDelaySeconds(rawMessage);
+    const waitHint = retrySeconds ? ` Wait about ${formatRetryWait(retrySeconds)}` : ' Wait a moment';
+    return `${label} free-tier quota exhausted (429 Too Many Requests).${waitHint} and try again, or add billing to your ${label} account. You can also switch providers or models in Settings.`;
   }
+
+  if (isNotFoundError(error)) {
+    const modelHint = model ? ` "${model}"` : '';
+    return `${label} model${modelHint} is unavailable (404) — it may have been renamed, retired by the provider, or misspelled. Open Settings and pick a current model for ${label} (or clear the field to use cue's default), then try again.`;
+  }
+
   return rawMessage || 'Unknown LLM error.';
 }
 
@@ -249,8 +301,8 @@ function createLLM(settings) {
   const tier = settings.smart ? 'smart' : 'fast';
   const models = settings.models || {};
   let model = (models[provider] || {})[tier];
-  if (provider === 'gemini' && /^gemini-1\.5\-/.test(model || '')) {
-    model = 'gemini-2.0-flash';
+  if (provider === 'gemini' && DEAD_GEMINI_MODEL_RE.test(model || '')) {
+    model = CURRENT_GEMINI_DEFAULT;
   }
   if (!model) model = DEFAULT_MODELS[provider] || '';
   const minimaxRegion = settings.minimaxRegion || 'global_en';
@@ -298,10 +350,10 @@ function createLLM(settings) {
         if (provider === 'azure') return await streamAzure(args);
         throw new Error('unknown provider: ' + provider);
       } catch (error) {
-        throw new Error(formatProviderErrorMessage(error, provider));
+        throw new Error(formatProviderErrorMessage(error, provider, model));
       }
     }
   };
 }
 
-module.exports = { createLLM, formatProviderErrorMessage };
+module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT };

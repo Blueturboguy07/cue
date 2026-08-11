@@ -48,7 +48,10 @@ const DEFAULTS = {
   models: {
     openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
     anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
-    gemini: { fast: 'gemini-3.5-flash', smart: 'gemini-3.5-flash' },
+    // Kept in sync with CURRENT_GEMINI_DEFAULT in src/llm.js — gemini-2.0-flash
+    // (the previous default here) was retired by Google on 2026-03-03 and 404s
+    // on every request. gemini-2.5-flash is current and free-tier available.
+    gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-flash' },
     custom: { fast: '', smart: '' },
     ollama: { fast: 'llama3.2', smart: 'llama3.3' },
     groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' },
