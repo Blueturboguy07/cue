@@ -34,17 +34,19 @@ let win = null;
 const shortcutState = { assist: false, say: false, leetcode: false, quit: false };
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
 
-// -------- Windows version helpers --------
-// WDA_EXCLUDEFROMCAPTURE (setContentProtection) requires Windows 10 build 19041+.
-// os.release() returns the NT kernel version e.g. "10.0.19041" or "10.0.22000" (Win11).
+// -------- OS version / protection helpers --------
+// WDA_EXCLUDEFROMCAPTURE (setContentProtection) requires Windows 10 build 19041+ on Windows,
+// and NSWindowSharingNone on macOS. It is NOT supported on Linux by Electron.
 function getWindowsBuild() {
   if (!isWindows) return 0;
   const parts = os.release().split('.').map(Number);
   return parts[2] || 0; // third segment is the build number
 }
 const WIN_BUILD = getWindowsBuild();
-const WIN_SUPPORTS_CONTENT_PROTECTION = !isWindows || WIN_BUILD >= 19041;
+const OS_SUPPORTS_CONTENT_PROTECTION = isMac || (isWindows && WIN_BUILD >= 19041);
+const WIN_SUPPORTS_CONTENT_PROTECTION = OS_SUPPORTS_CONTENT_PROTECTION;
 
 let permWin = null;
 
@@ -215,25 +217,28 @@ function createWindow() {
     }
   };
 
-  // Fix 1: On Windows, set type:'toolbar' which sets WS_EX_TOOLWINDOW.
-  // This removes the window from Alt+Tab AND the taskbar entirely.
-  // On macOS, this is not needed (dock hiding + Mission Control handle it).
+  // Fix 1: Window type hints per platform.
+  // On Windows, set type:'toolbar' which sets WS_EX_TOOLWINDOW (removes from Alt+Tab and taskbar).
+  // On Linux, set type:'utility' which sets _NET_WM_WINDOW_TYPE_UTILITY (removes from taskbar/switchers).
+  // On macOS, dock hiding + Mission Control handle window isolation.
   if (isWindows) {
     winOptions.type = 'toolbar';
+  } else if (isLinux) {
+    winOptions.type = 'utility';
   }
 
   win = new BrowserWindow(winOptions);
 
   // Fix 2: Only call setContentProtection if the OS supports it.
-  // On Windows, WDA_EXCLUDEFROMCAPTURE requires build 19041+ (Windows 10 May 2020 Update).
-  // On older builds we skip it silently to avoid a no-op and send a warning to the renderer.
+  // macOS and Windows 10 build 19041+ support setContentProtection.
+  // On Linux and older Windows builds we skip it to avoid a no-op/warning.
   const shouldProtect = !process.env.CUE_NO_PROTECT;
   if (shouldProtect) {
-    if (WIN_SUPPORTS_CONTENT_PROTECTION) {
+    if (OS_SUPPORTS_CONTENT_PROTECTION) {
       win.setContentProtection(true);
     } else {
       // Will notify the renderer after it loads
-      console.log(`[cue] Windows build ${WIN_BUILD} < 19041 — setContentProtection not supported. Window may appear in screen shares.`);
+      console.log(`[cue] Platform ${process.platform} ${isWindows ? `build ${WIN_BUILD} < 19041` : ''} — setContentProtection not supported. Window may appear in screen shares.`);
     }
   }
 
@@ -259,11 +264,12 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     win.showInactive();
     win.setTitle('Microsoft Edge Update');
-    // Warn about missing content protection on old Windows builds
-    if (isWindows && shouldProtect && !WIN_SUPPORTS_CONTENT_PROTECTION) {
-      send('status', {
-        message: `Heads up: your Windows version (build ${WIN_BUILD}) does not support screen-share hiding. Upgrade to Windows 10 build 19041+ or Windows 11 to enable invisibility in screen shares.`
-      });
+    // Warn about missing content protection on unsupported platforms (old Windows builds or Linux)
+    if (shouldProtect && !OS_SUPPORTS_CONTENT_PROTECTION) {
+      const message = isLinux
+        ? 'Heads up: Linux does not support OS-level screen-share window hiding (setContentProtection). The window will remain visible during screen shares.'
+        : `Heads up: your Windows version (build ${WIN_BUILD}) does not support screen-share hiding. Upgrade to Windows 10 build 19041+ or Windows 11 to enable invisibility in screen shares.`;
+      send('status', { message });
     }
   });
   win.webContents.on('render-process-gone', (_e, d) => {
@@ -616,7 +622,8 @@ ipcMain.handle('whisper:model-import', async (_event, modelId) => {
 ipcMain.handle('platform:info', () => ({
   platform: process.platform,
   winBuild: WIN_BUILD,
-  winSupportsContentProtection: WIN_SUPPORTS_CONTENT_PROTECTION
+  winSupportsContentProtection: OS_SUPPORTS_CONTENT_PROTECTION,
+  supportsContentProtection: OS_SUPPORTS_CONTENT_PROTECTION
 }));
 ipcMain.handle('transcript:clear', () => {
   transcript.splice(0, transcript.length);
@@ -777,8 +784,8 @@ function launchApp() {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
       if (!sources.length) return callback();
       const request = { video: sources[0] };
-      if (isWindows) request.audio = true;
-      else request.audio = 'loopback';
+      if (isMac) request.audio = 'loopback';
+      else request.audio = true;
       callback(request);
     }).catch(() => callback());
   }, { useSystemPicker: false });

@@ -1718,8 +1718,8 @@
     // R4: shortcut hints
     const sayHintEl = document.getElementById('say-shortcut-hint');
     const assistHintEl = document.getElementById('assist-shortcut-hint');
-    if (sayHintEl) sayHintEl.textContent = isWindows ? 'Ctrl+Shift+↵' : '⌘⇧↵';
-    if (assistHintEl) assistHintEl.textContent = isWindows ? 'Ctrl+↵' : '⌘↵';
+    if (sayHintEl) sayHintEl.textContent = isMac ? '⌘⇧↵' : 'Ctrl+Shift+↵';
+    if (assistHintEl) assistHintEl.textContent = isMac ? '⌘↵' : 'Ctrl+↵';
 
     // R5: prep status
     updatePrepStatus();
@@ -1743,7 +1743,7 @@
     updateSendButtonState(); // Initialize send button state
 
     // Fix placeholder shortcut hint to match platform
-    if (isWindows) {
+    if (!isMac) {
       placeholder.innerHTML = 'Ask about your screen or conversation, or <span class="keycap">Ctrl</span><span class="keycap">⏎</span> for Assist';
     }
 
