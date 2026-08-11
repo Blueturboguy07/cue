@@ -741,7 +741,19 @@
           sampleRate: 16000
         }
       });
-      cue.log('mic stream started');
+      // getUserMedia can resolve with a stream that has no usable audio track
+      // (e.g. a virtual/placeholder device, or a device that was unplugged
+      // between permission grant and capture start). Fail loudly here instead
+      // of silently wiring up an AudioWorklet to nothing — that produces the
+      // "cue never hears me, no error shown" symptom with no diagnostic at all.
+      const [track] = micStream.getAudioTracks();
+      if (!track) {
+        micStream.getTracks().forEach((t) => t.stop());
+        micStream = null;
+        showStatus('No microphone audio track was available. Check Windows Sound settings for a working default input device, then try again.');
+        return;
+      }
+      cue.log('mic stream started: track=' + (track.label || '(no label — permission may be stale)') + ' muted=' + track.muted);
       audioCtx = new AudioContext({ sampleRate: 16000 });
 
       // Use AudioWorklet for low-latency, off-main-thread processing
@@ -772,8 +784,23 @@
       }
     } catch (err) {
       const message = err && err.message ? err.message : String(err);
-      cue.log('mic error: ' + message);
-      showStatus('Microphone capture could not be started. Check your mic permissions and try again.');
+      const name = err && err.name;
+      cue.log('mic error: ' + name + ' — ' + message);
+      // getUserMedia's DOMException.name is the reliable signal here — the
+      // .message text varies by Chromium version and isn't meant for users.
+      // Distinguishing "no device" from "denied" from "in use elsewhere"
+      // turns one generic dead end into three different next actions.
+      if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        showStatus('No microphone was found. Plug one in, or pick a default input device in your OS sound settings, then try again.');
+      } else if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+        showStatus(isWindows
+          ? 'Microphone permission was denied. Settings → Privacy & security → Microphone → allow cue, then try again.'
+          : 'Microphone permission was denied. System Settings → Privacy & Security → Microphone → allow cue, then try again.');
+      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+        showStatus('The microphone could not be started — another application may be using it exclusively. Close other apps using the mic and try again.');
+      } else {
+        showStatus('Microphone capture could not be started. Check your mic permissions and try again.');
+      }
     }
   }
   function stopMic() {

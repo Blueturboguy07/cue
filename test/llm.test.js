@@ -26,7 +26,7 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
   return originalModuleLoad.call(this, request, parent, isMain);
 };
 
-const { createLLM } = require('../src/llm');
+const { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT } = require('../src/llm');
 
 test.after(() => {
   Module._load = originalModuleLoad;
@@ -151,4 +151,133 @@ test('falls back to the global endpoint for an unknown region', async () => {
   const llm = createLLM(minimaxSettings({ minimaxRegion: 'unknown' }));
   await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
   assert.equal(capturedClientOptions.baseURL, 'https://api.minimax.io/v1');
+});
+
+// ---- Gemini 404/429 error mapping ------------------------------------------
+// Reproduces the exact bug-report clusters: "Error: got status: 404 Not Found.
+// {"error":{"message":"exception parsing response","code":404,"status":"Not
+// Found"}}" (dead/misspelled model) and 429 quota exhaustion, and asserts they
+// come out as actionable in-app messages instead of the raw provider JSON.
+
+function geminiApiError({ status, body }) {
+  const err = new Error(`got status: ${status}. ${JSON.stringify(body)}`);
+  err.name = 'ApiError';
+  err.status = status; // matches @google/genai's ApiError shape
+  return err;
+}
+
+test('formatProviderErrorMessage: maps a Gemini 404 to an actionable "model unavailable" message', () => {
+  const error = geminiApiError({
+    status: 404,
+    body: { error: { message: 'exception parsing response', code: 404, status: 'Not Found' } }
+  });
+  const message = formatProviderErrorMessage(error, 'gemini', 'gemini-2.0-flash');
+  assert.match(message, /Gemini/);
+  assert.match(message, /model "gemini-2\.0-flash"/);
+  assert.match(message, /unavailable \(404\)/);
+  assert.match(message, /Settings/);
+  assert.doesNotMatch(message, /exception parsing response/);
+});
+
+test('formatProviderErrorMessage: 404 message still works without a model id', () => {
+  const error = geminiApiError({ status: 404, body: { error: { message: 'not found', code: 404 } } });
+  const message = formatProviderErrorMessage(error, 'openai');
+  assert.match(message, /OpenAI model is unavailable \(404\)/);
+});
+
+test('formatProviderErrorMessage: maps a Gemini 429 to a free-tier quota message', () => {
+  const error = geminiApiError({
+    status: 429,
+    body: { error: { message: 'You exceeded your current quota', code: 429, status: 'RESOURCE_EXHAUSTED' } }
+  });
+  const message = formatProviderErrorMessage(error, 'gemini', 'gemini-2.5-flash');
+  assert.match(message, /Gemini free-tier quota exhausted \(429/);
+  assert.match(message, /billing/);
+  assert.doesNotMatch(message, /RESOURCE_EXHAUSTED/);
+});
+
+test('formatProviderErrorMessage: surfaces retry-after when the 429 body carries a RetryInfo delay', () => {
+  const error = geminiApiError({
+    status: 429,
+    body: {
+      error: {
+        message: 'Resource exhausted',
+        code: 429,
+        status: 'RESOURCE_EXHAUSTED',
+        details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '38s' }]
+      }
+    }
+  });
+  const message = formatProviderErrorMessage(error, 'gemini');
+  assert.match(message, /Wait about 38s/);
+});
+
+test('formatProviderErrorMessage: 429 without a retry delay falls back to a generic wait hint', () => {
+  const error = new Error('429 Too Many Requests');
+  error.status = 429;
+  const message = formatProviderErrorMessage(error, 'openai');
+  assert.match(message, /Wait a moment/);
+});
+
+test('formatProviderErrorMessage: an OpenAI-style quota 429 (no numeric status) is still recognized', () => {
+  // Matches the literal text one of the bug reports pasted in.
+  const error = new Error('429 You exceeded your current quota, please check your plan and billing details.');
+  const message = formatProviderErrorMessage(error, 'openai');
+  assert.match(message, /OpenAI free-tier quota exhausted/);
+});
+
+test('formatProviderErrorMessage: an unrecognized error passes its raw message through unchanged', () => {
+  const error = new Error('socket hang up');
+  assert.equal(formatProviderErrorMessage(error, 'anthropic'), 'socket hang up');
+});
+
+test('isQuotaError: agrees with formatProviderErrorMessage on what counts as quota', () => {
+  assert.equal(isQuotaError(geminiApiError({ status: 429, body: {} })), true);
+  assert.equal(isQuotaError(geminiApiError({ status: 404, body: {} })), false);
+  assert.equal(isQuotaError(new Error('insufficient_quota')), true);
+});
+
+// ---- Gemini model selection / self-healing migration -----------------------
+
+function geminiSettings(overrides) {
+  return Object.assign({
+    provider: 'gemini',
+    smart: false,
+    apiKeys: { gemini: 'test-key' }
+  }, overrides || {});
+}
+
+test('createLLM: falls back to CURRENT_GEMINI_DEFAULT when no model is configured', () => {
+  const llm = createLLM(geminiSettings({ models: {} }));
+  assert.equal(llm.model, CURRENT_GEMINI_DEFAULT);
+  assert.equal(llm.ready, true);
+});
+
+test('createLLM: a fresh install (store.js DEFAULTS shape) resolves to the current default', () => {
+  const llm = createLLM(geminiSettings({
+    models: { gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-flash' } }
+  }));
+  assert.equal(llm.model, CURRENT_GEMINI_DEFAULT);
+});
+
+test('createLLM: self-heals a settings file saved with the retired gemini-2.0-flash default', () => {
+  const llm = createLLM(geminiSettings({
+    models: { gemini: { fast: 'gemini-2.0-flash', smart: 'gemini-2.0-flash' } }
+  }));
+  assert.equal(llm.model, CURRENT_GEMINI_DEFAULT);
+});
+
+test('createLLM: self-heals a legacy gemini-1.5-* model saved before the 2.0-flash migration existed', () => {
+  const llm = createLLM(geminiSettings({
+    models: { gemini: { fast: 'gemini-1.5-flash', smart: 'gemini-1.5-pro' } },
+    smart: true
+  }));
+  assert.equal(llm.model, CURRENT_GEMINI_DEFAULT);
+});
+
+test('createLLM: leaves a user-chosen current Gemini model alone', () => {
+  const llm = createLLM(geminiSettings({
+    models: { gemini: { fast: 'gemini-3.5-flash', smart: 'gemini-3.5-flash' } }
+  }));
+  assert.equal(llm.model, 'gemini-3.5-flash');
 });
