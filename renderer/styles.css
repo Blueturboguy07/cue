@@ -75,20 +75,15 @@ html, body {
   overflow: hidden;
 }
 #toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
-<<<<<<< HEAD
 /* No -webkit-app-region: drag — Chromium's drag region activates the window and
    blurs the app underneath. Drag is handled in renderer.js via screen coords. */
-#panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary {
-  -webkit-app-region: no-drag;
-}
-=======
-#toolbar { -webkit-app-region: drag; }   /* drag the top pill to move the window */
-/* Explicit no-drag on every toolbar control so clicks (esp. Quit) are not eaten by the drag region. */
+/* Explicit no-drag on toolbar controls so Quit / Hide / Stop clicks always register. */
 #toolbar button, #toolbar .tb-quit, #toolbar .tb-stop, #toolbar .tb-hide, #toolbar .tb-logo {
   -webkit-app-region: no-drag;
 }
-#panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary { -webkit-app-region: no-drag; }
->>>>>>> 87146d9 (Wire the quit button so it actually exits)
+#panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary {
+  -webkit-app-region: no-drag;
+}
 
 /* ============================ Toolbar pill ============================ */
 #toolbar {
