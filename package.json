@@ -28,7 +28,7 @@
     "cross-platform"
   ],
   "devDependencies": {
-    "electron": "33.2.1",
+    "electron": "^33.2.1",
     "electron-builder": "^26.15.3",
     "extract-zip": "^2.0.1",
     "resedit": "^3.0.2",
@@ -45,5 +45,8 @@
     "openai": "^4.73.0",
     "pdf-parse": "^1.1.1",
     "ws": "^8.18.0"
+  },
+  "allowScripts": {
+    "electron@33.2.1": true
   }
 }

@@ -21,27 +21,29 @@ const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLi
 if (process.platform === 'darwin') {
   app.commandLine.appendSwitch('enable-features', 'MacLoopbackAudioForScreenShare,MacSckSystemAudioLoopbackOverride');
 }
+
+// Linux Wayland / Ozone native rendering configuration
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('enable-features', 'UseOzonePlatform,WaylandWindowDecorations');
+  app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
+}
+
 const { WhisperModelManager } = require('./src/whisper-model-manager');
 const { requireWhisperModel } = require('./src/whisper-model-catalog');
 const { locateWhisperRuntime } = require('./src/whisper-runtime');
 const { LocalWhisperTranscriber } = require('./src/local-whisper-transcriber');
 
 let win = null;
-// Which global shortcuts cue actually holds. `globalShortcut.register` returns
-// false when another application already owns the combination, and nothing used
-// to look at that — so the only symptom was a key that did nothing. Iris reads
-// this and can say which key is taken instead of guessing from a screenshot.
 const shortcutState = { assist: false, say: false, leetcode: false, quit: false };
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
 
 // -------- Windows version helpers --------
-// WDA_EXCLUDEFROMCAPTURE (setContentProtection) requires Windows 10 build 19041+.
-// os.release() returns the NT kernel version e.g. "10.0.19041" or "10.0.22000" (Win11).
 function getWindowsBuild() {
   if (!isWindows) return 0;
   const parts = os.release().split('.').map(Number);
-  return parts[2] || 0; // third segment is the build number
+  return parts[2] || 0;
 }
 const WIN_BUILD = getWindowsBuild();
 const WIN_SUPPORTS_CONTENT_PROTECTION = !isWindows || WIN_BUILD >= 19041;
@@ -50,13 +52,13 @@ let permWin = null;
 
 // -------- capture / transcript state --------
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
-let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
+let sttDisabled = false;
 const buffers = { you: [], them: [] };
-const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
-const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
+const transcript = [];
+const MAX_TRANSCRIPT_TURNS = 200;
 const FLUSH_MS = 900;
-const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy can't wedge forever
-const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
+const STREAM_INACTIVITY_MS = 25000;
+const MIN_BYTES = Math.floor(16000 * 2 * 0.12);
 const RMS_GATE = 180;
 let flushTimer = null;
 let whisperModelManager = null;
@@ -66,25 +68,25 @@ let desiredCaptureState = false;
 let captureTransition = Promise.resolve(false);
 
 // -------- streaming STT state --------
-let streamingSTT = { you: null, them: null }; // streaming STT instances per channel
-let streamingMode = false; // true when using WebSocket streaming STT
+let streamingSTT = { you: null, them: null };
+let streamingMode = false;
 const vad = {
   you: new AdaptiveVAD({
     onsetThreshold: 220,
     offsetThreshold: 130,
-    silenceFrames: 18,       // ~540ms silence before end
+    silenceFrames: 18,
     onSpeechStart: () => send('vad:state', { channel: 'you', speaking: true }),
     onSpeechEnd: (dur) => send('vad:state', { channel: 'you', speaking: false, durationMs: dur })
   }),
   them: new AdaptiveVAD({
     onsetThreshold: 200,
     offsetThreshold: 120,
-    silenceFrames: 20,       // ~600ms for remote audio (more forgiving)
+    silenceFrames: 20,
     onSpeechStart: () => send('vad:state', { channel: 'them', speaking: true }),
     onSpeechEnd: (dur) => send('vad:state', { channel: 'them', speaking: false, durationMs: dur })
   })
 };
-// Pre-speech ring buffers (300ms) so we never clip the start of a word
+
 const ringBuffers = {
   you: new AudioRingBuffer(300, 16000),
   them: new AudioRingBuffer(300, 16000)
@@ -215,24 +217,19 @@ function createWindow() {
     }
   };
 
-  // Fix 1: On Windows, set type:'toolbar' which sets WS_EX_TOOLWINDOW.
-  // This removes the window from Alt+Tab AND the taskbar entirely.
-  // On macOS, this is not needed (dock hiding + Mission Control handle it).
   if (isWindows) {
     winOptions.type = 'toolbar';
   }
 
   win = new BrowserWindow(winOptions);
 
-  // Fix 2: Only call setContentProtection if the OS supports it.
-  // On Windows, WDA_EXCLUDEFROMCAPTURE requires build 19041+ (Windows 10 May 2020 Update).
-  // On older builds we skip it silently to avoid a no-op and send a warning to the renderer.
   const shouldProtect = !process.env.CUE_NO_PROTECT;
   if (shouldProtect) {
-    if (WIN_SUPPORTS_CONTENT_PROTECTION) {
+    if (isMac || (isWindows && WIN_SUPPORTS_CONTENT_PROTECTION)) {
       win.setContentProtection(true);
+    } else if (isLinux) {
+      console.log('[cue] Running on Linux: native screen protection (setContentProtection) is skipped.');
     } else {
-      // Will notify the renderer after it loads
       console.log(`[cue] Windows build ${WIN_BUILD} < 19041 — setContentProtection not supported. Window may appear in screen shares.`);
     }
   }
@@ -254,12 +251,11 @@ function createWindow() {
     }, 500);
   });
 
-  win.setTitle('Microsoft Edge Update'); // set before load
+  win.setTitle('Microsoft Edge Update');
 
   win.webContents.on('did-finish-load', () => {
     win.showInactive();
     win.setTitle('Microsoft Edge Update');
-    // Warn about missing content protection on old Windows builds
     if (isWindows && shouldProtect && !WIN_SUPPORTS_CONTENT_PROTECTION) {
       send('status', {
         message: `Heads up: your Windows version (build ${WIN_BUILD}) does not support screen-share hiding. Upgrade to Windows 10 build 19041+ or Windows 11 to enable invisibility in screen shares.`
@@ -272,7 +268,7 @@ function createWindow() {
   });
 }
 
-// -------- STT flushing (batch mode fallback) --------
+// -------- STT flushing --------
 async function flushChannel(channel) {
   if (state.transcribing[channel]) return;
   const chunks = buffers[channel];
@@ -280,7 +276,7 @@ async function flushChannel(channel) {
   const pcm = Buffer.concat(chunks);
   buffers[channel] = [];
   if (pcm.length < MIN_BYTES) return;
-  if (rms16(pcm) < RMS_GATE) return; // silence gate
+  if (rms16(pcm) < RMS_GATE) return;
 
   state.transcribing[channel] = true;
   try {
@@ -310,8 +306,6 @@ async function flushChannel(channel) {
 
 function handleSttError(err, settings) {
   console.log('[stt] error', err.provider, err.status, err.code, err.message);
-  // Recorded before the early return, because the second and hundredth
-  // occurrence still tell you the state cue is stuck in.
   recordEvent({
     level: 'error',
     event: 'stt_rejected',
@@ -323,7 +317,7 @@ function handleSttError(err, settings) {
   if (sttDisabled) return;
   const isQuota = err.status === 429 || err.code === 'RESOURCE_EXHAUSTED' || (err.message && err.message.includes('Quota exceeded'));
   const noAccess = err.status === 403 || err.status === 401 || err.code === 'model_not_found' || isQuota;
-  sttDisabled = true; // stop hammering the API every few seconds
+  sttDisabled = true;
   if (noAccess) {
     send('status', { message: `Transcription off: your ${err.provider} key was rejected or hit a quota limit. Update your key in Settings to resume.` });
   } else {
@@ -356,7 +350,7 @@ function initStreamingSTT() {
       onError: (err) => {
         console.log('[streaming-stt] error', err.provider, err.message);
         const batchFallbackAvailable = createSTT(settings).available;
-        stopStreamingSTT(); // close WebSockets and clear keep-alive intervals
+        stopStreamingSTT();
         if (batchFallbackAvailable) {
           send('status', { message: `Streaming transcription (${err.provider}) error: ${err.message}. Falling back to batch mode.` });
           startFlushLoop();
@@ -394,7 +388,7 @@ function stopStreamingSTT() {
   streamingMode = false;
 }
 
-// -------- audio routing (streaming or batch) --------
+// -------- audio routing --------
 function routeAudio(channel, pcmBuffer) {
   const buf = Buffer.from(pcmBuffer);
 
@@ -403,30 +397,22 @@ function routeAudio(channel, pcmBuffer) {
     return;
   }
 
-  // Always run through VAD for speech state detection
   vad[channel].processChunk(buf);
-
-  // Keep pre-speech buffer
   ringBuffers[channel].write(buf);
 
   if (streamingMode && streamingSTT[channel]) {
-    // Streaming mode: send raw PCM directly to the WebSocket
     streamingSTT[channel].sendAudio(pcmBuffer);
   } else {
-    // Batch mode: accumulate in buffers for periodic flush
     buffers[channel].push(buf);
   }
 }
 
 // -------- capture toggle --------
-// Mic + system audio are both captured in the RENDERER (getUserMedia for the mic,
-// getDisplayMedia loopback for system audio) so they run inside cue's own process
-// and use cue's own Screen-Recording grant — no separate helper binary to authorize.
 async function setCapturing(active) {
   if (active === state.capturing) return state.capturing;
 
   if (active) {
-    sttDisabled = false; // reset on re-enable
+    sttDisabled = false;
     const settings = store.getSettings();
     if ((settings.sttProvider || 'auto') === 'local') {
       try {
@@ -451,7 +437,6 @@ async function setCapturing(active) {
     }
 
     state.capturing = true;
-    // Try streaming first, fall back to batch
     const streaming = initStreamingSTT();
     if (!streaming) {
       startFlushLoop();
@@ -489,7 +474,7 @@ async function runFeature(mode, userText) {
   const def = MODES[mode];
   if (!def) return;
   state.busy = true;
-  let streamSettled = false; // drop stray tokens from a stream we've already abandoned
+  let streamSettled = false;
   try {
     const settings = store.getSettings();
     const llm = createLLM(settings);
@@ -527,8 +512,6 @@ async function runFeature(mode, userText) {
     const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '') : (def.system || '');
     const built = def.build({ transcript, userText: userText || '' });
 
-    // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
-    // leaving state.busy = true and wedging every later question until an app restart.
     let watchdog = null;
     let rearm = () => {};
     const stalled = new Promise((_res, reject) => {
@@ -629,10 +612,8 @@ ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, {
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
 ipcMain.on('app:quit', () => app.quit());
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
+
 // -------- resume / job-description file import --------
-// The dialog runs in MAIN and is filtered to pdf/docx; the renderer never supplies a path.
-// The parsed text is RETURNED to the renderer, which drops it into the existing
-// #resume-text / #job-description textareas so settings keep a single source of truth.
 async function pickAndParseDocument() {
   const res = await dialog.showOpenDialog(win, {
     properties: ['openFile'],
@@ -652,7 +633,6 @@ ipcMain.handle('profile:pickDocument', async () => {
     return { canceled: false, error: (e && e.message) || String(e) };
   }
 });
-ipcMain.on('app:quit', () => app.quit());
 ipcMain.handle('applink:state', () => appLinkConsentState());
 ipcMain.handle('applink:revoke', (_e, callerId) => revokeAppLinkCaller(callerId));
 
@@ -682,16 +662,10 @@ function registerShortcuts() {
 }
 
 // -------- permissions --------
-// systemPreferences.getMediaAccessStatus('screen') is unreliable: it can return
-// 'not-determined' or 'denied' even after the user has granted Screen Recording,
-// especially in dev mode (unsigned / no proper app bundle).  As a fallback we
-// actually attempt a capture and inspect the thumbnail — if it contains any
-// non-zero pixel data, macOS is giving us real screen content, i.e. granted.
 async function verifyScreenAccess() {
   const sysStatus = systemPreferences.getMediaAccessStatus('screen');
   if (sysStatus === 'granted') return 'granted';
 
-  // Fallback: try an actual capture and check the thumbnail for real pixels.
   try {
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
@@ -699,12 +673,11 @@ async function verifyScreenAccess() {
     });
     if (sources.length > 0) {
       const bmp = sources[0].thumbnail.toBitmap();
-      // toBitmap() returns raw RGBA bytes; any non-zero byte means real content
       if (bmp && bmp.some(byte => byte !== 0)) return 'granted';
     }
   } catch (_) {}
 
-  return sysStatus;  // return the original system status if fallback didn't help
+  return sysStatus;
 }
 
 async function getPermissionStatus() {
@@ -718,15 +691,11 @@ async function getPermissionStatus() {
 async function requestPermissions() {
   if (process.platform !== 'darwin') return true;
 
-  // Trigger the macOS microphone permission dialog (first-use only)
   const micStatus = systemPreferences.getMediaAccessStatus('microphone');
   if (micStatus !== 'granted') {
     await systemPreferences.askForMediaAccess('microphone');
   }
 
-  // Trigger the macOS screen-recording permission dialog (first-use only).
-  // There is no askForMediaAccess('screen'), but attempting to enumerate
-  // sources via desktopCapturer will cause macOS to prompt the user.
   const screenStatus = await verifyScreenAccess();
   if (screenStatus !== 'granted') {
     try { await desktopCapturer.getSources({ types: ['screen'] }); } catch (_) {}
@@ -761,7 +730,7 @@ function createPermissionsWindow() {
   permWin.webContents.on('did-finish-load', () => permWin.show());
 }
 
-// -------- launch (called after permissions are confirmed) --------
+// -------- launch --------
 function launchApp() {
   if (isMac && app.dock) app.dock.hide();
 
@@ -771,19 +740,16 @@ function launchApp() {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowMedia(permission)));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowMedia(permission));
 
-  // System-audio loopback for getDisplayMedia: hand back a screen source with 'loopback'
-  // audio so the renderer can capture what's playing (Zoom/Meet) using cue's own grant.
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
       if (!sources.length) return callback();
       const request = { video: sources[0] };
-      if (isWindows) request.audio = true;
+      if (isWindows || isLinux) request.audio = true;
       else request.audio = 'loopback';
       callback(request);
     }).catch(() => callback());
   }, { useSystemPicker: false });
 
-  // Started before the shortcuts so their registration failures are recorded.
   startAppLink({
     snapshot: () => ({
       state,
@@ -794,8 +760,6 @@ function launchApp() {
       windowAlive: !!(win && !win.isDestroyed()),
     }),
     setCapturing,
-    // Looked up rather than captured: the window is recreated on 'activate',
-    // so a reference taken at startup goes stale.
     getWindow: () => win,
   });
 
@@ -813,7 +777,6 @@ app.whenReady().then(async () => {
   if (isMac) {
     const allGranted = await requestPermissions();
     if (!allGranted) {
-      // Show the permissions gate — the dock stays visible so the user can find the app
       createPermissionsWindow();
       app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createPermissionsWindow(); });
       return;
@@ -826,21 +789,14 @@ app.whenReady().then(async () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  // Best effort, deliberately not blocking the quit: the library also removes
-  // the instance file from a `process.on('exit')` handler, and a file left
-  // behind is harmless anyway because readers check whether the PID is alive.
-  // Delaying shutdown to tidy a directory would be the wrong trade.
   stopAppLink();
   if (whisperModelManager?.activeDownload) {
     whisperModelManager.cancelDownload(whisperModelManager.activeDownload.modelId);
   }
   if (localWhisperTranscriber) localWhisperTranscriber.forceStop().catch(() => {});
 });
-app.on('window-all-closed', () => app.quit());
 
-app.on('will-quit', () => { globalShortcut.unregisterAll(); });
 app.on('window-all-closed', (e) => {
-  // Don't quit while the permissions window is open — the user may be in System Settings
   if (permWin) { e.preventDefault(); return; }
   app.quit();
 });
