@@ -25,6 +25,12 @@ const { WhisperModelManager } = require('./src/whisper-model-manager');
 const { requireWhisperModel } = require('./src/whisper-model-catalog');
 const { locateWhisperRuntime } = require('./src/whisper-runtime');
 const { LocalWhisperTranscriber } = require('./src/local-whisper-transcriber');
+const {
+  startGrokCliRuntime,
+  stopGrokCliRuntime,
+  getGrokCliRuntimeStatus,
+  kickGrokCliRuntime
+} = require('./src/grok-cli-runtime');
 
 let win = null;
 // Which global shortcuts cue actually holds. `globalShortcut.register` returns
@@ -564,7 +570,21 @@ async function runFeature(mode, userText) {
 
 // -------- IPC --------
 ipcMain.handle('settings:get', () => store.getSettings());
-ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; return store.setSettings(patch); });
+ipcMain.handle('settings:set', (_e, patch) => {
+  sttDisabled = false;
+  const next = store.setSettings(patch);
+  // Warm Grok CLI auth / API when the user picks Grok chat or Grok voice STT.
+  const wantsGrok = next.provider === 'grok'
+    || next.provider === 'grok-cli'
+    || next.sttProvider === 'grok'
+    || next.sttProvider === 'xai'
+    || !!(next.apiKeys && next.apiKeys.grok);
+  if (wantsGrok) {
+    kickGrokCliRuntime(next.apiKeys && next.apiKeys.grok).catch(() => {});
+  }
+  return next;
+});
+ipcMain.handle('grok:runtime', () => getGrokCliRuntimeStatus());
 ipcMain.handle('capture:toggle', () => {
   const targetState = !desiredCaptureState;
   desiredCaptureState = targetState;
@@ -801,6 +821,28 @@ function launchApp() {
 
   createWindow();
   registerShortcuts();
+
+  // If settings already point at Grok, warm the CLI login path at startup.
+  const bootSettings = store.getSettings();
+  if (
+    bootSettings.provider === 'grok'
+    || bootSettings.provider === 'grok-cli'
+    || bootSettings.sttProvider === 'grok'
+    || (bootSettings.apiKeys && bootSettings.apiKeys.grok)
+  ) {
+    startGrokCliRuntime({
+      explicitKey: bootSettings.apiKeys && bootSettings.apiKeys.grok,
+      warmImmediately: true,
+      onStatus: (payload) => {
+        if (!payload || payload.tick) return;
+        if (payload.status === 'warm-ok') {
+          send('status', { message: 'Grok login ready.' });
+        } else if (payload.status === 'warm-fail' && payload.error) {
+          send('status', { message: 'Grok login: ' + payload.error });
+        }
+      }
+    }).catch((err) => console.log('[grok-runtime]', err && err.message));
+  }
 }
 
 // -------- lifecycle --------
@@ -831,6 +873,7 @@ app.on('will-quit', () => {
   // behind is harmless anyway because readers check whether the PID is alive.
   // Delaying shutdown to tidy a directory would be the wrong trade.
   stopAppLink();
+  stopGrokCliRuntime({ killLeader: false });
   if (whisperModelManager?.activeDownload) {
     whisperModelManager.cancelDownload(whisperModelManager.activeDownload.modelId);
   }

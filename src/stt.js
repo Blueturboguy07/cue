@@ -3,6 +3,7 @@
 // fall back across providers. Returns { text, provider } or { text:'', error }.
 const { pcmToWav } = require('./wav');
 const { formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT } = require('./llm');
+const { XAI_STT_URL, resolveGrokApiKey } = require('./grok-cli-auth');
 
 const BASE_VOCAB = 'CI/CD, Docker, Kubernetes, Terraform, Jenkins, AWS, Azure, GCP, ' +
   'CodeCommit, CodePipeline, CodeBuild, CodeDeploy, DevOps, SRE, microservices, deployment, ' +
@@ -58,11 +59,73 @@ async function transcribeGemini(apiKey, wav) {
   return ((res && res.text) || '').trim();
 }
 
+// xAI Speech-to-Text (Grok voice stack) — POST /v1/stt
+// Uses the same Grok CLI OAuth / XAI_API_KEY credentials as chat.
+// Docs: https://docs.x.ai/developers/model-capabilities/audio/speech-to-text
+async function transcribeXai(apiKey, wav, keyterms) {
+  if (!apiKey) throw new Error('Missing Grok / xAI credentials for speech-to-text.');
+  const form = new FormData();
+  // Option fields must precede `file` per xAI multipart requirements.
+  form.append('language', 'en');
+  form.append('format', 'true');
+  const terms = Array.isArray(keyterms) ? keyterms : [];
+  for (const term of terms.slice(0, 100)) {
+    const t = String(term || '').trim().slice(0, 50);
+    if (t) form.append('keyterm', t);
+  }
+  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
+
+  const res = await fetch(XAI_STT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = await res.text(); } catch { /* ignore */ }
+    const err = new Error(detail || `xAI STT HTTP ${res.status}`);
+    err.status = res.status;
+    err.provider = 'grok';
+    throw err;
+  }
+  const data = await res.json().catch(() => ({}));
+  return String((data && data.text) || '').trim();
+}
+
+function vocabKeyterms(prompt) {
+  // buildVocabPrompt returns a comma-separated list — turn a few into keyterms.
+  return String(prompt || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 40);
+}
+
+function shouldUseGrokStt(settings, selectedProvider) {
+  // Explicit Grok STT always tries CLI login / XAI_API_KEY / Settings key.
+  if (selectedProvider === 'grok' || selectedProvider === 'xai') return true;
+  // Auto only picks Grok voice when chat is also Grok, or an explicit xAI key was saved.
+  // That avoids hijacking STT for Custom/OpenAI installs just because `grok login` exists.
+  if (selectedProvider === 'auto') {
+    const keys = settings.apiKeys || {};
+    return settings.provider === 'grok' || !!String(keys.grok || '').trim();
+  }
+  return false;
+}
+
 function createSTT(settings) {
   const keys = settings.apiKeys || {};
   const selectedProvider = settings.sttProvider || 'auto';
   const vocabPrompt = buildVocabPrompt(settings);
   const chain = [];
+  const grokKey = shouldUseGrokStt(settings, selectedProvider) ? resolveGrokApiKey(keys.grok) : '';
+  // Prefer Grok voice STT when selected (or auto + Grok chat).
+  if (grokKey && (selectedProvider === 'auto' || selectedProvider === 'grok' || selectedProvider === 'xai')) {
+    chain.push({
+      p: 'grok',
+      fn: (wav) => transcribeXai(resolveGrokApiKey(keys.grok), wav, vocabKeyterms(vocabPrompt))
+    });
+  }
   if ((selectedProvider === 'auto' || selectedProvider === 'openai') && keys.openai) {
     chain.push({ p: 'openai', fn: (wav) => transcribeOpenAI(keys.openai, wav, settings.sttModel, undefined, vocabPrompt) });
   }
@@ -72,7 +135,11 @@ function createSTT(settings) {
   if ((selectedProvider === 'auto' || selectedProvider === 'gemini') && keys.gemini) {
     chain.push({ p: 'gemini', fn: (wav) => transcribeGemini(keys.gemini, wav) });
   }
-  if (keys.openai && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'openai'), 1)[0]);
+  // Explicit openai selection still prioritizes openai if both were somehow queued.
+  if (selectedProvider === 'openai' && keys.openai && chain.length > 1) {
+    const idx = chain.findIndex((c) => c.p === 'openai');
+    if (idx > 0) chain.unshift(chain.splice(idx, 1)[0]);
+  }
 
   let disabledUntil = 0;
   let lastProvider = null;
@@ -112,4 +179,4 @@ function createSTT(settings) {
   };
 }
 
-module.exports = { createSTT, looksLikeHallucination, buildVocabPrompt };
+module.exports = { createSTT, looksLikeHallucination, buildVocabPrompt, transcribeXai };

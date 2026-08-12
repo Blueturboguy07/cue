@@ -116,7 +116,11 @@
       <!-- Tab: Keys -->
       <div class="s-body s-tab-pane" data-pane="keys">
         <label class="s-label">Provider</label>
-        <div class="s-seg" id="provider-seg">
+        <div class="s-seg s-seg-wrap" id="provider-seg">
+          <button data-provider="claude-cli">Claude CLI</button>
+          <button data-provider="codex-cli">Codex CLI</button>
+          <button data-provider="grok">Grok</button>
+          <button data-provider="grok-cli">Grok CLI</button>
           <button data-provider="openai">OpenAI</button>
           <button data-provider="anthropic">Anthropic</button>
           <button data-provider="gemini">Gemini</button>
@@ -126,8 +130,14 @@
           <button data-provider="minimax">MiniMax</button>
           <button data-provider="azure">Azure AI</button>
         </div>
+        <div class="s-note" id="cli-provider-note">
+          <strong>CLI providers</strong> use a session you already logged into on this machine
+          (<code>claude</code>, <code>codex login</code>, <code>grok login</code>) — no API key in cue.
+          <strong>Grok</strong> uses the xAI API with the same login (or a pasted key) and can power listening.
+        </div>
 
         <label class="s-label">API keys &amp; URLs <span class="s-hint">stored locally · never sent to any server</span></label>
+        <div class="s-field"><span>Grok / xAI</span><input id="key-grok" type="password" placeholder="optional — uses grok login if empty" autocomplete="off" /></div>
         <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
         <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
         <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
@@ -168,12 +178,13 @@
         <label class="s-label">Speech-to-text provider</label>
         <div class="s-seg s-seg-wrap" id="stt-provider-seg">
           <button data-stt-provider="auto">Auto</button>
+          <button data-stt-provider="grok">Grok voice</button>
           <button data-stt-provider="local">Local</button>
           <button data-stt-provider="deepgram">Deepgram</button>
           <button data-stt-provider="openai">OpenAI</button>
           <button data-stt-provider="gemini">Gemini</button>
         </div>
-        <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider.</div>
+        <div class="s-note"><strong>Grok voice</strong> uses xAI speech-to-text with the same Grok login / key as chat. Local mode keeps audio on this computer and never falls back to the cloud.</div>
 
         <div class="whisper-card">
           <div class="whisper-runtime-row">
