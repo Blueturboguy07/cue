@@ -25,6 +25,8 @@ const { WhisperModelManager } = require('./src/whisper-model-manager');
 const { requireWhisperModel } = require('./src/whisper-model-catalog');
 const { locateWhisperRuntime } = require('./src/whisper-runtime');
 const { LocalWhisperTranscriber } = require('./src/local-whisper-transcriber');
+const { installNoActivate, allowActivate, restoreNoActivate } = require('./src/no-activate');
+const { startQuietKeyboard, stopQuietKeyboard } = require('./src/quiet-keyboard');
 
 let win = null;
 // Which global shortcuts cue actually holds. `globalShortcut.register` returns
@@ -207,6 +209,9 @@ function createWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     fullscreenable: false,
+    // Critical: cue must never take OS focus. Clicking/dragging the overlay
+    // should not blur the user's real app (meetings, browsers, coding tests).
+    focusable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -223,6 +228,10 @@ function createWindow() {
   }
 
   win = new BrowserWindow(winOptions);
+
+  // Non-activating overlay: buttons/drag don't take keyboard; composer/Settings
+  // call focus-mode (sync) on the user gesture so typing works.
+  installNoActivate(win);
 
   // Fix 2: Only call setContentProtection if the OS supports it.
   // On Windows, WDA_EXCLUDEFROMCAPTURE requires build 19041+ (Windows 10 May 2020 Update).
@@ -254,10 +263,45 @@ function createWindow() {
     }, 500);
   });
 
+  // If the saved position was on a disconnected monitor, pull it back onto
+  // the primary work area so cue does not "disappear" after relaunch.
+  win.once('ready-to-show', () => {
+    try {
+      const bounds = win.getBounds();
+      const displays = screen.getAllDisplays();
+      const visible = displays.some((d) => {
+        const a = d.workArea;
+        return bounds.x + bounds.width > a.x + 40
+          && bounds.y + 20 > a.y
+          && bounds.x < a.x + a.width - 40
+          && bounds.y < a.y + a.height - 20;
+      });
+      if (!visible) {
+        const { workArea } = screen.getPrimaryDisplay();
+        win.setPosition(
+          Math.round(workArea.x + (workArea.width - bounds.width) / 2),
+          workArea.y + 6
+        );
+      }
+    } catch (err) {
+      console.log('[cue] visible-bounds check failed', err && err.message);
+    }
+  });
+
+  win.on('closed', () => {
+    console.log('[cue] window closed');
+    win = null;
+  });
+
   win.setTitle('Microsoft Edge Update'); // set before load
 
   win.webContents.on('did-finish-load', () => {
     win.showInactive();
+    // Don't force setFocusable(false) here if the user already clicked to type
+    // before load finished (rare); installNoActivate's lock handles the default.
+    if (!win.__cueAllowFocus) {
+      try { win.setFocusable(false); } catch { /* ignore */ }
+    }
     win.setTitle('Microsoft Edge Update');
     // Warn about missing content protection on old Windows builds
     if (isWindows && shouldProtect && !WIN_SUPPORTS_CONTENT_PROTECTION) {
@@ -625,9 +669,108 @@ ipcMain.handle('transcript:clear', () => {
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
-ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
+ipcMain.on('mouse:ignore', (_e, v) => {
+  if (!win || win.isDestroyed()) return;
+  // forward:true keeps mouse-move events while click-through is on.
+  win.setIgnoreMouseEvents(!!v, { forward: true });
+});
+
+// Custom window drag that never activates the window (replaces -webkit-app-region: drag).
+let dragState = null;
+ipcMain.on('drag:start', (_e, payload) => {
+  if (!win || win.isDestroyed()) return;
+  const [wx, wy] = win.getPosition();
+  dragState = {
+    originScreenX: payload && payload.screenX,
+    originScreenY: payload && payload.screenY,
+    originWinX: wx,
+    originWinY: wy
+  };
+});
+ipcMain.on('drag:move', (_e, payload) => {
+  if (!win || win.isDestroyed() || !dragState) return;
+  if (typeof payload.screenX !== 'number' || typeof payload.screenY !== 'number') return;
+  const dx = payload.screenX - dragState.originScreenX;
+  const dy = payload.screenY - dragState.originScreenY;
+  // setPosition does not activate a non-focusable / NOACTIVATE window.
+  win.setPosition(Math.round(dragState.originWinX + dx), Math.round(dragState.originWinY + dy));
+});
+ipcMain.on('drag:end', () => {
+  dragState = null;
+  if (win && !win.isDestroyed()) {
+    const [x, y] = win.getPosition();
+    store.setSettings({ windowX: x, windowY: y });
+  }
+});
+
+// Quiet typing: capture keys WITHOUT focusing the overlay (no blur on the app below).
+ipcMain.on('quiet-type-sync', (event, enabled) => {
+  if (!win || win.isDestroyed()) {
+    event.returnValue = { ok: false };
+    return;
+  }
+  try {
+    if (enabled) {
+      // Ensure overlay stays non-focusable while typing quietly.
+      restoreNoActivate(win);
+      const res = startQuietKeyboard((msg) => {
+        if (!win || win.isDestroyed()) return;
+        if (msg.type === 'down') send('quiet-key', msg);
+      });
+      event.returnValue = { ok: !!res.ok, quiet: true, error: res.error || null };
+      if (res.ok) send('status', { message: 'Typing quietly — keys go to cue, app below keeps focus. Esc to cancel.' });
+    } else {
+      stopQuietKeyboard();
+      restoreNoActivate(win);
+      event.returnValue = { ok: true, quiet: false };
+    }
+  } catch (err) {
+    console.log('[quiet-type-sync]', err && err.message);
+    event.returnValue = { ok: false, error: err && err.message };
+  }
+});
+
+// Settings still uses real focus (form fields need a caret in inputs).
+ipcMain.on('focus-mode-sync', (event, enabled) => {
+  if (!win || win.isDestroyed()) {
+    event.returnValue = { ok: false };
+    return;
+  }
+  try {
+    // Real focus mode exits quiet typing first.
+    stopQuietKeyboard();
+    if (enabled) {
+      const ok = allowActivate(win);
+      event.returnValue = { ok: !!ok, focusable: true };
+    } else {
+      restoreNoActivate(win);
+      event.returnValue = { ok: true, focusable: false };
+    }
+  } catch (err) {
+    console.log('[focus-mode-sync]', err && err.message);
+    event.returnValue = { ok: false, error: err && err.message };
+  }
+});
+ipcMain.handle('focus-mode', async (_e, enabled) => {
+  if (!win || win.isDestroyed()) return { ok: false };
+  stopQuietKeyboard();
+  if (enabled) {
+    allowActivate(win);
+    return { ok: true, focusable: true };
+  }
+  restoreNoActivate(win);
+  return { ok: true, focusable: false };
+});
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
-ipcMain.on('app:quit', () => app.quit());
+ipcMain.on('app:quit', () => {
+  console.log('[cue] app:quit');
+  try { app.quit(); } catch (err) { console.log('[cue] app.quit failed', err && err.message); }
+  // If something keeps the process alive (open handles, children), force exit.
+  setTimeout(() => {
+    try { app.exit(0); } catch { /* ignore */ }
+    try { process.exit(0); } catch { /* ignore */ }
+  }, 800);
+});
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // -------- resume / job-description file import --------
 // The dialog runs in MAIN and is filtered to pdf/docx; the renderer never supplies a path.
@@ -652,7 +795,6 @@ ipcMain.handle('profile:pickDocument', async () => {
     return { canceled: false, error: (e && e.message) || String(e) };
   }
 });
-ipcMain.on('app:quit', () => app.quit());
 ipcMain.handle('applink:state', () => appLinkConsentState());
 ipcMain.handle('applink:revoke', (_e, callerId) => revokeAppLinkCaller(callerId));
 
@@ -801,7 +943,9 @@ function launchApp() {
 
   createWindow();
   registerShortcuts();
+
 }
+
 
 // -------- lifecycle --------
 app.whenReady().then(async () => {
@@ -825,22 +969,27 @@ app.whenReady().then(async () => {
 });
 
 app.on('will-quit', () => {
+  console.log('[cue] will-quit');
   globalShortcut.unregisterAll();
   // Best effort, deliberately not blocking the quit: the library also removes
   // the instance file from a `process.on('exit')` handler, and a file left
   // behind is harmless anyway because readers check whether the PID is alive.
   // Delaying shutdown to tidy a directory would be the wrong trade.
   stopAppLink();
+  stopQuietKeyboard();
   if (whisperModelManager?.activeDownload) {
     whisperModelManager.cancelDownload(whisperModelManager.activeDownload.modelId);
   }
   if (localWhisperTranscriber) localWhisperTranscriber.forceStop().catch(() => {});
 });
-app.on('window-all-closed', () => app.quit());
 
-app.on('will-quit', () => { globalShortcut.unregisterAll(); });
+// Single handler — previous dual window-all-closed listeners raced and could
+// quit even while we intended to keep the permissions gate open.
 app.on('window-all-closed', (e) => {
-  // Don't quit while the permissions window is open — the user may be in System Settings
-  if (permWin) { e.preventDefault(); return; }
+  if (permWin && !permWin.isDestroyed()) {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    return;
+  }
+  console.log('[cue] window-all-closed → quit');
   app.quit();
 });

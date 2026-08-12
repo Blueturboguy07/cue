@@ -29,11 +29,18 @@
 
 html, body {
   margin: 0;
+  width: 100%;
   height: 100%;
   background: transparent;               /* Electron transparent window */
   font-family: var(--font);
   -webkit-font-smoothing: antialiased;
-  overflow: hidden;
+  /* Lock the overlay shell — only intentional panes (#messages, settings,
+     textarea) may scroll. scrollIntoView / wheel used to shift the whole
+     window so only the drag pill stayed on screen. */
+  overflow: hidden !important;
+  overscroll-behavior: none;
+  position: fixed;
+  inset: 0;
   cursor: default;
   -webkit-user-select: none;
   user-select: none;
@@ -45,16 +52,38 @@ html, body {
 #app {
   position: relative;
   z-index: 2;
+  width: 100%;
   height: 100%;
+  max-height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
   padding-top: 14px;
   pointer-events: none;                  /* only the actual UI blocks; gaps pass through */
 }
+/* Toolbar stays pinned at the top of the overlay; panel scrolls internally only. */
+#toolbar {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 5;
+}
+#panel-wrap {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: calc(100% - 56px);
+  overflow: hidden;
+}
 #toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
-#toolbar { -webkit-app-region: drag; }   /* drag the top pill to move the window */
-#panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary { -webkit-app-region: no-drag; }
+/* No -webkit-app-region: drag — Chromium's drag region activates the window and
+   blurs the app underneath. Drag is handled in renderer.js via screen coords. */
+/* Explicit no-drag on toolbar controls so Quit / Hide / Stop clicks always register. */
+#toolbar button, #toolbar .tb-quit, #toolbar .tb-stop, #toolbar .tb-hide, #toolbar .tb-logo {
+  -webkit-app-region: no-drag;
+}
+#panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary {
+  -webkit-app-region: no-drag;
+}
 
 /* ============================ Toolbar pill ============================ */
 #toolbar {
@@ -68,8 +97,10 @@ html, body {
   box-shadow: 0 8px 24px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.08);
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
+  -webkit-app-region: no-drag;
+  user-select: none;
 }
-.drag-handle { -webkit-app-region: drag; }
+.drag-handle { -webkit-app-region: no-drag; }
 .drag-pill {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 8px; border-radius: var(--r-pill);
@@ -77,9 +108,16 @@ html, body {
   color: rgba(255,255,255,0.8);
   font-size: 12px; font-weight: 600; letter-spacing: 0.01em;
   cursor: grab;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
+  touch-action: none;
 }
 .drag-pill:hover { background: rgba(255,255,255,0.10); }
+.drag-pill.dragging { cursor: grabbing; background: rgba(255,255,255,0.14); }
+/* Overlay controls never show a focus ring — they must not look or act focused. */
+button:focus, button:focus-visible, textarea:focus, input:focus, select:focus {
+  outline: none !important;
+  box-shadow: none;
+}
 .drag-dots {
   width: 14px; height: 10px;
   display: inline-block;
@@ -147,7 +185,11 @@ html, body {
 .mic-perm-actions button.dismiss:hover { background: rgba(255,255,255,0.10); color: var(--tx-2); }
 
 /* ============================ Panel ============================ */
-#panel-wrap { position: relative; margin-top: 12px; width: min(624px, 94vw); }
+#panel-wrap {
+  position: relative;
+  margin-top: 12px;
+  width: min(624px, 94vw);
+}
 button:focus { outline: none; }
 #live-dot {
   position: absolute; top: -3px; left: -5px; z-index: 4;
@@ -170,7 +212,14 @@ button:focus { outline: none; }
 #panel.collapsed { display: none; }
 
 /* ============================ Messages ============================ */
-#messages { display: flex; flex-direction: column; overflow-y: auto; max-height: 50vh; }
+#messages {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: min(50vh, 280px);
+  overscroll-behavior: contain; /* don't chain-scroll the overlay window */
+}
 .user-bubble {
   align-self: flex-end;
   max-width: 75%;
@@ -397,6 +446,42 @@ button:focus { outline: none; }
 }
 #composer.focused { border-color: var(--bd-strong); box-shadow: 0 0 0 3px rgba(60,131,245,0.15); }
 #input-area { position: relative; min-height: 22px; }
+/* Fake caret — position is updated in JS to track the quiet-typing cursor. */
+#quiet-caret {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 18px;
+  margin-top: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: quietCaretBlink 1.05s step-end infinite;
+  pointer-events: none;
+  z-index: 3;
+  will-change: transform;
+}
+#quiet-caret.hidden { display: none; }
+@keyframes quietCaretBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+#composer.quiet-typing {
+  border-color: var(--bd-strong);
+  box-shadow: 0 0 0 3px rgba(60,131,245,0.15);
+}
+/* Hidden mirror used only for measuring caret x/y (same font metrics as #input). */
+#quiet-caret-mirror {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  top: 0;
+  left: 0;
+  z-index: -1;
+}
 #placeholder {
   position: absolute; inset: 0; pointer-events: none;
   color: var(--tx-mut); font-size: 15px; line-height: 22px;
