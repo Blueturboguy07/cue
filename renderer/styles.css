@@ -470,7 +470,8 @@ button:focus { outline: none; }
   border-color: var(--bd-strong);
   box-shadow: 0 0 0 3px rgba(60,131,245,0.15);
 }
-/* Hidden mirror used only for measuring caret x/y (same font metrics as #input). */
+/* Mirror measures caret x/y; when a range is selected it paints a highlight
+   over the real textarea text (color transparent, only .quiet-sel shows). */
 #quiet-caret-mirror {
   position: absolute;
   visibility: hidden;
@@ -481,6 +482,16 @@ button:focus { outline: none; }
   top: 0;
   left: 0;
   z-index: -1;
+  color: transparent;
+}
+#quiet-caret-mirror.sel-visible {
+  visibility: visible;
+  z-index: 2;
+}
+#quiet-caret-mirror .quiet-sel {
+  background: rgba(60, 131, 245, 0.38);
+  color: transparent;
+  border-radius: 2px;
 }
 #placeholder {
   position: absolute; inset: 0; pointer-events: none;

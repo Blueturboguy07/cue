@@ -610,12 +610,82 @@
   });
   // Quiet typing: system key hook feeds the composer WITHOUT focusing cue,
   // so the app underneath never blurs / never logs focus events.
-  // A fake caret tracks the insertion point (real textarea caret needs OS focus).
+  // A fake caret + selection range track editing without OS focus.
   let typingArmed = false;
-  let quietCursor = 0; // insertion index into input.value
+  let quietCursor = 0; // active end of selection / insertion index
+  let quietAnchor = null; // null = collapsed caret; set while extending selection
   const quietCaretEl = document.getElementById('quiet-caret');
   let quietMirror = null;
   let quietMeasureCanvas = null;
+
+  function quietSelRange() {
+    const vLen = (input.value || '').length;
+    const cur = Math.max(0, Math.min(quietCursor, vLen));
+    if (quietAnchor == null) return { start: cur, end: cur };
+    const a = Math.max(0, Math.min(quietAnchor, vLen));
+    return { start: Math.min(a, cur), end: Math.max(a, cur) };
+  }
+
+  function hasQuietSel() {
+    const { start, end } = quietSelRange();
+    return end > start;
+  }
+
+  function clearQuietSel() {
+    quietAnchor = null;
+  }
+
+  function setQuietCursor(pos, { extend = false } = {}) {
+    const vLen = (input.value || '').length;
+    const next = Math.max(0, Math.min(pos, vLen));
+    if (extend) {
+      if (quietAnchor == null) quietAnchor = quietCursor;
+    } else {
+      quietAnchor = null;
+    }
+    quietCursor = next;
+    try {
+      const { start, end } = quietSelRange();
+      input.setSelectionRange(start, end);
+    } catch { /* ignore */ }
+    updateQuietCaret();
+  }
+
+  function isWordChar(ch) {
+    return !!ch && /[A-Za-z0-9_]/.test(ch);
+  }
+
+  function wordLeft(v, i) {
+    let p = Math.max(0, Math.min(i, v.length));
+    while (p > 0 && /\s/.test(v[p - 1])) p--;
+    if (p > 0 && !isWordChar(v[p - 1])) {
+      // punctuation cluster
+      while (p > 0 && !isWordChar(v[p - 1]) && !/\s/.test(v[p - 1])) p--;
+    } else {
+      while (p > 0 && isWordChar(v[p - 1])) p--;
+    }
+    return p;
+  }
+
+  function wordRight(v, i) {
+    let p = Math.max(0, Math.min(i, v.length));
+    while (p < v.length && /\s/.test(v[p])) p++;
+    if (p < v.length && !isWordChar(v[p])) {
+      while (p < v.length && !isWordChar(v[p]) && !/\s/.test(v[p])) p++;
+    } else {
+      while (p < v.length && isWordChar(v[p])) p++;
+    }
+    return p;
+  }
+
+  function lineStartAt(v, i) {
+    return v.lastIndexOf('\n', Math.max(0, i - 1)) + 1;
+  }
+
+  function lineEndAt(v, i) {
+    const nextNl = v.indexOf('\n', i);
+    return nextNl === -1 ? v.length : nextNl;
+  }
 
   function ensureQuietMirror() {
     if (quietMirror && quietMirror.isConnected) return quietMirror;
@@ -658,12 +728,17 @@
     if (!quietCaretEl) return;
     if (!typingArmed) {
       quietCaretEl.classList.add('hidden');
+      if (quietMirror) quietMirror.classList.remove('sel-visible');
       return;
     }
-    quietCaretEl.classList.remove('hidden');
 
     const value = input.value || '';
     quietCursor = Math.max(0, Math.min(quietCursor, value.length));
+    if (quietAnchor != null) {
+      quietAnchor = Math.max(0, Math.min(quietAnchor, value.length));
+    }
+    const { start, end } = quietSelRange();
+    const selected = end > start;
 
     syncQuietMirrorStyles();
     const mirror = ensureQuietMirror();
@@ -672,29 +747,59 @@
     const padL = parseFloat(cs.paddingLeft) || 0;
     const padT = parseFloat(cs.paddingTop) || 0;
 
-    // Build mirror: text before caret + a zero-width marker span we can offset.
-    const before = value.slice(0, quietCursor);
-    const after = value.slice(quietCursor);
-    // Use a marker char that collapses to caret position
+    // Mirror: optional selection highlight + zero-width mark at active caret end.
     mirror.innerHTML = '';
-    const pre = document.createElement('span');
-    pre.textContent = before;
     const mark = document.createElement('span');
     mark.id = 'quiet-caret-mark';
-    mark.textContent = '\u200b'; // zero-width space
-    const post = document.createElement('span');
-    post.textContent = after;
-    mirror.append(pre, mark, post);
+    mark.textContent = '\u200b';
+
+    function spanText(str, className) {
+      const el = document.createElement('span');
+      if (className) el.className = className;
+      el.textContent = str;
+      return el;
+    }
+
+    if (!selected) {
+      mirror.append(spanText(value.slice(0, quietCursor)), mark, spanText(value.slice(quietCursor)));
+    } else if (quietCursor <= start) {
+      // Active end on the left of the range
+      mirror.append(
+        spanText(value.slice(0, quietCursor)),
+        mark,
+        spanText(value.slice(start, end), 'quiet-sel'),
+        spanText(value.slice(end))
+      );
+    } else if (quietCursor >= end) {
+      mirror.append(
+        spanText(value.slice(0, start)),
+        spanText(value.slice(start, end), 'quiet-sel'),
+        mark,
+        spanText(value.slice(end))
+      );
+    } else {
+      // Active end inside the range
+      mirror.append(
+        spanText(value.slice(0, start)),
+        spanText(value.slice(start, quietCursor), 'quiet-sel'),
+        mark,
+        spanText(value.slice(quietCursor, end), 'quiet-sel'),
+        spanText(value.slice(end))
+      );
+    }
+
+    mirror.classList.toggle('sel-visible', selected);
 
     // Force layout then read marker position relative to input-area
     const area = document.getElementById('input-area');
+    const markEl = document.getElementById('quiet-caret-mark') || mark;
     const areaRect = area.getBoundingClientRect();
-    const markRect = mark.getBoundingClientRect();
+    const markRect = markEl.getBoundingClientRect();
     let x = markRect.left - areaRect.left;
     let y = markRect.top - areaRect.top;
 
     // Fallback if mirror is empty / not laid out yet
-    if (!before && (x === 0 && y === 0)) {
+    if (!value && (x === 0 && y === 0)) {
       x = padL;
       y = padT;
     }
@@ -705,17 +810,23 @@
     x = Math.max(0, Math.min(x, maxX));
     y = Math.max(0, Math.min(y, maxY));
 
-    quietCaretEl.style.height = Math.min(18, lineHeight - 2) + 'px';
-    quietCaretEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
-    // Restart blink so it stays solid right after a keystroke
-    quietCaretEl.style.animation = 'none';
-    // force reflow
-    void quietCaretEl.offsetWidth;
-    quietCaretEl.style.animation = '';
+    // Hide caret while a range is selected (selection paint is enough).
+    if (selected) {
+      quietCaretEl.classList.add('hidden');
+    } else {
+      quietCaretEl.classList.remove('hidden');
+      quietCaretEl.style.height = Math.min(18, lineHeight - 2) + 'px';
+      quietCaretEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+      // Restart blink so it stays solid right after a keystroke
+      quietCaretEl.style.animation = 'none';
+      void quietCaretEl.offsetWidth;
+      quietCaretEl.style.animation = '';
+    }
 
     // Scroll textarea so the caret line stays visible
     try {
-      const lineIndex = before.split('\n').length - 1;
+      const beforeCaret = value.slice(0, quietCursor);
+      const lineIndex = beforeCaret.split('\n').length - 1;
       const targetTop = lineIndex * lineHeight;
       if (targetTop < input.scrollTop) input.scrollTop = targetTop;
       if (targetTop + lineHeight > input.scrollTop + input.clientHeight) {
@@ -726,11 +837,10 @@
 
   function setQuietValue(next, cursor) {
     input.value = next;
+    quietAnchor = null;
     quietCursor = Math.max(0, Math.min(cursor, next.length));
-    // Keep native selection in sync (harmless without focus, useful if focus fallback)
     try { input.setSelectionRange(quietCursor, quietCursor); } catch { /* ignore */ }
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    // Grow textarea height like the normal input handler
     try {
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 140) + 'px';
@@ -741,80 +851,163 @@
   }
 
   function insertQuietText(chunk) {
-    if (!chunk) return;
+    if (chunk == null || chunk === '') return;
     const v = input.value || '';
-    const next = v.slice(0, quietCursor) + chunk + v.slice(quietCursor);
-    setQuietValue(next, quietCursor + chunk.length);
+    const { start, end } = quietSelRange();
+    const next = v.slice(0, start) + chunk + v.slice(end);
+    setQuietValue(next, start + chunk.length);
+  }
+
+  function deleteQuietSelectionOr(dir) {
+    const v = input.value || '';
+    if (hasQuietSel()) {
+      const { start, end } = quietSelRange();
+      setQuietValue(v.slice(0, start) + v.slice(end), start);
+      return;
+    }
+    if (dir === 'back' && quietCursor > 0) {
+      setQuietValue(v.slice(0, quietCursor - 1) + v.slice(quietCursor), quietCursor - 1);
+    } else if (dir === 'fwd' && quietCursor < v.length) {
+      setQuietValue(v.slice(0, quietCursor) + v.slice(quietCursor + 1), quietCursor);
+    } else {
+      updateQuietCaret();
+    }
+  }
+
+  function writeQuietClipboard(text) {
+    if (!text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
   }
 
   function applyQuietKey(msg) {
     if (!typingArmed || !msg || msg.type !== 'down') return;
-    const { key, text, ctrl, alt, meta } = msg;
+    const { key, text, ctrl, alt, meta, shift } = msg;
+    const mod = !!(ctrl || meta);
     const v = input.value || '';
+    const k = (key && key.length === 1) ? key.toLowerCase() : key;
 
     if (key === 'Escape') {
+      if (hasQuietSel()) {
+        clearQuietSel();
+        updateQuietCaret();
+        return;
+      }
       disarmTyping();
       return;
     }
-    if (key === 'Enter' && !ctrl && !alt && !meta) {
+    if (key === 'Enter' && !mod && !alt) {
       send();
       disarmTyping();
       return;
     }
+
+    // ---- Editing chords (Ctrl/Cmd) ----
+    if (mod && !alt) {
+      if (k === 'a') {
+        quietAnchor = 0;
+        quietCursor = v.length;
+        try { input.setSelectionRange(0, v.length); } catch { /* ignore */ }
+        updateQuietCaret();
+        return;
+      }
+      if (k === 'c') {
+        const { start, end } = quietSelRange();
+        if (end > start) writeQuietClipboard(v.slice(start, end));
+        return;
+      }
+      if (k === 'x') {
+        const { start, end } = quietSelRange();
+        if (end > start) {
+          writeQuietClipboard(v.slice(start, end));
+          setQuietValue(v.slice(0, start) + v.slice(end), start);
+        }
+        return;
+      }
+      if (k === 'v') {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then((t) => {
+            if (!t || !typingArmed) return;
+            insertQuietText(t);
+          }).catch(() => {});
+        }
+        return;
+      }
+      if (k === 'z') {
+        // Match focused path: restore last question when the box is empty.
+        if (!v.trim()) restoreLastQuestion();
+        return;
+      }
+    }
+
     if (key === 'ArrowLeft') {
-      quietCursor = ctrl ? 0 : Math.max(0, quietCursor - 1);
-      updateQuietCaret();
+      let pos;
+      if (mod) pos = wordLeft(v, quietCursor);
+      else if (!shift && hasQuietSel()) pos = quietSelRange().start;
+      else pos = Math.max(0, quietCursor - 1);
+      setQuietCursor(pos, { extend: !!shift });
       return;
     }
     if (key === 'ArrowRight') {
-      quietCursor = ctrl ? v.length : Math.min(v.length, quietCursor + 1);
-      updateQuietCaret();
+      let pos;
+      if (mod) pos = wordRight(v, quietCursor);
+      else if (!shift && hasQuietSel()) pos = quietSelRange().end;
+      else pos = Math.min(v.length, quietCursor + 1);
+      setQuietCursor(pos, { extend: !!shift });
       return;
     }
-    if (key === 'Home' || (key === 'ArrowUp' && ctrl)) {
-      // start of current line
-      const lineStart = v.lastIndexOf('\n', Math.max(0, quietCursor - 1)) + 1;
-      quietCursor = lineStart;
-      updateQuietCaret();
+    if (key === 'ArrowUp') {
+      // Line up is hard without full layout; jump to line start (or doc start with Ctrl).
+      const pos = mod ? 0 : lineStartAt(v, quietCursor);
+      setQuietCursor(pos, { extend: !!shift });
       return;
     }
-    if (key === 'End' || (key === 'ArrowDown' && ctrl)) {
-      const nextNl = v.indexOf('\n', quietCursor);
-      quietCursor = nextNl === -1 ? v.length : nextNl;
-      updateQuietCaret();
+    if (key === 'ArrowDown') {
+      const pos = mod ? v.length : lineEndAt(v, quietCursor);
+      setQuietCursor(pos, { extend: !!shift });
+      return;
+    }
+    if (key === 'Home') {
+      const pos = mod ? 0 : lineStartAt(v, quietCursor);
+      setQuietCursor(pos, { extend: !!shift });
+      return;
+    }
+    if (key === 'End') {
+      const pos = mod ? v.length : lineEndAt(v, quietCursor);
+      setQuietCursor(pos, { extend: !!shift });
       return;
     }
     if (key === 'Backspace') {
-      if (ctrl) {
-        setQuietValue(v.slice(quietCursor), 0);
-      } else if (quietCursor > 0) {
-        setQuietValue(v.slice(0, quietCursor - 1) + v.slice(quietCursor), quietCursor - 1);
+      if (hasQuietSel()) {
+        deleteQuietSelectionOr('back');
+        return;
+      }
+      if (mod) {
+        const from = wordLeft(v, quietCursor);
+        setQuietValue(v.slice(0, from) + v.slice(quietCursor), from);
       } else {
-        updateQuietCaret();
+        deleteQuietSelectionOr('back');
       }
       return;
     }
     if (key === 'Delete') {
-      if (quietCursor < v.length) {
-        setQuietValue(v.slice(0, quietCursor) + v.slice(quietCursor + 1), quietCursor);
+      if (hasQuietSel()) {
+        deleteQuietSelectionOr('fwd');
+        return;
+      }
+      if (mod) {
+        const to = wordRight(v, quietCursor);
+        setQuietValue(v.slice(0, quietCursor) + v.slice(to), quietCursor);
       } else {
-        updateQuietCaret();
+        deleteQuietSelectionOr('fwd');
       }
       return;
     }
-    // Printable text
-    if (text && text.length && !ctrl && !alt && !meta) {
+    // Printable text (replaces selection if any)
+    if (text && text.length && !mod && !alt) {
       insertQuietText(text);
       return;
-    }
-    // Ctrl+V paste
-    if ((ctrl || meta) && (key === 'v' || key === 'V')) {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        navigator.clipboard.readText().then((t) => {
-          if (!t || !typingArmed) return;
-          insertQuietText(t);
-        }).catch(() => {});
-      }
     }
   }
 
@@ -827,6 +1020,7 @@
     input.tabIndex = -1; // never OS-focus the textarea
     try { input.blur(); } catch { /* ignore */ }
     quietCursor = (input.value || '').length;
+    quietAnchor = null;
     composer.classList.add('focused', 'quiet-typing');
     placeholder.classList.add('hidden');
     updateQuietCaret();
@@ -848,11 +1042,14 @@
     if (!typingArmed) {
       if (cue.quietTypeSync) try { cue.quietTypeSync(false); } catch { /* ignore */ }
       if (quietCaretEl) quietCaretEl.classList.add('hidden');
+      if (quietMirror) quietMirror.classList.remove('sel-visible');
       return;
     }
     typingArmed = false;
+    quietAnchor = null;
     composer.classList.remove('focused', 'quiet-typing');
     if (quietCaretEl) quietCaretEl.classList.add('hidden');
+    if (quietMirror) quietMirror.classList.remove('sel-visible');
     syncPlaceholder();
     if (cue.quietTypeSync) {
       try { cue.quietTypeSync(false); } catch { /* ignore */ }
@@ -900,6 +1097,7 @@
     
     input.value = '';
     quietCursor = 0;
+    quietAnchor = null;
     inputFromSTT = false;
     lastSTTValue = ''; // FIX #6: Clear tracked STT value
     userSpeechStart = null;

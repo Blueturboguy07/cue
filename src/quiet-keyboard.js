@@ -93,12 +93,23 @@ public static class CueQuietKb {
       case 0x0D: return "Enter";
       case 0x1B: return "Escape";
       case 0x2E: return "Delete";
+      case 0x23: return "End";
+      case 0x24: return "Home";
       case 0x25: return "ArrowLeft";
       case 0x26: return "ArrowUp";
       case 0x27: return "ArrowRight";
       case 0x28: return "ArrowDown";
       default: return null;
     }
+  }
+
+  // Stable letter/digit tokens even with Ctrl/Alt held (ToUnicode returns
+  // control chars or nothing for Ctrl+A, so shortcuts never matched).
+  static string LetterOrDigit(uint vk) {
+    if (vk >= 0x41 && vk <= 0x5A) return ((char)(vk + 32)).ToString(); // a-z
+    if (vk >= 0x30 && vk <= 0x39) return ((char)vk).ToString();
+    if (vk >= 0x60 && vk <= 0x69) return ((char)('0' + (vk - 0x60))).ToString(); // numpad
+    return null;
   }
 
   static string ToChar(uint vk, uint scan) {
@@ -137,13 +148,19 @@ public static class CueQuietKb {
           string key = Named(vk);
           string text = "";
           if (key == null) {
-            if (down && !ctrl && !alt && !meta) {
+            string lod = LetterOrDigit(vk);
+            if (lod != null) {
+              key = lod;
+              // Printable glyph only without chord modifiers (Ctrl+A is not "a").
+              if (down && !ctrl && !alt && !meta) {
+                string ch = ToChar(vk, info.scanCode);
+                if (!string.IsNullOrEmpty(ch)) text = ch;
+              }
+            } else if (down && !ctrl && !alt && !meta) {
               string ch = ToChar(vk, info.scanCode);
               if (!string.IsNullOrEmpty(ch)) { text = ch; key = ch; }
             }
             if (key == null) key = "Vk" + vk;
-          } else if (key == null) {
-            key = "Vk" + vk;
           }
           string line = (down ? "D" : "U") + "|" + Clean(key) + "|" + Clean(text) + "|"
             + (ctrl ? "1" : "0") + "|" + (alt ? "1" : "0") + "|" + (shift ? "1" : "0") + "|"
