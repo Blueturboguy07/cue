@@ -54,6 +54,10 @@ html, body {
 }
 #toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
 #toolbar { -webkit-app-region: drag; }   /* drag the top pill to move the window */
+/* Explicit no-drag on every toolbar control so clicks (esp. Quit) are not eaten by the drag region. */
+#toolbar button, #toolbar .tb-quit, #toolbar .tb-stop, #toolbar .tb-hide, #toolbar .tb-logo {
+  -webkit-app-region: no-drag;
+}
 #panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary { -webkit-app-region: no-drag; }
 
 /* ============================ Toolbar pill ============================ */
