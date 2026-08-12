@@ -21,6 +21,69 @@
   const clearIC = document.querySelector('#clear-transcript-btn .ic');
   if (clearIC) clearIC.innerHTML = icon('trash-2', { size: 15 });
 
+  // ---- non-activating UI -------------------------------------------------
+  // Overlay controls are hit-tested (pointer events) but must never take OS
+  // focus, so the app underneath (browser, IDE, meeting) does not blur.
+  function hardenNoFocus(root) {
+    const scope = root || document;
+    scope.querySelectorAll('button, a, [role="button"], input, textarea, select').forEach((el) => {
+      // Settings form fields are allowed focus only while focus-mode is on.
+      if (el.closest && el.closest('#settings, #onboard, #consent-scrim')) return;
+      try { el.tabIndex = -1; } catch { /* ignore */ }
+      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+        // Keep value editable by script/STT; block caret unless focus-mode.
+        el.setAttribute('data-no-focus', '1');
+      }
+    });
+  }
+  hardenNoFocus(document);
+
+  // Buttons: fire on pointerup in-bounds (hit test), never steal focus on mousedown.
+  document.addEventListener('mousedown', (e) => {
+    const t = e.target && e.target.closest && e.target.closest('button, .act, .smart-pill, .more-btn, .drag-pill');
+    if (!t) return;
+    // Allow settings/onboard to focus fields when focus-mode is enabled.
+    if (t.closest && t.closest('#settings-scrim, #onboard-scrim, #consent-scrim')) return;
+    e.preventDefault(); // prevents focus transfer that would blur the app below
+  }, true);
+
+  // Custom window drag — screen coordinates, no -webkit-app-region activation.
+  (function setupCustomDrag() {
+    const handle = document.querySelector('.drag-pill') || document.querySelector('#toolbar');
+    if (!handle || !cue.dragStart) return;
+    let dragging = false;
+    handle.addEventListener('pointerdown', (e) => {
+      // Only primary button; ignore clicks on toolbar buttons inside the pill row.
+      if (e.button !== 0) return;
+      if (e.target && e.target.closest && e.target.closest('button')) return;
+      dragging = true;
+      handle.classList.add('dragging');
+      try { handle.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      e.preventDefault();
+      cue.dragStart(e.screenX, e.screenY);
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      cue.dragMove(e.screenX, e.screenY);
+    });
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      try { if (e && e.pointerId != null) handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      cue.dragEnd();
+    }
+    handle.addEventListener('pointerup', endDrag);
+    handle.addEventListener('pointercancel', endDrag);
+    // Safety: if capture is lost
+    handle.addEventListener('lostpointercapture', () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      cue.dragEnd();
+    });
+  })();
+
   // ---- state -------------------------------------------------------------
   let settings = null;
   let whisperOverview = null;
@@ -31,6 +94,62 @@
   const MAX_RESPONSES = 20;
 
   const messages = $('#messages');
+
+  // ---- lock the overlay shell -------------------------------------------
+  // The transparent BrowserWindow must never pan. Only panes that opt in
+  // (messages, settings tab bodies, textarea, code blocks) may scroll.
+  function isScrollableTarget(el) {
+    let node = el;
+    while (node && node !== document.documentElement) {
+      if (node.nodeType === 1) {
+        const tag = node.tagName;
+        if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (node.id === 'messages' || node.id === 'transcript-list') return true;
+        if (node.classList && (
+          node.classList.contains('s-tab-pane') ||
+          node.classList.contains('s-body') ||
+          node.classList.contains('ai-code') ||
+          node.classList.contains('ob-body')
+        )) return true;
+        try {
+          const style = window.getComputedStyle(node);
+          const oy = style && style.overflowY;
+          if ((oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight + 1) {
+            return true;
+          }
+        } catch (_) { /* ignore */ }
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  function pinOverlayScroll() {
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+    if (document.documentElement) {
+      document.documentElement.scrollTop = 0;
+      document.documentElement.scrollLeft = 0;
+    }
+    if (document.body) {
+      document.body.scrollTop = 0;
+      document.body.scrollLeft = 0;
+    }
+  }
+
+  window.addEventListener('scroll', pinOverlayScroll, { passive: true, capture: true });
+  document.addEventListener('scroll', pinOverlayScroll, { passive: true, capture: true });
+  // Block wheel/trackpad panning of the window chrome; allow it inside panes.
+  window.addEventListener('wheel', (e) => {
+    if (!isScrollableTarget(e.target)) {
+      e.preventDefault();
+      pinOverlayScroll();
+    }
+  }, { passive: false, capture: true });
+  // Focus changes (e.g. focusing the composer) must not jump the window.
+  window.addEventListener('focusin', () => {
+    requestAnimationFrame(pinOverlayScroll);
+  }, true);
+  pinOverlayScroll();
 
   function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
@@ -474,9 +593,287 @@
     syncPlaceholder();
     updateSendButtonState(); // FIX #9: Update send button on input change
   });
-  input.addEventListener('focus', () => { composer.classList.add('focused'); placeholder.classList.add('hidden'); });
-  input.addEventListener('blur', () => { composer.classList.remove('focused'); syncPlaceholder(); });
-  $('#input-area').addEventListener('click', () => input.focus());
+  // Quiet typing: system key hook feeds the composer WITHOUT focusing cue,
+  // so the app underneath never blurs / never logs focus events.
+  // A fake caret tracks the insertion point (real textarea caret needs OS focus).
+  let typingArmed = false;
+  let quietCursor = 0; // insertion index into input.value
+  const quietCaretEl = document.getElementById('quiet-caret');
+  let quietMirror = null;
+  let quietMeasureCanvas = null;
+
+  function ensureQuietMirror() {
+    if (quietMirror && quietMirror.isConnected) return quietMirror;
+    quietMirror = document.createElement('div');
+    quietMirror.id = 'quiet-caret-mirror';
+    quietMirror.setAttribute('aria-hidden', 'true');
+    const area = document.getElementById('input-area');
+    if (area) area.appendChild(quietMirror);
+    return quietMirror;
+  }
+
+  function syncQuietMirrorStyles() {
+    const mirror = ensureQuietMirror();
+    const cs = window.getComputedStyle(input);
+    // Match textarea text metrics exactly so caret x/y land on the glyph edge.
+    mirror.style.font = cs.font;
+    mirror.style.fontSize = cs.fontSize;
+    mirror.style.fontFamily = cs.fontFamily;
+    mirror.style.fontWeight = cs.fontWeight;
+    mirror.style.fontStyle = cs.fontStyle;
+    mirror.style.letterSpacing = cs.letterSpacing;
+    mirror.style.lineHeight = cs.lineHeight;
+    mirror.style.padding = cs.padding;
+    mirror.style.border = cs.border;
+    mirror.style.boxSizing = cs.boxSizing;
+    mirror.style.width = input.clientWidth + 'px';
+    mirror.style.whiteSpace = 'pre-wrap';
+    mirror.style.wordWrap = 'break-word';
+  }
+
+  function measureTextWidth(str, font) {
+    if (!quietMeasureCanvas) quietMeasureCanvas = document.createElement('canvas');
+    const ctx = quietMeasureCanvas.getContext('2d');
+    if (!ctx) return str.length * 8;
+    ctx.font = font;
+    return ctx.measureText(str || '').width;
+  }
+
+  function updateQuietCaret() {
+    if (!quietCaretEl) return;
+    if (!typingArmed) {
+      quietCaretEl.classList.add('hidden');
+      return;
+    }
+    quietCaretEl.classList.remove('hidden');
+
+    const value = input.value || '';
+    quietCursor = Math.max(0, Math.min(quietCursor, value.length));
+
+    syncQuietMirrorStyles();
+    const mirror = ensureQuietMirror();
+    const cs = window.getComputedStyle(input);
+    const lineHeight = parseFloat(cs.lineHeight) || 22;
+    const padL = parseFloat(cs.paddingLeft) || 0;
+    const padT = parseFloat(cs.paddingTop) || 0;
+
+    // Build mirror: text before caret + a zero-width marker span we can offset.
+    const before = value.slice(0, quietCursor);
+    const after = value.slice(quietCursor);
+    // Use a marker char that collapses to caret position
+    mirror.innerHTML = '';
+    const pre = document.createElement('span');
+    pre.textContent = before;
+    const mark = document.createElement('span');
+    mark.id = 'quiet-caret-mark';
+    mark.textContent = '\u200b'; // zero-width space
+    const post = document.createElement('span');
+    post.textContent = after;
+    mirror.append(pre, mark, post);
+
+    // Force layout then read marker position relative to input-area
+    const area = document.getElementById('input-area');
+    const areaRect = area.getBoundingClientRect();
+    const markRect = mark.getBoundingClientRect();
+    let x = markRect.left - areaRect.left;
+    let y = markRect.top - areaRect.top;
+
+    // Fallback if mirror is empty / not laid out yet
+    if (!before && (x === 0 && y === 0)) {
+      x = padL;
+      y = padT;
+    }
+
+    // Keep caret inside the visible input box
+    const maxX = Math.max(0, input.clientWidth - 2);
+    const maxY = Math.max(0, (input.clientHeight || lineHeight) - 2);
+    x = Math.max(0, Math.min(x, maxX));
+    y = Math.max(0, Math.min(y, maxY));
+
+    quietCaretEl.style.height = Math.min(18, lineHeight - 2) + 'px';
+    quietCaretEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+    // Restart blink so it stays solid right after a keystroke
+    quietCaretEl.style.animation = 'none';
+    // force reflow
+    void quietCaretEl.offsetWidth;
+    quietCaretEl.style.animation = '';
+
+    // Scroll textarea so the caret line stays visible
+    try {
+      const lineIndex = before.split('\n').length - 1;
+      const targetTop = lineIndex * lineHeight;
+      if (targetTop < input.scrollTop) input.scrollTop = targetTop;
+      if (targetTop + lineHeight > input.scrollTop + input.clientHeight) {
+        input.scrollTop = targetTop + lineHeight - input.clientHeight;
+      }
+    } catch { /* ignore */ }
+  }
+
+  function setQuietValue(next, cursor) {
+    input.value = next;
+    quietCursor = Math.max(0, Math.min(cursor, next.length));
+    // Keep native selection in sync (harmless without focus, useful if focus fallback)
+    try { input.setSelectionRange(quietCursor, quietCursor); } catch { /* ignore */ }
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    // Grow textarea height like the normal input handler
+    try {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+    } catch { /* ignore */ }
+    syncPlaceholder();
+    updateSendButtonState();
+    updateQuietCaret();
+  }
+
+  function insertQuietText(chunk) {
+    if (!chunk) return;
+    const v = input.value || '';
+    const next = v.slice(0, quietCursor) + chunk + v.slice(quietCursor);
+    setQuietValue(next, quietCursor + chunk.length);
+  }
+
+  function applyQuietKey(msg) {
+    if (!typingArmed || !msg || msg.type !== 'down') return;
+    const { key, text, ctrl, alt, meta } = msg;
+    const v = input.value || '';
+
+    if (key === 'Escape') {
+      disarmTyping();
+      return;
+    }
+    if (key === 'Enter' && !ctrl && !alt && !meta) {
+      send();
+      disarmTyping();
+      return;
+    }
+    if (key === 'ArrowLeft') {
+      quietCursor = ctrl ? 0 : Math.max(0, quietCursor - 1);
+      updateQuietCaret();
+      return;
+    }
+    if (key === 'ArrowRight') {
+      quietCursor = ctrl ? v.length : Math.min(v.length, quietCursor + 1);
+      updateQuietCaret();
+      return;
+    }
+    if (key === 'Home' || (key === 'ArrowUp' && ctrl)) {
+      // start of current line
+      const lineStart = v.lastIndexOf('\n', Math.max(0, quietCursor - 1)) + 1;
+      quietCursor = lineStart;
+      updateQuietCaret();
+      return;
+    }
+    if (key === 'End' || (key === 'ArrowDown' && ctrl)) {
+      const nextNl = v.indexOf('\n', quietCursor);
+      quietCursor = nextNl === -1 ? v.length : nextNl;
+      updateQuietCaret();
+      return;
+    }
+    if (key === 'Backspace') {
+      if (ctrl) {
+        setQuietValue(v.slice(quietCursor), 0);
+      } else if (quietCursor > 0) {
+        setQuietValue(v.slice(0, quietCursor - 1) + v.slice(quietCursor), quietCursor - 1);
+      } else {
+        updateQuietCaret();
+      }
+      return;
+    }
+    if (key === 'Delete') {
+      if (quietCursor < v.length) {
+        setQuietValue(v.slice(0, quietCursor) + v.slice(quietCursor + 1), quietCursor);
+      } else {
+        updateQuietCaret();
+      }
+      return;
+    }
+    // Printable text
+    if (text && text.length && !ctrl && !alt && !meta) {
+      insertQuietText(text);
+      return;
+    }
+    // Ctrl+V paste
+    if ((ctrl || meta) && (key === 'v' || key === 'V')) {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then((t) => {
+          if (!t || !typingArmed) return;
+          insertQuietText(t);
+        }).catch(() => {});
+      }
+    }
+  }
+
+  function armTyping() {
+    if (typingArmed) {
+      updateQuietCaret();
+      return;
+    }
+    typingArmed = true;
+    input.tabIndex = -1; // never OS-focus the textarea
+    try { input.blur(); } catch { /* ignore */ }
+    quietCursor = (input.value || '').length;
+    composer.classList.add('focused', 'quiet-typing');
+    placeholder.classList.add('hidden');
+    updateQuietCaret();
+
+    let result = { ok: false };
+    if (cue.quietTypeSync) {
+      result = cue.quietTypeSync(true) || result;
+    }
+    if (!result.ok) {
+      // Fallback: old focus path (will blur the app below)
+      cue.log && cue.log('[armTyping] quiet hook failed, falling back to focus: ' + (result.error || ''));
+      if (cue.focusModeSync) cue.focusModeSync(true);
+      try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch { /* ignore */ } }
+      if (quietCaretEl) quietCaretEl.classList.add('hidden');
+    }
+  }
+
+  function disarmTyping() {
+    if (!typingArmed) {
+      if (cue.quietTypeSync) try { cue.quietTypeSync(false); } catch { /* ignore */ }
+      if (quietCaretEl) quietCaretEl.classList.add('hidden');
+      return;
+    }
+    typingArmed = false;
+    composer.classList.remove('focused', 'quiet-typing');
+    if (quietCaretEl) quietCaretEl.classList.add('hidden');
+    syncPlaceholder();
+    if (cue.quietTypeSync) {
+      try { cue.quietTypeSync(false); } catch { /* ignore */ }
+    }
+    if (cue.focusModeSync) {
+      try { cue.focusModeSync(false); } catch { /* ignore */ }
+    }
+  }
+
+  if (cue.on) {
+    cue.on('quiet-key', (msg) => applyQuietKey(msg));
+  }
+  // Keep caret aligned if the panel is resized while typing
+  window.addEventListener('resize', () => { if (typingArmed) updateQuietCaret(); });
+
+  // Click composer → arm quiet typing (no OS focus).
+  const armOnGesture = (e) => {
+    if (e.button != null && e.button !== 0) return;
+    if (e.target && e.target.closest && e.target.closest('#send-btn, button')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    armTyping();
+  };
+  $('#input-area').addEventListener('pointerdown', armOnGesture, true);
+  input.addEventListener('pointerdown', armOnGesture, true);
+  input.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); }, true);
+
+  // Clicking other cue chrome ends quiet typing (except send, which needs the text).
+  document.addEventListener('pointerdown', (e) => {
+    if (!typingArmed) return;
+    const t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('#input-area, #input, #send-btn')) return;
+    if (t.closest('#settings-scrim, #onboard-scrim, #consent-scrim')) return;
+    if (t.closest('#toolbar, #panel-wrap, button, .act')) disarmTyping();
+  }, true);
 
   function send() {
     const text = input.value.trim();
@@ -487,6 +884,7 @@
     saveToQuestionHistory(text);
     
     input.value = '';
+    quietCursor = 0;
     inputFromSTT = false;
     lastSTTValue = ''; // FIX #6: Clear tracked STT value
     userSpeechStart = null;
@@ -496,6 +894,7 @@
     clearTimeout(sttFillTimer);
     syncPlaceholder();
     updateSendButtonState(); // FIX #9
+    if (typingArmed) updateQuietCaret();
     
     // If text came from STT (interviewer question), use answerThis mode
     // Otherwise use ask mode (user typed their own question)
@@ -1089,9 +1488,13 @@
     aiEl.appendChild(caretEl);
     group.appendChild(aiEl);
     messages.appendChild(group);
-    // Use requestAnimationFrame so the DOM is fully updated before scrolling
+    // Scroll only inside #messages — never use Element.scrollIntoView, which
+    // can pan the whole transparent BrowserWindow and leave just the drag bar
+    // visible on screen.
     requestAnimationFrame(() => {
-      if (sep && sep.isConnected) sep.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      try {
+        messages.scrollTop = Math.max(0, messages.scrollHeight - messages.clientHeight);
+      } catch (_) { /* ignore */ }
     });
     setBusy(true);
   });
@@ -1222,16 +1625,25 @@
 
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
-  function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
-  async function closeSettings() {
-    if (await saveSettings()) scrim.classList.add('hidden');
-  }
   function openSettings() {
+    typingArmed = true;
+    // SYNC so settings fields can type immediately.
+    if (cue.focusModeSync) cue.focusModeSync(true);
+    else if (cue.focusMode) cue.focusMode(true);
     fillSettings();
     scrim.classList.remove('hidden');
     refreshWhisperModels();
   }
-  function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
+  async function closeSettings() {
+    const ok = await saveSettings();
+    if (!ok) return false;
+    scrim.classList.add('hidden');
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch { /* ignore */ }
+    typingArmed = false;
+    if (cue.focusModeSync) cue.focusModeSync(false);
+    else if (cue.focusMode) cue.focusMode(false);
+    return true;
+  }
   $('#more-btn').addEventListener('click', openSettings);
   $('#s-close').addEventListener('click', () => { void closeSettings(); });
   scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
@@ -1350,14 +1762,24 @@
   });
 
   function statusText() {
-    const k = settings.apiKeys;
-    const labels = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', azure: 'Azure AI Foundry' };
-    const has = Object.keys(labels).filter((p) => k[p]).map((p) => labels[p]);
+    const k = settings.apiKeys || {};
+    const labels = {
+      openai: 'OpenAI',
+      anthropic: 'Anthropic',
+      gemini: 'Gemini',
+      deepgram: 'Deepgram',
+      custom: 'Custom',
+      ollama: 'Ollama',
+      groq: 'Groq',
+      minimax: 'MiniMax',
+      azure: 'Azure AI Foundry'
+    };
     // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
     // is reported as-is so the status line matches what will actually be used.
     const selectedSttProvider = settings.sttProvider || 'auto';
     const automaticStt = k.deepgram ? 'Deepgram (streaming)' : (k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none')));
-    const stt = selectedSttProvider === 'auto' ? automaticStt : selectedSttProvider;
+    const sttLabels = { local: 'Local whisper', deepgram: 'Deepgram', openai: 'OpenAI', gemini: 'Gemini', auto: automaticStt };
+    const stt = selectedSttProvider === 'auto' ? automaticStt : (sttLabels[selectedSttProvider] || selectedSttProvider);
     const ready = [
       settings.resumeText ? '✓ resume' : null,
       settings.jobDescription ? '✓ JD' : null,
@@ -1531,6 +1953,7 @@
 
   async function saveSettings() {
     // Keys
+    if (!settings.apiKeys) settings.apiKeys = {};
     settings.apiKeys.openai = $('#key-openai').value.trim();
     settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
     settings.apiKeys.gemini = $('#key-gemini').value.trim();
@@ -1542,6 +1965,7 @@
     settings.apiKeys.minimax = $('#key-minimax').value.trim();
     settings.apiKeys.azure = $('#key-azure').value.trim();
     settings.azureEndpoint = $('#azure-endpoint').value.trim();
+    if (!settings.models) settings.models = {};
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
@@ -1572,7 +1996,7 @@
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       $('#s-status').textContent = message;
-      $('#base-url').focus();
+      // Don't steal focus on validation errors in the main overlay path.
       return false;
     }
   }
@@ -1628,7 +2052,7 @@
     // Do not wait for a mousemove to turn the mouse back on: the pointer may
     // already be still, and the sheet would be unclickable until it moved.
     setIgnore(false);
-    $('#cs-deny').focus();
+    // Do not focus consent buttons — would steal focus from the app below.
   });
 
   $('#cs-allow').addEventListener('click', () => answerConsent(true));

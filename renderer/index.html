@@ -58,6 +58,8 @@
               <div id="input-area">
                 <div id="placeholder">Ask about your screen or conversation, or <span class="keycap">⌘</span><span class="keycap">⏎</span> for Assist</div>
                 <textarea id="input" rows="1" spellcheck="false"></textarea>
+                <!-- Fake caret for quiet-typing (tracks text without OS focus) -->
+                <div id="quiet-caret" class="hidden" aria-hidden="true"></div>
               </div>
               <div id="composer-bottom">
                 <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
