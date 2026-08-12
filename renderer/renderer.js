@@ -11,6 +11,21 @@
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
   $('#quit-btn').innerHTML = icon('x', { size: 14 });
+  // Quit was icon-only — never wired. Use both click and pointerup so the
+  // toolbar drag region cannot swallow the gesture on Windows.
+  const quitBtn = $('#quit-btn');
+  if (quitBtn) {
+    quitBtn.title = isWindows ? 'Quit cue (Ctrl+Shift+X)' : 'Quit cue (⌘⇧X)';
+    const doQuit = (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      try { cue.quit(); } catch (err) { cue.log && cue.log('[quit] ' + (err && err.message)); }
+    };
+    quitBtn.addEventListener('click', doQuit);
+    quitBtn.addEventListener('pointerup', (e) => {
+      if (e.button !== 0) return;
+      doQuit(e);
+    });
+  }
   document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
   document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
   document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
@@ -1256,6 +1271,7 @@
   function fillSettings() {
     // Keys tab
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
+    if ($('#key-grok')) $('#key-grok').value = settings.apiKeys.grok || '';
     $('#key-openai').value = settings.apiKeys.openai || '';
     $('#key-anthropic').value = settings.apiKeys.anthropic || '';
     $('#key-gemini').value = settings.apiKeys.gemini || '';
@@ -1350,14 +1366,35 @@
   });
 
   function statusText() {
-    const k = settings.apiKeys;
-    const labels = { openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', azure: 'Azure AI Foundry' };
-    const has = Object.keys(labels).filter((p) => k[p]).map((p) => labels[p]);
+    const k = settings.apiKeys || {};
+    const labels = {
+      'claude-cli': 'Claude CLI',
+      'codex-cli': 'Codex CLI',
+      'grok-cli': 'Grok CLI',
+      grok: 'Grok',
+      openai: 'OpenAI',
+      anthropic: 'Anthropic',
+      gemini: 'Gemini',
+      deepgram: 'Deepgram',
+      custom: 'Custom',
+      ollama: 'Ollama',
+      groq: 'Groq',
+      minimax: 'MiniMax',
+      azure: 'Azure AI Foundry'
+    };
     // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
     // is reported as-is so the status line matches what will actually be used.
     const selectedSttProvider = settings.sttProvider || 'auto';
-    const automaticStt = k.deepgram ? 'Deepgram (streaming)' : (k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none')));
-    const stt = selectedSttProvider === 'auto' ? automaticStt : selectedSttProvider;
+    const hasGrokVoice = !!(k.grok || settings.provider === 'grok');
+    const automaticStt = k.deepgram
+      ? 'Deepgram (streaming)'
+      : (k.openai
+        ? 'OpenAI Realtime'
+        : (hasGrokVoice
+          ? 'Grok voice'
+          : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini (batch)' : 'none'))));
+    const sttLabels = { grok: 'Grok voice', local: 'Local', deepgram: 'Deepgram', openai: 'OpenAI', gemini: 'Gemini', auto: automaticStt };
+    const stt = selectedSttProvider === 'auto' ? automaticStt : (sttLabels[selectedSttProvider] || selectedSttProvider);
     const ready = [
       settings.resumeText ? '✓ resume' : null,
       settings.jobDescription ? '✓ JD' : null,
@@ -1531,6 +1568,8 @@
 
   async function saveSettings() {
     // Keys
+    if (!settings.apiKeys) settings.apiKeys = {};
+    if ($('#key-grok')) settings.apiKeys.grok = $('#key-grok').value.trim();
     settings.apiKeys.openai = $('#key-openai').value.trim();
     settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
     settings.apiKeys.gemini = $('#key-gemini').value.trim();

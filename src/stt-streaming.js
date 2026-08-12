@@ -7,6 +7,7 @@
 const { looksLikeHallucination } = require('./stt');
 const { pcmToWav } = require('./wav');
 const { CURRENT_GEMINI_DEFAULT } = require('./llm');
+const { XAI_STT_WS_URL, resolveGrokApiKey } = require('./grok-cli-auth');
 
 // ============================================================================
 // OpenAI Realtime Transcription Session (WebSocket)
@@ -367,6 +368,172 @@ class DeepgramStreamingSTT {
 }
 
 // ============================================================================
+// xAI / Grok streaming STT (WebSocket) — same voice stack as Grok CLI dictation
+// Docs: wss://api.x.ai/v1/stt  binary PCM frames + transcript.partial events
+// ============================================================================
+
+class XaiStreamingSTT {
+  constructor(apiKey, options = {}) {
+    this.apiKey = apiKey;
+    // Optional Settings key so reconnect can re-resolve Grok CLI OAuth tokens.
+    this.explicitKey = options.explicitKey || '';
+    this.ws = null;
+    this.connected = false;
+    this.onTranscript = options.onTranscript || (() => {});
+    this.onInterim = options.onInterim || (() => {});
+    this.onError = options.onError || (() => {});
+    this.onStatusChange = options.onStatusChange || (() => {});
+    this._reconnectAttempts = 0;
+    this._maxReconnectAttempts = 5;
+    this._reconnectDelay = 1000;
+    this._sessionReady = false;
+    this._pendingAudio = [];
+    this._committed = '';
+  }
+
+  async connect() {
+    if (this.ws && this.connected) return;
+
+    try {
+      const WebSocket = require('ws');
+      const params = new URLSearchParams({
+        sample_rate: '16000',
+        encoding: 'pcm',
+        interim_results: 'true',
+        language: 'en',
+        endpointing: '300',
+        smart_turn: '0.6',
+        smart_turn_timeout: '2500'
+      });
+      const url = `${XAI_STT_WS_URL}?${params.toString()}`;
+
+      this.ws = new WebSocket(url, {
+        headers: { Authorization: `Bearer ${this.apiKey}` }
+      });
+
+      this.ws.on('open', () => {
+        this.connected = true;
+        this._reconnectAttempts = 0;
+        this.onStatusChange('connected');
+        // Wait for transcript.created before treating the session as ready
+      });
+
+      this.ws.on('message', (data) => {
+        try {
+          const event = JSON.parse(data.toString());
+          this._handleEvent(event);
+        } catch {
+          // ignore non-JSON frames
+        }
+      });
+
+      this.ws.on('close', (code) => {
+        this.connected = false;
+        this._sessionReady = false;
+        this.onStatusChange('disconnected');
+        if (code !== 1000) this._attemptReconnect();
+      });
+
+      this.ws.on('error', (err) => {
+        this.onError({ provider: 'grok', message: err.message, status: null });
+      });
+    } catch (e) {
+      this.onError({ provider: 'grok', message: e.message, status: null });
+    }
+  }
+
+  _handleEvent(event) {
+    if (!event || !event.type) return;
+
+    if (event.type === 'transcript.created') {
+      this._sessionReady = true;
+      this.onStatusChange('ready');
+      // Flush any audio buffered before the server was ready
+      if (this._pendingAudio.length) {
+        for (const chunk of this._pendingAudio) {
+          if (this.ws && this.ws.readyState === 1) this.ws.send(chunk);
+        }
+        this._pendingAudio = [];
+      }
+      return;
+    }
+
+    if (event.type === 'transcript.partial') {
+      const text = String(event.text || '').trim();
+      if (event.speech_final) {
+        const full = ((this._committed || '') + ' ' + text).trim() || text;
+        this._committed = '';
+        if (full && !looksLikeHallucination(full)) this.onTranscript(full);
+        this.onInterim('');
+        return;
+      }
+      if (event.is_final) {
+        this._committed = ((this._committed || '') + ' ' + text).trim();
+        this.onInterim(this._committed);
+      } else if (text) {
+        this.onInterim(((this._committed || '') + ' ' + text).trim());
+      }
+      return;
+    }
+
+    if (event.type === 'transcript.done') {
+      const text = String(event.text || '').trim();
+      const full = (text || this._committed || '').trim();
+      this._committed = '';
+      if (full && !looksLikeHallucination(full)) this.onTranscript(full);
+      this.onInterim('');
+      return;
+    }
+
+    if (event.type === 'error') {
+      this.onError({ provider: 'grok', message: event.message || 'xAI STT error', status: event.code || null });
+    }
+  }
+
+  sendAudio(pcmBuffer) {
+    const buf = Buffer.from(pcmBuffer);
+    if (!this.ws || this.ws.readyState !== 1 || !this._sessionReady) {
+      // Cap pending buffer (~2s of 16kHz mono s16le) so we don't grow unbounded
+      this._pendingAudio.push(buf);
+      if (this._pendingAudio.length > 20) this._pendingAudio.shift();
+      return;
+    }
+    this.ws.send(buf);
+  }
+
+  _attemptReconnect() {
+    if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+      this.onError({ provider: 'grok', message: 'Max reconnection attempts reached', status: null });
+      return;
+    }
+    this._reconnectAttempts++;
+    const delay = this._reconnectDelay * Math.pow(2, this._reconnectAttempts - 1);
+    setTimeout(() => {
+      // Refresh token on reconnect in case Grok CLI rotated OAuth
+      const next = resolveGrokApiKey(this.explicitKey);
+      if (next) this.apiKey = next;
+      this.connect();
+    }, Math.min(delay, 16000));
+  }
+
+  disconnect() {
+    const leftover = (this._committed || '').trim();
+    this._committed = '';
+    if (leftover && !looksLikeHallucination(leftover)) this.onTranscript(leftover);
+    this._sessionReady = false;
+    this._pendingAudio = [];
+    if (this.ws) {
+      try {
+        if (this.ws.readyState === 1) this.ws.send(JSON.stringify({ type: 'audio.done' }));
+      } catch { /* ignore */ }
+      try { this.ws.close(1000); } catch { /* ignore */ }
+      this.ws = null;
+    }
+    this.connected = false;
+  }
+}
+
+// ============================================================================
 // Batch STT (enhanced version of the original — used as fallback)
 // Supports Whisper and Gemini with better error handling
 // ============================================================================
@@ -404,40 +571,79 @@ async function transcribeBatchGemini(apiKey, wav) {
 // Priority: Deepgram (lowest latency) > OpenAI Realtime > Batch fallback
 // ============================================================================
 
+function shouldUseGrokStreaming(settings, selectedProvider) {
+  if (selectedProvider === 'grok' || selectedProvider === 'xai') return true;
+  if (selectedProvider === 'auto') {
+    const keys = settings.apiKeys || {};
+    return settings.provider === 'grok' || !!String(keys.grok || '').trim();
+  }
+  return false;
+}
+
 function createStreamingSTT(settings, channel, callbacks) {
   const keys = settings.apiKeys || {};
   const selectedProvider = settings.sttProvider || 'auto';
   const { onTranscript, onInterim, onError, onStatusChange } = callbacks;
+  const wantGrok = shouldUseGrokStreaming(settings, selectedProvider);
+  const grokKey = wantGrok ? resolveGrokApiKey(keys.grok) : '';
+
+  const wrapGrok = (key) => new XaiStreamingSTT(key, {
+    explicitKey: keys.grok || '',
+    onTranscript: (text) => onTranscript(channel, text),
+    onInterim: (text) => onInterim(channel, text),
+    onError,
+    onStatusChange: (status) => onStatusChange(channel, status)
+  });
 
   if (selectedProvider === 'local' || selectedProvider === 'gemini') {
     return { type: 'batch', provider: selectedProvider, instance: null };
   }
 
-  // Priority 1: Deepgram (purpose-built for streaming STT, lowest latency)
-  if ((selectedProvider === 'auto' || selectedProvider === 'deepgram') && keys.deepgram) {
-    const stt = new DeepgramStreamingSTT(keys.deepgram, {
-      model: 'nova-3',
-      onTranscript: (text) => onTranscript(channel, text),
-      onInterim: (text) => onInterim(channel, text),
-      onError,
-      onStatusChange: (status) => onStatusChange(channel, status)
-    });
-    return { type: 'streaming', provider: 'deepgram', instance: stt };
+  // Explicit Grok / xAI voice STT (uses Grok CLI OAuth or XAI_API_KEY)
+  if (selectedProvider === 'grok' || selectedProvider === 'xai') {
+    if (grokKey) {
+      return { type: 'streaming', provider: 'grok', instance: wrapGrok(grokKey) };
+    }
+    return { type: 'batch', provider: 'grok', instance: null };
   }
 
-  // Priority 2: OpenAI Realtime API (excellent quality, slightly higher latency)
-  if ((selectedProvider === 'auto' || selectedProvider === 'openai') && keys.openai) {
-    const stt = new OpenAIRealtimeSTT(keys.openai, {
-      model: 'gpt-realtime-whisper', // only this model gives true streaming deltas
-      onTranscript: (text) => onTranscript(channel, text),
-      onInterim: (text) => onInterim(channel, text),
-      onError,
-      onStatusChange: (status) => onStatusChange(channel, status)
-    });
-    return { type: 'streaming', provider: 'openai-realtime', instance: stt };
+  // Auto priority: Deepgram → OpenAI Realtime → Grok voice (when chat is Grok) → batch
+  if (selectedProvider === 'auto' || selectedProvider === 'deepgram') {
+    if (keys.deepgram) {
+      const stt = new DeepgramStreamingSTT(keys.deepgram, {
+        model: 'nova-3',
+        onTranscript: (text) => onTranscript(channel, text),
+        onInterim: (text) => onInterim(channel, text),
+        onError,
+        onStatusChange: (status) => onStatusChange(channel, status)
+      });
+      return { type: 'streaming', provider: 'deepgram', instance: stt };
+    }
+    if (selectedProvider === 'deepgram') {
+      return { type: 'batch', provider: 'deepgram', instance: null };
+    }
   }
 
-  // Priority 3: Batch fallback (Gemini or Whisper via old system)
+  if (selectedProvider === 'auto' || selectedProvider === 'openai') {
+    if (keys.openai) {
+      const stt = new OpenAIRealtimeSTT(keys.openai, {
+        model: 'gpt-realtime-whisper',
+        onTranscript: (text) => onTranscript(channel, text),
+        onInterim: (text) => onInterim(channel, text),
+        onError,
+        onStatusChange: (status) => onStatusChange(channel, status)
+      });
+      return { type: 'streaming', provider: 'openai-realtime', instance: stt };
+    }
+    if (selectedProvider === 'openai') {
+      return { type: 'batch', provider: 'openai', instance: null };
+    }
+  }
+
+  if (selectedProvider === 'auto' && grokKey) {
+    return { type: 'streaming', provider: 'grok', instance: wrapGrok(grokKey) };
+  }
+
   return {
     type: 'batch',
     provider: selectedProvider === 'auto' && keys.gemini ? 'gemini' : 'none',
@@ -448,6 +654,7 @@ function createStreamingSTT(settings, channel, callbacks) {
 module.exports = {
   OpenAIRealtimeSTT,
   DeepgramStreamingSTT,
+  XaiStreamingSTT,
   createStreamingSTT,
   transcribeBatchOpenAI,
   transcribeBatchGemini

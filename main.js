@@ -25,6 +25,12 @@ const { WhisperModelManager } = require('./src/whisper-model-manager');
 const { requireWhisperModel } = require('./src/whisper-model-catalog');
 const { locateWhisperRuntime } = require('./src/whisper-runtime');
 const { LocalWhisperTranscriber } = require('./src/local-whisper-transcriber');
+const {
+  startGrokCliRuntime,
+  stopGrokCliRuntime,
+  getGrokCliRuntimeStatus,
+  kickGrokCliRuntime
+} = require('./src/grok-cli-runtime');
 
 let win = null;
 // Which global shortcuts cue actually holds. `globalShortcut.register` returns
@@ -55,7 +61,10 @@ const buffers = { you: [], them: [] };
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
 const FLUSH_MS = 900;
-const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy can't wedge forever
+// Abort a stream that has gone silent. Grok/CLI backends can think for well over
+// 25s before the first visible token once context grows, so those get longer.
+const STREAM_INACTIVITY_MS = 25000;
+const STREAM_INACTIVITY_LONG_MS = 120000;
 const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
 const RMS_GATE = 180;
 let flushTimer = null;
@@ -529,12 +538,19 @@ async function runFeature(mode, userText) {
 
     // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
     // leaving state.busy = true and wedging every later question until an app restart.
+    // Rearm on tokens AND silent activity (reasoning deltas, CLI stdout) so longer
+    // think-before-speak does not trip the timeout mid-conversation.
+    const longProviders = new Set(['grok', 'grok-cli', 'claude-cli', 'codex-cli']);
+    const inactivityMs = longProviders.has(settings.provider) ? STREAM_INACTIVITY_LONG_MS : STREAM_INACTIVITY_MS;
     let watchdog = null;
     let rearm = () => {};
     const stalled = new Promise((_res, reject) => {
       rearm = () => {
         clearTimeout(watchdog);
-        watchdog = setTimeout(() => reject(new Error('the model stopped responding (timed out). Please try again.')), STREAM_INACTIVITY_MS);
+        watchdog = setTimeout(
+          () => reject(new Error('the model stopped responding (timed out). Please try again.')),
+          inactivityMs
+        );
       };
       rearm();
     });
@@ -544,7 +560,12 @@ async function runFeature(mode, userText) {
           system,
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
-          onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); }
+          onToken: (t) => {
+            if (streamSettled) return;
+            rearm();
+            if (t) send('llm:token', { text: t });
+          },
+          onActivity: () => { if (!streamSettled) rearm(); }
         }),
         stalled
       ]);
@@ -564,7 +585,21 @@ async function runFeature(mode, userText) {
 
 // -------- IPC --------
 ipcMain.handle('settings:get', () => store.getSettings());
-ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; return store.setSettings(patch); });
+ipcMain.handle('settings:set', (_e, patch) => {
+  sttDisabled = false;
+  const next = store.setSettings(patch);
+  // Warm Grok CLI auth / API when the user picks Grok chat or Grok voice STT.
+  const wantsGrok = next.provider === 'grok'
+    || next.provider === 'grok-cli'
+    || next.sttProvider === 'grok'
+    || next.sttProvider === 'xai'
+    || !!(next.apiKeys && next.apiKeys.grok);
+  if (wantsGrok) {
+    kickGrokCliRuntime(next.apiKeys && next.apiKeys.grok).catch(() => {});
+  }
+  return next;
+});
+ipcMain.handle('grok:runtime', () => getGrokCliRuntimeStatus());
 ipcMain.handle('capture:toggle', () => {
   const targetState = !desiredCaptureState;
   desiredCaptureState = targetState;
@@ -627,7 +662,15 @@ ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('yo
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
-ipcMain.on('app:quit', () => app.quit());
+ipcMain.on('app:quit', () => {
+  console.log('[cue] app:quit');
+  try { app.quit(); } catch (err) { console.log('[cue] app.quit failed', err && err.message); }
+  // If something keeps the process alive (open handles, children), force exit.
+  setTimeout(() => {
+    try { app.exit(0); } catch { /* ignore */ }
+    try { process.exit(0); } catch { /* ignore */ }
+  }, 800);
+});
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // -------- resume / job-description file import --------
 // The dialog runs in MAIN and is filtered to pdf/docx; the renderer never supplies a path.
@@ -652,7 +695,6 @@ ipcMain.handle('profile:pickDocument', async () => {
     return { canceled: false, error: (e && e.message) || String(e) };
   }
 });
-ipcMain.on('app:quit', () => app.quit());
 ipcMain.handle('applink:state', () => appLinkConsentState());
 ipcMain.handle('applink:revoke', (_e, callerId) => revokeAppLinkCaller(callerId));
 
@@ -801,6 +843,28 @@ function launchApp() {
 
   createWindow();
   registerShortcuts();
+
+  // If settings already point at Grok, warm the CLI login path at startup.
+  const bootSettings = store.getSettings();
+  if (
+    bootSettings.provider === 'grok'
+    || bootSettings.provider === 'grok-cli'
+    || bootSettings.sttProvider === 'grok'
+    || (bootSettings.apiKeys && bootSettings.apiKeys.grok)
+  ) {
+    startGrokCliRuntime({
+      explicitKey: bootSettings.apiKeys && bootSettings.apiKeys.grok,
+      warmImmediately: true,
+      onStatus: (payload) => {
+        if (!payload || payload.tick) return;
+        if (payload.status === 'warm-ok') {
+          send('status', { message: 'Grok login ready.' });
+        } else if (payload.status === 'warm-fail' && payload.error) {
+          send('status', { message: 'Grok login: ' + payload.error });
+        }
+      }
+    }).catch((err) => console.log('[grok-runtime]', err && err.message));
+  }
 }
 
 // -------- lifecycle --------
@@ -831,6 +895,7 @@ app.on('will-quit', () => {
   // behind is harmless anyway because readers check whether the PID is alive.
   // Delaying shutdown to tidy a directory would be the wrong trade.
   stopAppLink();
+  stopGrokCliRuntime({ killLeader: false });
   if (whisperModelManager?.activeDownload) {
     whisperModelManager.cancelDownload(whisperModelManager.activeDownload.modelId);
   }

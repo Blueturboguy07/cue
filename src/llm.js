@@ -2,8 +2,11 @@
 // stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken }) -> Promise<fullText>
 
 const { createCompatibleClientOptions } = require('./openai-compatible');
+const { XAI_BASE_URL, resolveGrokApiKey } = require('./grok-cli-auth');
+const { isCliProvider, streamCliProvider, cliProviderReady } = require('./cli-llm');
 
 const CUSTOM_PROVIDER = 'custom';
+const GROK_PROVIDER = 'grok';
 // gemini-2.0-flash was Google's default here until it was deprecated (Feb 2026)
 // and fully retired (Mar 3 2026) — every request against it now 404s with a
 // generic "exception parsing response" body. gemini-2.5-flash is the model
@@ -17,7 +20,12 @@ const DEFAULT_MODELS = {
   ollama: 'llama3.2',
   groq: 'llama-3.1-8b-instant',
   minimax: 'MiniMax-M2.7',
-  azure: 'gpt-4o-mini'
+  azure: 'gpt-4o-mini',
+  grok: 'grok-4.5',
+  // CLI backends use the model the local CLI is already logged into; fields are optional overrides.
+  'claude-cli': 'default',
+  'codex-cli': 'default',
+  'grok-cli': 'grok-4.5'
 };
 
 // Gemini model ids that Google has since deprecated/retired. A settings file
@@ -26,7 +34,15 @@ const DEFAULT_MODELS = {
 // otherwise an existing user would keep re-hitting the same 404 forever.
 const DEAD_GEMINI_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0)(?:-|$)/i;
 
-const PROVIDER_LABELS = { azure: 'Azure AI Foundry', openai: 'OpenAI', minimax: 'MiniMax' };
+const PROVIDER_LABELS = {
+  azure: 'Azure AI Foundry',
+  openai: 'OpenAI',
+  minimax: 'MiniMax',
+  grok: 'Grok (login)',
+  'claude-cli': 'Claude CLI',
+  'codex-cli': 'Codex CLI',
+  'grok-cli': 'Grok CLI'
+};
 
 function normalizeProviderName(provider) {
   if (!provider) return 'provider';
@@ -105,7 +121,7 @@ function stripDataUrl(dataUrl) {
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
@@ -125,7 +141,11 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
   const stream = await client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens });
   let full = '';
   for await (const part of stream) {
-    const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
+    // Any SSE chunk (including reasoning-only deltas) counts as activity so the
+    // main-process inactivity watchdog does not fire while the model is thinking.
+    if (typeof onActivity === 'function') onActivity();
+    const delta = part.choices && part.choices[0] && part.choices[0].delta;
+    const d = delta && delta.content;
     if (d) { full += d; onToken(d); }
   }
   return full;
@@ -319,6 +339,18 @@ function createLLM(settings) {
     if (!model && !configurationError) {
       configurationError = 'Set a Fast or Smart model for the Custom provider.';
     }
+  } else if (provider === GROK_PROVIDER) {
+    // Re-resolve on every create so a refreshed Grok CLI OAuth token is picked up.
+    apiKey = resolveGrokApiKey(keys.grok);
+    baseURL = XAI_BASE_URL;
+    if (!apiKey) {
+      configurationError = 'Sign in with `grok login`, set XAI_API_KEY, or paste an xAI API key in Settings.';
+    }
+  } else if (isCliProvider(provider)) {
+    // CLI providers use the local login session — no API key stored in cue.
+    if (!model) model = DEFAULT_MODELS[provider] || 'default';
+    const probe = cliProviderReady(provider);
+    if (!probe.ok) configurationError = probe.error;
   } else if (provider !== 'ollama' && !apiKey) {
     // Ollama is a local server: the field holds a URL, and no key is required.
     configurationError = `Add your ${provider} API key in Settings.`;
@@ -329,7 +361,9 @@ function createLLM(settings) {
     configurationError = 'Add your Azure AI Foundry endpoint in Settings.';
   }
 
-  const ready = !configurationError && !!model;
+  // CLI backends treat model "default" as "whatever the CLI is logged into".
+  const modelReady = isCliProvider(provider) ? true : !!model;
+  const ready = !configurationError && modelReady;
   const maxTokens = settings.smart ? 1400 : 700;
 
   return {
@@ -338,10 +372,21 @@ function createLLM(settings) {
     configurationError,
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
-      const args = { apiKey, baseURL, endpoint, model, maxTokens, ...params, turns: sanitizeTurns(params.turns) };
+      // Refresh Grok credentials right before the request in case CLI refreshed the token.
+      const liveKey = provider === GROK_PROVIDER ? resolveGrokApiKey(keys.grok) : apiKey;
+      if (provider === GROK_PROVIDER && !liveKey) {
+        throw new Error('Grok credentials expired or missing. Run `grok login` and try again.');
+      }
+      const args = { apiKey: liveKey, baseURL, endpoint, model, maxTokens, ...params, turns: sanitizeTurns(params.turns) };
+      // CLI model override: blank / "default" means let the CLI pick.
+      if (isCliProvider(provider) && (!args.model || args.model === 'default')) {
+        args.model = '';
+      }
       try {
+        if (isCliProvider(provider)) return await streamCliProvider(provider, args);
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
+        if (provider === GROK_PROVIDER) return await streamOpenAI(args);
         if (provider === 'ollama') return await streamOllama(args);
         if (provider === 'groq') return await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
         if (provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
