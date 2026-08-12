@@ -762,7 +762,15 @@ ipcMain.handle('focus-mode', async (_e, enabled) => {
   return { ok: true, focusable: false };
 });
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
-ipcMain.on('app:quit', () => app.quit());
+ipcMain.on('app:quit', () => {
+  console.log('[cue] app:quit');
+  try { app.quit(); } catch (err) { console.log('[cue] app.quit failed', err && err.message); }
+  // If something keeps the process alive (open handles, children), force exit.
+  setTimeout(() => {
+    try { app.exit(0); } catch { /* ignore */ }
+    try { process.exit(0); } catch { /* ignore */ }
+  }, 800);
+});
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // -------- resume / job-description file import --------
 // The dialog runs in MAIN and is filtered to pdf/docx; the renderer never supplies a path.
@@ -787,7 +795,6 @@ ipcMain.handle('profile:pickDocument', async () => {
     return { canceled: false, error: (e && e.message) || String(e) };
   }
 });
-ipcMain.on('app:quit', () => app.quit());
 ipcMain.handle('applink:state', () => appLinkConsentState());
 ipcMain.handle('applink:revoke', (_e, callerId) => revokeAppLinkCaller(callerId));
 

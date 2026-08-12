@@ -11,6 +11,21 @@
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
   $('#quit-btn').innerHTML = icon('x', { size: 14 });
+  // Quit was icon-only — never wired. Use both click and pointerup so the
+  // toolbar drag region cannot swallow the gesture on Windows.
+  const quitBtn = $('#quit-btn');
+  if (quitBtn) {
+    quitBtn.title = isWindows ? 'Quit cue (Ctrl+Shift+X)' : 'Quit cue (⌘⇧X)';
+    const doQuit = (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      try { cue.quit(); } catch (err) { cue.log && cue.log('[quit] ' + (err && err.message)); }
+    };
+    quitBtn.addEventListener('click', doQuit);
+    quitBtn.addEventListener('pointerup', (e) => {
+      if (e.button !== 0) return;
+      doQuit(e);
+    });
+  }
   document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
   document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
   document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
