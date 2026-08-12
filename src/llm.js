@@ -121,7 +121,7 @@ function stripDataUrl(dataUrl) {
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
@@ -141,7 +141,11 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
   const stream = await client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens });
   let full = '';
   for await (const part of stream) {
-    const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
+    // Any SSE chunk (including reasoning-only deltas) counts as activity so the
+    // main-process inactivity watchdog does not fire while the model is thinking.
+    if (typeof onActivity === 'function') onActivity();
+    const delta = part.choices && part.choices[0] && part.choices[0].delta;
+    const d = delta && delta.content;
     if (d) { full += d; onToken(d); }
   }
   return full;

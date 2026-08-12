@@ -61,7 +61,10 @@ const buffers = { you: [], them: [] };
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
 const FLUSH_MS = 900;
-const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy can't wedge forever
+// Abort a stream that has gone silent. Grok/CLI backends can think for well over
+// 25s before the first visible token once context grows, so those get longer.
+const STREAM_INACTIVITY_MS = 25000;
+const STREAM_INACTIVITY_LONG_MS = 120000;
 const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
 const RMS_GATE = 180;
 let flushTimer = null;
@@ -535,12 +538,19 @@ async function runFeature(mode, userText) {
 
     // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
     // leaving state.busy = true and wedging every later question until an app restart.
+    // Rearm on tokens AND silent activity (reasoning deltas, CLI stdout) so longer
+    // think-before-speak does not trip the timeout mid-conversation.
+    const longProviders = new Set(['grok', 'grok-cli', 'claude-cli', 'codex-cli']);
+    const inactivityMs = longProviders.has(settings.provider) ? STREAM_INACTIVITY_LONG_MS : STREAM_INACTIVITY_MS;
     let watchdog = null;
     let rearm = () => {};
     const stalled = new Promise((_res, reject) => {
       rearm = () => {
         clearTimeout(watchdog);
-        watchdog = setTimeout(() => reject(new Error('the model stopped responding (timed out). Please try again.')), STREAM_INACTIVITY_MS);
+        watchdog = setTimeout(
+          () => reject(new Error('the model stopped responding (timed out). Please try again.')),
+          inactivityMs
+        );
       };
       rearm();
     });
@@ -550,7 +560,12 @@ async function runFeature(mode, userText) {
           system,
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
-          onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); }
+          onToken: (t) => {
+            if (streamSettled) return;
+            rearm();
+            if (t) send('llm:token', { text: t });
+          },
+          onActivity: () => { if (!streamSettled) rearm(); }
         }),
         stalled
       ]);

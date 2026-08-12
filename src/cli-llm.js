@@ -65,7 +65,7 @@ function buildUserPrompt(turns, imagePath) {
   return text;
 }
 
-function runProcess(bin, args, { onStdoutLine, onStdoutChunk, stdinText = null, timeoutMs = 180000 } = {}) {
+function runProcess(bin, args, { onStdoutLine, onStdoutChunk, onActivity, stdinText = null, timeoutMs = 300000 } = {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -98,6 +98,7 @@ function runProcess(bin, args, { onStdoutLine, onStdoutChunk, stdinText = null, 
     child.stdout.on('data', (buf) => {
       const chunk = buf.toString('utf8');
       stdout += chunk;
+      if (onActivity) onActivity();
       if (onStdoutChunk) onStdoutChunk(chunk);
       if (onStdoutLine) {
         lineBuf += chunk;
@@ -109,7 +110,11 @@ function runProcess(bin, args, { onStdoutLine, onStdoutChunk, stdinText = null, 
         }
       }
     });
-    child.stderr.on('data', (buf) => { stderr += buf.toString('utf8'); });
+    child.stderr.on('data', (buf) => {
+      stderr += buf.toString('utf8');
+      // Progress / status on stderr also means the CLI is still alive.
+      if (onActivity) onActivity();
+    });
     child.on('error', (err) => {
       clearTimeout(timer);
       reject(new Error(`Failed to start ${bin}: ${err.message}`));
@@ -130,7 +135,7 @@ function runProcess(bin, args, { onStdoutLine, onStdoutChunk, stdinText = null, 
 /**
  * Claude Code CLI — uses the logged-in `claude` session (no API key in cue).
  */
-async function streamClaudeCli({ model, system, turns, imageDataUrl, onToken }) {
+async function streamClaudeCli({ model, system, turns, imageDataUrl, onToken, onActivity }) {
   const bin = whichCmd('claude');
   const imagePath = writeTempImage(imageDataUrl);
   const userPrompt = buildUserPrompt(turns, imagePath);
@@ -153,6 +158,7 @@ async function streamClaudeCli({ model, system, turns, imageDataUrl, onToken }) 
   try {
     const { stdout } = await runProcess(bin, args, {
       stdinText: userPrompt,
+      onActivity,
       onStdoutChunk: (chunk) => {
         // text mode: stream raw chunks
         full += chunk;
@@ -173,7 +179,7 @@ async function streamClaudeCli({ model, system, turns, imageDataUrl, onToken }) 
  * OpenAI Codex CLI — uses the logged-in `codex` session.
  * Emits JSONL events; we take agent_message text.
  */
-async function streamCodexCli({ model, system, turns, imageDataUrl, onToken }) {
+async function streamCodexCli({ model, system, turns, imageDataUrl, onToken, onActivity }) {
   const bin = whichCmd('codex');
   const imagePath = writeTempImage(imageDataUrl);
   const userPrompt = buildUserPrompt(turns, imagePath);
@@ -198,6 +204,7 @@ async function streamCodexCli({ model, system, turns, imageDataUrl, onToken }) {
   try {
     await runProcess(bin, args, {
       stdinText: prompt,
+      onActivity,
       onStdoutLine: (line) => {
         let evt;
         try { evt = JSON.parse(line); } catch { return; }
@@ -241,7 +248,7 @@ async function streamCodexCli({ model, system, turns, imageDataUrl, onToken }) {
  * Prefer the API path (provider "grok") for streaming + screenshots; this is a
  * fallback pure-CLI route when the user picks "Grok CLI".
  */
-async function streamGrokCli({ model, system, turns, imageDataUrl, onToken }) {
+async function streamGrokCli({ model, system, turns, imageDataUrl, onToken, onActivity }) {
   const bin = whichCmd('grok');
   const imagePath = writeTempImage(imageDataUrl);
   const userPrompt = buildUserPrompt(turns, imagePath);
@@ -249,13 +256,16 @@ async function streamGrokCli({ model, system, turns, imageDataUrl, onToken }) {
     ? `${system}\n\n---\n\n${userPrompt}`
     : userPrompt;
 
+  // Prefer stdin so long interview context is not truncated by argv limits.
   const args = ['-p', '--output-format', 'plain'];
   if (model) args.push('-m', model);
-  args.push(prompt);
 
   let full = '';
   try {
     const { stdout } = await runProcess(bin, args, {
+      stdinText: prompt,
+      onActivity,
+      timeoutMs: 300000,
       onStdoutChunk: (chunk) => {
         full += chunk;
         if (onToken) onToken(chunk);
