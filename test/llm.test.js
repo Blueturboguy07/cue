@@ -255,7 +255,7 @@ test('createLLM: falls back to CURRENT_GEMINI_DEFAULT when no model is configure
 
 test('createLLM: a fresh install (store.js DEFAULTS shape) resolves to the current default', () => {
   const llm = createLLM(geminiSettings({
-    models: { gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-flash' } }
+    models: { gemini: { fast: 'gemma-4-31b-it', smart: 'gemma-4-31b-it' } }
   }));
   assert.equal(llm.model, CURRENT_GEMINI_DEFAULT);
 });

@@ -35,3 +35,27 @@ test('explicit cloud selection does not cross-fallback to another provider', () 
   assert.deepEqual(openai.providers, ['openai']);
   assert.deepEqual(gemini.providers, ['gemini']);
 });
+
+test('nvidia STT requires both an API key and a function-id', () => {
+  const missingFunctionId = createSTT({
+    sttProvider: 'nvidia',
+    apiKeys: { nvidia: 'nvidia-key' }
+  });
+  assert.equal(missingFunctionId.available, false);
+
+  const configured = createSTT({
+    sttProvider: 'nvidia',
+    apiKeys: { nvidia: 'nvidia-key' },
+    nvidiaFunctionId: 'test-function-id'
+  });
+  assert.deepEqual(configured.providers, ['nvidia']);
+});
+
+test('explicit nvidia selection does not cross-fallback to another provider', () => {
+  const nvidia = createSTT({
+    sttProvider: 'nvidia',
+    apiKeys: { openai: 'openai-key', gemini: 'gemini-key', nvidia: 'nvidia-key' },
+    nvidiaFunctionId: 'test-function-id'
+  });
+  assert.deepEqual(nvidia.providers, ['nvidia']);
+});

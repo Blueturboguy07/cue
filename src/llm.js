@@ -6,10 +6,14 @@ const { createCompatibleClientOptions } = require('./openai-compatible');
 const CUSTOM_PROVIDER = 'custom';
 // gemini-2.0-flash was Google's default here until it was deprecated (Feb 2026)
 // and fully retired (Mar 3 2026) — every request against it now 404s with a
-// generic "exception parsing response" body. gemini-2.5-flash is the model
-// Google's own SDK examples standardize on and is documented as free-tier
-// available, so it is the single default used everywhere in this file.
-const CURRENT_GEMINI_DEFAULT = 'gemini-2.5-flash';
+// generic "exception parsing response" body. gemma-4-31b-it is Google's
+// current flagship Gemma model (released Apr 2026) and is the single default
+// used everywhere in this file.
+const CURRENT_GEMINI_DEFAULT = 'gemma-4-31b-it';
+// gemma-4-31b-it (the dense flagship Gemma model) does not accept audio input —
+// Google's model card documents audio support only on the smaller E2B/E4B/12B
+// Gemma variants. stt.js/stt-streaming.js transcribe with this model instead.
+const CURRENT_GEMINI_AUDIO_MODEL = 'gemini-2.5-flash';
 const DEFAULT_MODELS = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-5-haiku-latest',
@@ -356,4 +360,4 @@ function createLLM(settings) {
   };
 }
 
-module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT };
+module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT, CURRENT_GEMINI_AUDIO_MODEL };
