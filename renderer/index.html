@@ -172,8 +172,12 @@
           <button data-stt-provider="deepgram">Deepgram</button>
           <button data-stt-provider="openai">OpenAI</button>
           <button data-stt-provider="gemini">Gemini</button>
+          <button data-stt-provider="nvidia">NVIDIA</button>
         </div>
         <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider.</div>
+        <div class="s-note">NVIDIA mode transcribes with the hosted whisper-large-v3 NIM on NVIDIA's cloud GPUs &mdash; large-v3 accuracy without the slow local CPU inference. Requires an NVIDIA API key plus the function-id from the model's API tab on build.nvidia.com.</div>
+        <div class="s-field"><span>NVIDIA API key</span><input id="key-nvidia" type="password" placeholder="nvapi-..." autocomplete="off" /></div>
+        <div class="s-field"><span>NVIDIA function-id</span><input id="nvidia-function-id" type="text" placeholder="from build.nvidia.com API tab" autocomplete="off" /></div>
 
         <div class="whisper-card">
           <div class="whisper-runtime-row">

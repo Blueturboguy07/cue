@@ -409,7 +409,7 @@ function createStreamingSTT(settings, channel, callbacks) {
   const selectedProvider = settings.sttProvider || 'auto';
   const { onTranscript, onInterim, onError, onStatusChange } = callbacks;
 
-  if (selectedProvider === 'local' || selectedProvider === 'gemini') {
+  if (selectedProvider === 'local' || selectedProvider === 'gemini' || selectedProvider === 'nvidia') {
     return { type: 'batch', provider: selectedProvider, instance: null };
   }
 
@@ -437,10 +437,11 @@ function createStreamingSTT(settings, channel, callbacks) {
     return { type: 'streaming', provider: 'openai-realtime', instance: stt };
   }
 
-  // Priority 3: Batch fallback (Gemini or Whisper via old system)
+  // Priority 3: Batch fallback (Gemini, NVIDIA, or Whisper via old system)
+  const autoFallback = keys.gemini ? 'gemini' : (keys.nvidia && settings.nvidiaFunctionId ? 'nvidia' : 'none');
   return {
     type: 'batch',
-    provider: selectedProvider === 'auto' && keys.gemini ? 'gemini' : 'none',
+    provider: selectedProvider === 'auto' ? autoFallback : 'none',
     instance: null
   };
 }

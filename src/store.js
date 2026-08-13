@@ -14,15 +14,19 @@ const DEFAULTS = {
   provider: 'openai',
   sttProvider: 'auto',
   localWhisper: {
-    modelId: 'large-v3',
+    modelId: 'base.en',
     language: 'auto',
     threads: 0
   },
   smart: false,
   baseUrl: '',
   minimaxRegion: 'global_en',
-  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '' , azure: '' },
+  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '' , azure: '', nvidia: '' },
   azureEndpoint: '',
+  // NVCF function-id for the hosted whisper-large-v3 NIM (from the model's
+  // "API" tab on build.nvidia.com/openai/whisper-large-v3) — required
+  // alongside apiKeys.nvidia because Riva ASR calls are per-deployment.
+  nvidiaFunctionId: '',
   // Tab 2: Profile
   resumeText: '',
   jobDescription: '',

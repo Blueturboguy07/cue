@@ -3,6 +3,7 @@
 // fall back across providers. Returns { text, provider } or { text:'', error }.
 const { pcmToWav } = require('./wav');
 const { formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_AUDIO_MODEL } = require('./llm');
+const { transcribeNvidiaWhisper } = require('./riva-whisper');
 
 const BASE_VOCAB = 'CI/CD, Docker, Kubernetes, Terraform, Jenkins, AWS, Azure, GCP, ' +
   'CodeCommit, CodePipeline, CodeBuild, CodeDeploy, DevOps, SRE, microservices, deployment, ' +
@@ -71,6 +72,9 @@ function createSTT(settings) {
   }
   if ((selectedProvider === 'auto' || selectedProvider === 'gemini') && keys.gemini) {
     chain.push({ p: 'gemini', fn: (wav) => transcribeGemini(keys.gemini, wav) });
+  }
+  if ((selectedProvider === 'auto' || selectedProvider === 'nvidia') && keys.nvidia && settings.nvidiaFunctionId) {
+    chain.push({ p: 'nvidia', fn: (wav) => transcribeNvidiaWhisper(keys.nvidia, settings.nvidiaFunctionId, wav) });
   }
   if (keys.openai && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'openai'), 1)[0]);
 
