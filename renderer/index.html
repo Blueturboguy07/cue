@@ -105,110 +105,135 @@
 
       <!-- Tab bar -->
       <div class="s-tabs">
-        <button class="s-tab on" data-tab="keys">🔑 Keys</button>
-        <button class="s-tab" data-tab="transcription">Audio</button>
-        <button class="s-tab" data-tab="profile">📄 Profile</button>
-        <button class="s-tab" data-tab="prep">🎯 Interview Prep</button>
-        <button class="s-tab" data-tab="style">✨ Style</button>
-        <button class="s-tab" data-tab="qa">💬 Q&amp;A</button>
+        <button class="s-tab on" data-tab="keys"><span class="s-tab-icon" data-brand="custom"></span><span>Keys</span></button>
+        <button class="s-tab" data-tab="transcription"><span class="s-tab-icon" data-brand="deepgram"></span><span>Audio</span></button>
+        <span class="s-tab-sep"></span>
+        <button class="s-tab" data-tab="profile"><span>Profile</span></button>
+        <button class="s-tab" data-tab="prep"><span>Interview</span></button>
+        <button class="s-tab" data-tab="style"><span>Style</span></button>
+        <button class="s-tab" data-tab="qa"><span>Q&amp;A</span></button>
       </div>
 
       <!-- Tab: Keys -->
       <div class="s-body s-tab-pane" data-pane="keys">
-        <label class="s-label">Provider</label>
-        <div class="s-seg" id="provider-seg">
-          <button data-provider="openai">OpenAI</button>
-          <button data-provider="anthropic">Anthropic</button>
-          <button data-provider="gemini">Gemini</button>
-          <button data-provider="custom">Custom</button>
-          <button data-provider="ollama">Ollama</button>
-          <button data-provider="groq">Groq</button>
-          <button data-provider="minimax">MiniMax</button>
-          <button data-provider="azure">Azure AI</button>
+        <div class="s-card">
+          <div class="s-card-title">LLM Provider</div>
+          <div class="s-provider-grid" id="provider-seg">
+            <button class="s-provider-btn" data-provider="openai"><span class="provider-icon" data-brand="openai"></span>OpenAI</button>
+            <button class="s-provider-btn" data-provider="anthropic"><span class="provider-icon" data-brand="anthropic"></span>Anthropic</button>
+            <button class="s-provider-btn" data-provider="gemini"><span class="provider-icon" data-brand="gemini"></span>Gemini</button>
+            <button class="s-provider-btn" data-provider="ollama"><span class="provider-icon" data-brand="ollama"></span>Ollama</button>
+            <button class="s-provider-btn" data-provider="groq"><span class="provider-icon" data-brand="groq"></span>Groq</button>
+            <button class="s-provider-btn" data-provider="azure"><span class="provider-icon" data-brand="azure"></span>Azure AI</button>
+            <button class="s-provider-btn" data-provider="minimax"><span class="provider-icon" data-brand="minimax"></span>MiniMax</button>
+            <button class="s-provider-btn" data-provider="custom"><span class="provider-icon" data-brand="custom"></span>Custom</button>
+          </div>
         </div>
 
-        <label class="s-label">API keys &amp; URLs <span class="s-hint">stored locally · never sent to any server</span></label>
-        <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
-        <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
-        <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
-
-        <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
-        <div class="s-seg" id="minimax-region-seg">
-          <button data-region="global_en">Global</button>
-          <button data-region="cn_zh">China</button>
+        <div class="s-card">
+          <div class="s-card-header">
+            <div class="s-card-title">API Keys</div>
+            <span class="s-card-badge secure">Local only</span>
+          </div>
+          <div class="s-key-row"><span class="s-key-label">OpenAI</span><input id="key-openai" class="s-key-input" type="password" placeholder="sk-..." autocomplete="off" /><span class="s-key-status"></span></div>
+          <div class="s-key-row"><span class="s-key-label">Anthropic</span><input id="key-anthropic" class="s-key-input" type="password" placeholder="sk-ant-..." autocomplete="off" /><span class="s-key-status"></span></div>
+          <div class="s-key-row"><span class="s-key-label">Gemini</span><input id="key-gemini" class="s-key-input" type="password" placeholder="AIza..." autocomplete="off" /><span class="s-key-status"></span></div>
+          <div class="s-key-row"><span class="s-key-label">Deepgram</span><input id="key-deepgram" class="s-key-input" type="password" placeholder="dg-..." autocomplete="off" /><span class="s-key-status"></span></div>
+          <div class="s-key-row"><span class="s-key-label">Groq</span><input id="key-groq" class="s-key-input" type="password" placeholder="gsk_..." autocomplete="off" /><span class="s-key-status"></span></div>
+          <div class="s-key-row"><span class="s-key-label">MiniMax</span><input id="key-minimax" class="s-key-input" type="password" placeholder="MiniMax key" autocomplete="off" /><span class="s-key-status"></span></div>
+          <div class="s-key-row"><span class="s-key-label">Azure AI</span><input id="key-azure" class="s-key-input" type="password" placeholder="Azure key" autocomplete="off" /><span class="s-key-status"></span></div>
+          <div class="s-key-row"><span class="s-key-label">Custom</span><input id="key-custom" class="s-key-input" type="password" placeholder="optional" autocomplete="off" /><span class="s-key-status"></span></div>
         </div>
 
-        <div id="custom-endpoint-settings" class="hidden">
-          <label class="s-label" for="base-url">Custom endpoint <span class="s-hint">OpenAI-compatible chat API</span></label>
-          <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
-          <div class="s-help">Your Custom key and LLM requests are sent to this URL. Speech-to-text continues to use Deepgram, OpenAI, or Gemini.</div>
+        <div class="s-card">
+          <div class="s-card-title">Endpoints</div>
+          <div class="s-key-row"><span class="s-key-label">Ollama URL</span><input id="key-ollama" class="s-key-input" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
+          <div class="s-key-row"><span class="s-key-label">Azure URL</span><input id="azure-endpoint" class="s-key-input" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
+          
+          <div id="custom-endpoint-settings" class="hidden" style="margin-top: 10px;">
+            <div class="s-key-row"><span class="s-key-label">Base URL</span><input id="base-url" class="s-key-input" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
+            <div class="s-note" style="margin-top: 8px;">Custom endpoint for OpenAI-compatible APIs. STT continues to use Deepgram, OpenAI, or Gemini.</div>
+          </div>
+
+          <div id="minimax-region-settings" class="hidden" style="margin-top: 10px;">
+            <label class="s-label" style="margin-bottom: 8px;">MiniMax Region</label>
+            <div class="s-seg" id="minimax-region-seg">
+              <button data-region="global_en">Global</button>
+              <button data-region="cn_zh">China</button>
+            </div>
+          </div>
         </div>
-        <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
-        <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
-        <div class="s-field"><span>Azure AI Foundry</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
 
-        <label class="s-label">Azure endpoint <span class="s-hint">Azure OpenAI: https://&lt;resource&gt;.openai.azure.com/openai · AI Foundry: https://&lt;host&gt;.cognitiveservices.azure.com (cue adds /openai/v1)</span></label>
-        <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
+        <div class="s-card">
+          <div class="s-card-header">
+            <div class="s-card-title">Models</div>
+            <span class="s-card-hint">Fast = Smart off · Smart = Smart on</span>
+          </div>
+          <div class="s-key-row"><span class="s-key-label">Fast</span><input id="model-fast" class="s-key-input" type="text" autocomplete="off" placeholder="e.g. gpt-4o-mini" /></div>
+          <div class="s-key-row"><span class="s-key-label">Smart</span><input id="model-smart" class="s-key-input" type="text" autocomplete="off" placeholder="e.g. gpt-4o" /></div>
+        </div>
 
-        <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
-        <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
-        <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
-
-        <label class="s-label">Assistant access <span class="s-hint">programs allowed to see what cue is doing</span></label>
-        <div class="s-callers" id="applink-callers"></div>
+        <div class="s-card">
+          <div class="s-card-title">Assistant Access</div>
+          <p class="s-card-desc">Programs allowed to see cue's output via the AppLink API.</p>
+          <div class="s-callers" id="applink-callers"></div>
+        </div>
 
         <div class="s-status" id="s-status"></div>
       </div>
 
       <!-- Tab: Transcription -->
       <div class="s-body s-tab-pane hidden" data-pane="transcription">
-        <label class="s-label">Speech-to-text provider</label>
-        <div class="s-seg s-seg-wrap" id="stt-provider-seg">
-          <button data-stt-provider="auto">Auto</button>
-          <button data-stt-provider="local">Local</button>
-          <button data-stt-provider="deepgram">Deepgram</button>
-          <button data-stt-provider="openai">OpenAI</button>
-          <button data-stt-provider="gemini">Gemini</button>
+        <div class="s-card">
+          <div class="s-card-title">Speech-to-Text Provider</div>
+          <div class="s-stt-grid" id="stt-provider-seg">
+            <button class="s-stt-btn" data-stt-provider="auto"><span class="s-stt-icon" data-brand="auto"></span>Auto</button>
+            <button class="s-stt-btn" data-stt-provider="local"><span class="s-stt-icon" data-brand="local"></span>Local</button>
+            <button class="s-stt-btn" data-stt-provider="deepgram"><span class="s-stt-icon" data-brand="deepgram"></span>Deepgram</button>
+            <button class="s-stt-btn" data-stt-provider="openai"><span class="s-stt-icon" data-brand="openai"></span>OpenAI</button>
+            <button class="s-stt-btn" data-stt-provider="gemini"><span class="s-stt-icon" data-brand="gemini"></span>Gemini</button>
+          </div>
+          <p class="s-card-desc" style="margin-top: 12px;"><strong>Local mode</strong> keeps audio on your device with no cloud fallback.</p>
         </div>
-        <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider.</div>
 
-        <div class="whisper-card">
+        <div class="s-card whisper-card">
           <div class="whisper-runtime-row">
-            <span class="s-label">whisper.cpp runtime</span>
+            <div class="s-card-title" style="margin:0;">whisper.cpp Runtime</div>
             <span id="whisper-runtime-status" class="whisper-badge">Checking…</span>
           </div>
 
-          <label class="s-label" for="whisper-model">Local model</label>
+          <div class="s-divider"></div>
+
+          <label class="s-label" for="whisper-model">Local Model</label>
           <select id="whisper-model" class="s-select"></select>
-          <div id="whisper-model-detail" class="s-note"></div>
+          <div id="whisper-model-detail" class="s-note" style="margin-top:6px;"></div>
 
           <div id="whisper-progress-wrap" class="whisper-progress-wrap hidden">
             <progress id="whisper-progress" max="100" value="0"></progress>
             <span id="whisper-progress-label">0%</span>
           </div>
 
-          <div class="whisper-actions">
+          <div class="whisper-actions" style="margin-top: 12px;">
             <button id="whisper-download" class="s-action">Download</button>
             <button id="whisper-cancel" class="s-action hidden">Cancel</button>
             <button id="whisper-import" class="s-action">Import…</button>
             <button id="whisper-delete" class="s-action danger" disabled>Delete</button>
           </div>
 
-          <div class="s-field">
-            <span>Language</span>
+          <div class="s-divider"></div>
+
+          <div class="s-inline-field">
+            <label class="s-label">Language</label>
             <select id="whisper-language" class="s-select compact">
               <option value="auto">Auto-detect</option>
               <option value="en">English</option>
             </select>
           </div>
-          <div class="s-field">
-            <span>CPU threads</span>
+          <div class="s-inline-field">
+            <label class="s-label">CPU threads</label>
             <input id="whisper-threads" type="number" min="0" max="64" step="1" value="0" />
           </div>
-          <div class="s-note">Use 0 for whisper.cpp's default. English-only models always use English regardless of the language setting.</div>
+          <p class="s-card-desc">Use 0 for default. English-only models ignore the language setting.</p>
         </div>
 
         <div class="s-status" id="whisper-status"></div>
@@ -216,53 +241,100 @@
 
       <!-- Tab: Profile -->
       <div class="s-body s-tab-pane hidden" data-pane="profile">
-        <label class="s-label">Your resume <span class="s-hint">paste full resume, or import a PDF/DOCX</span></label>
-        <div class="s-field s-upload"><span class="s-filename" id="resume-filename"></span><button class="s-upload-btn" id="upload-resume-btn">Import PDF/DOCX</button></div>
-        <textarea id="resume-text" rows="7" spellcheck="false" placeholder="Paste your full resume here. cue will extract Name, Summary, Experience, Skills, Projects, and Education automatically."></textarea>
+        <div class="s-card">
+          <div class="s-card-title">Your Resume</div>
+          <div class="s-upload-area" id="upload-resume-btn">
+            <span class="s-upload-icon" data-brand="custom"></span>
+            <div class="s-upload-text">
+              <strong>Import PDF or DOCX</strong>
+              <span>Or paste text below</span>
+            </div>
+          </div>
+          <span class="s-filename" id="resume-filename"></span>
+          <textarea id="resume-text" class="s-textarea" rows="8" spellcheck="false" placeholder="Paste your full resume here. cue will extract key sections automatically."></textarea>
+        </div>
 
-        <label class="s-label">Target job description <span class="s-hint">optional — every answer gets tailored to this role</span></label>
-        <div class="s-field s-upload"><span class="s-filename" id="jd-filename"></span><button class="s-upload-btn" id="upload-jd-btn">Import PDF/DOCX</button></div>
-        <textarea id="job-description" rows="5" spellcheck="false" placeholder="Paste the job description for the role you're interviewing for. cue will highlight your most relevant experience."></textarea>
+        <div class="s-card">
+          <div class="s-card-header">
+            <div class="s-card-title">Target Job Description</div>
+            <span class="s-card-badge optional">Optional</span>
+          </div>
+          <div class="s-upload-area" id="upload-jd-btn">
+            <span class="s-upload-icon" data-brand="custom"></span>
+            <div class="s-upload-text">
+              <strong>Import PDF or DOCX</strong>
+              <span>Answers will be tailored to this role</span>
+            </div>
+          </div>
+          <span class="s-filename" id="jd-filename"></span>
+          <textarea id="job-description" class="s-textarea" rows="6" spellcheck="false" placeholder="Paste the job description for the role you're interviewing for."></textarea>
+        </div>
       </div>
 
       <!-- Tab: Interview Prep -->
       <div class="s-body s-tab-pane hidden" data-pane="prep">
-        <label class="s-label">Your STAR stories <span class="s-hint">write 3–5 real behavioral stories — used for "tell me about a time…" questions</span></label>
-        <textarea id="star-stories" rows="8" spellcheck="false" placeholder="Story 1: At [Company], we faced [situation]. I was responsible for [task]. I did [specific actions]. The result was [outcome with metrics if possible].&#10;&#10;Story 2: ..."></textarea>
+        <div class="s-card">
+          <div class="s-card-header">
+            <div class="s-card-title">STAR Stories</div>
+            <span class="s-card-hint">For behavioral questions</span>
+          </div>
+          <textarea id="star-stories" class="s-textarea" rows="9" spellcheck="false" placeholder="Story 1: At [Company], we faced [situation]. I was responsible for [task]. I did [specific actions]. The result was [outcome with metrics].
 
-        <label class="s-label">Why this company <span class="s-hint">used for motivation questions</span></label>
-        <textarea id="why-company" rows="3" spellcheck="false" placeholder="e.g. I admire how [company] has [specific thing]. Their work on [X] aligns with my experience in [Y]..."></textarea>
+Story 2: ..."></textarea>
+        </div>
 
-        <label class="s-label">Why leaving current role <span class="s-hint">keep it positive</span></label>
-        <textarea id="why-leaving" rows="2" spellcheck="false" placeholder="e.g. I've grown a lot at [company] and I'm looking for [next challenge]..."></textarea>
+        <div class="s-card">
+          <div class="s-card-title">Why This Company</div>
+          <textarea id="why-company" class="s-textarea" rows="3" spellcheck="false" placeholder="e.g. I admire how [company] has [specific thing]. Their work on [X] aligns with my experience in [Y]..."></textarea>
+        </div>
 
-        <label class="s-label">Work style &amp; values <span class="s-hint">used for culture fit and situational questions</span></label>
-        <textarea id="work-style" rows="3" spellcheck="false" placeholder="e.g. I prefer data-driven decisions, work well with autonomy, value direct feedback, thrive in fast-paced environments..."></textarea>
+        <div class="s-card">
+          <div class="s-card-title">Why Leaving Current Role</div>
+          <textarea id="why-leaving" class="s-textarea" rows="2" spellcheck="false" placeholder="e.g. I've grown a lot at [company] and I'm looking for [next challenge]..."></textarea>
+        </div>
+
+        <div class="s-card">
+          <div class="s-card-title">Work Style &amp; Values</div>
+          <textarea id="work-style" class="s-textarea" rows="3" spellcheck="false" placeholder="e.g. I prefer data-driven decisions, work well with autonomy, value direct feedback..."></textarea>
+        </div>
       </div>
 
       <!-- Tab: Q&A -->
       <div class="s-body s-tab-pane hidden" data-pane="qa">
-        <label class="s-label">Salary target <span class="s-hint">used when asked about compensation</span></label>
-        <input id="salary-target" type="text" placeholder="e.g. $150k–$180k base + equity, open to discuss total comp" autocomplete="off" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.25);color:#fff;font-size:13px;font-family:inherit;outline:none;" />
+        <div class="s-card">
+          <div class="s-card-title">Salary Target</div>
+          <p class="s-card-desc">Used when asked about compensation expectations.</p>
+          <input id="salary-target" type="text" placeholder="e.g. $150k–$180k base + equity" autocomplete="off" />
+        </div>
 
-        <label class="s-label" style="margin-top:14px;">Questions to ask the interviewer <span class="s-hint">cue will suggest these at the end</span></label>
-        <textarea id="questions-to-ask" rows="6" spellcheck="false" placeholder="e.g.&#10;- What does success look like in the first 90 days?&#10;- How does the team handle technical debt?&#10;- What's the biggest challenge the team is facing right now?&#10;- How does feedback and mentorship work here?"></textarea>
+        <div class="s-card">
+          <div class="s-card-title">Questions to Ask</div>
+          <p class="s-card-desc">Suggested when the interviewer asks "any questions for us?"</p>
+          <textarea id="questions-to-ask" class="s-textarea" rows="7" spellcheck="false" placeholder="- What does success look like in the first 90 days?
+- How does the team handle technical debt?
+- What's the biggest challenge the team is facing?
+- How does feedback and mentorship work here?"></textarea>
+        </div>
       </div>
 
       <!-- Tab: Style -->
       <div class="s-body s-tab-pane hidden" data-pane="style">
-        <label class="s-label">AI rules <span class="s-hint">how the AI should write its responses</span></label>
-        <textarea id="ai-rules" rows="10" spellcheck="false" maxlength="2000" placeholder="e.g.
-- Never use em-dashes.
+        <div class="s-card">
+          <div class="s-card-header">
+            <div class="s-card-title">AI Response Rules</div>
+            <span class="s-card-hint">How cue writes, not what it says</span>
+          </div>
+          <textarea id="ai-rules" class="s-textarea" rows="10" spellcheck="false" maxlength="2000" placeholder="- Never use em-dashes.
 - Reply in 2-3 short bullet points.
 - Use a casual, first-person tone.
 - Avoid jargon; explain technical terms.
-- Don&#39;t start with &quot;I&quot;.
-"></textarea>
-        <div class="s-counter"><span id="ai-rules-count">0</span> / 2000</div>
-        <div class="s-hint-block">
-          These rules tell cue <strong>how</strong> to write, not <strong>what</strong> to say. Use one imperative sentence per line (e.g. <em>Never use em-dashes.</em>). They apply to every mode except coding-problem solves (LeetCode), which stays strict. Stored locally; never sent anywhere except the AI provider when cue answers a question.
+- Don't start sentences with &quot;I&quot;."></textarea>
+          <div class="s-char-count"><span id="ai-rules-count">0</span> / 2000</div>
         </div>
+        
+        <p class="s-card-desc">
+          Rules apply to all modes except coding problems. Stored locally and only sent to the AI provider when answering.
+        </p>
       </div>
 
 

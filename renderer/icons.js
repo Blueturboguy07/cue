@@ -28,11 +28,39 @@
     '<path d="M12 12 8.2 17.5a6.6 6.6 0 0 1-2.9-5.5H12z" fill="currentColor" opacity="0.85"/>' +
     '</svg>';
 
+  // Brand logos for LLM/STT providers (simplified SVG paths)
+  const BRANDS = {
+    // OpenAI hexagon logo
+    openai: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M22.28 9.37a5.88 5.88 0 0 0-.51-4.85 5.96 5.96 0 0 0-6.42-2.87A5.88 5.88 0 0 0 10.92.5a5.96 5.96 0 0 0-5.68 4.13 5.88 5.88 0 0 0-3.93 2.85 5.96 5.96 0 0 0 .73 6.99 5.88 5.88 0 0 0 .51 4.85 5.96 5.96 0 0 0 6.42 2.87 5.88 5.88 0 0 0 4.43 1.97 5.96 5.96 0 0 0 5.68-4.13 5.88 5.88 0 0 0 3.93-2.85 5.96 5.96 0 0 0-.73-6.81zM13.08 21.95a4.47 4.47 0 0 1-2.87-1.04l.14-.08 4.76-2.75a.77.77 0 0 0 .39-.67v-6.72l2.01 1.16a.07.07 0 0 1 .04.05v5.56a4.49 4.49 0 0 1-4.47 4.49zm-9.64-4.12a4.47 4.47 0 0 1-.54-3.01l.14.08 4.76 2.75a.77.77 0 0 0 .78 0l5.82-3.36v2.32a.07.07 0 0 1-.03.06l-4.82 2.78a4.49 4.49 0 0 1-6.11-1.62zM2.34 7.9a4.47 4.47 0 0 1 2.34-1.97v5.66a.77.77 0 0 0 .39.67l5.82 3.36-2.01 1.16a.07.07 0 0 1-.07 0L4 14a4.49 4.49 0 0 1-1.66-6.1zm16.56 3.86-5.82-3.36 2.01-1.16a.07.07 0 0 1 .07 0l4.82 2.78a4.49 4.49 0 0 1-.69 8.1v-5.69a.77.77 0 0 0-.39-.67zm2-3.02-.14-.08-4.76-2.75a.77.77 0 0 0-.78 0L9.4 9.27V6.95a.07.07 0 0 1 .03-.06l4.82-2.78a4.49 4.49 0 0 1 6.65 4.63zM8.3 12.58l-2.01-1.16a.07.07 0 0 1-.04-.05V5.81a4.49 4.49 0 0 1 7.34-3.46l-.14.08-4.76 2.75a.77.77 0 0 0-.39.67zm1.09-2.36 2.59-1.5 2.59 1.5v2.99l-2.59 1.5-2.59-1.5z"/></svg>',
+    // Anthropic stylized 'A' logo
+    anthropic: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M13.83 3h3.02l5.65 18h-3.02l-1.2-4.1h-5.56L11.5 21H8.5l5.33-18zm3.33 11.3L15 7.5l-2.16 6.8h4.32zM7.5 3H4.5l-3 18h3l3-18z"/></svg>',
+    // Google Gemini star logo
+    gemini: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/><path d="M12 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c1.66 0 3.16-.67 4.24-1.76l-1.42-1.42A3.96 3.96 0 0 1 12 16c-2.21 0-4-1.79-4-4s1.79-4 4-4c1.1 0 2.1.45 2.82 1.18l1.42-1.42A5.96 5.96 0 0 0 12 6z"/><circle cx="12" cy="12" r="2"/></svg>',
+    // Ollama llama silhouette
+    ollama: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C8.5 2 6 4.5 6 7c0 1.5.5 2.5 1.5 3.5-.5.5-1 1.5-1 2.5 0 2 1.5 3.5 3 4v3c0 .5.5 1 1 1h3c.5 0 1-.5 1-1v-3c1.5-.5 3-2 3-4 0-1-.5-2-1-2.5 1-1 1.5-2 1.5-3.5 0-2.5-2.5-5-6-5zm-2 6c-.5 0-1-.5-1-1s.5-1 1-1 1 .5 1 1-.5 1-1 1zm4 0c-.5 0-1-.5-1-1s.5-1 1-1 1 .5 1 1-.5 1-1 1z"/></svg>',
+    // Groq lightning bolt
+    groq: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
+    // Azure cloud
+    azure: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M6.38 6.31L1.12 18.5h4.04l.96-2.25h4.12l-4.66-9.69-.2-.25zm7.36-.31l-2.8 8.08-1.26 2.89 3.51 4.03h9.69l-4.8-5.53L22 6h-8.26zm-6.4 8.53l1.51-3.53 1.69 3.53H7.34z"/></svg>',
+    // MiniMax stylized M
+    minimax: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M3 5v14h3V9.5l3 6h2l3-6V19h3V5h-4l-3 7-3-7H3z"/></svg>',
+    // Custom gear
+    custom: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="none" stroke="currentColor" stroke-width="2" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="3"/><path d="M12 1v4m0 14v4M4.22 4.22l2.83 2.83m9.9 9.9l2.83 2.83M1 12h4m14 0h4M4.22 19.78l2.83-2.83m9.9-9.9l2.83-2.83"/></svg>',
+    // Deepgram waveform
+    deepgram: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="9" width="2" height="6" rx="1"/><rect x="6" y="6" width="2" height="12" rx="1"/><rect x="10" y="4" width="2" height="16" rx="1"/><rect x="14" y="7" width="2" height="10" rx="1"/><rect x="18" y="5" width="2" height="14" rx="1"/><rect x="22" y="10" width="2" height="4" rx="1"/></svg>',
+    // Auto/magic wand
+    auto: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="none" stroke="currentColor" stroke-width="2" xmlns="http://www.w3.org/2000/svg"><path d="M12 3v2m0 14v2M5.6 5.6l1.4 1.4m10 10l1.4 1.4M3 12h2m14 0h2M5.6 18.4l1.4-1.4m10-10l1.4-1.4"/><circle cx="12" cy="12" r="4"/></svg>',
+    // Local computer
+    local: '<svg viewBox="0 0 24 24" width="SIZE" height="SIZE" fill="none" stroke="currentColor" stroke-width="2" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>'
+  };
+
   function icon(name, opts) {
     opts = opts || {};
     const size = opts.size || 16;
     const stroke = opts.stroke != null ? opts.stroke : 2;
     if (name === 'logo') return LOGO.replaceAll('SIZE', size);
+    // Brand logos
+    if (BRANDS[name]) return BRANDS[name].replaceAll('SIZE', size);
     if (FILLED[name]) {
       return '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="currentColor" stroke="none" xmlns="http://www.w3.org/2000/svg">' + FILLED[name] + '</svg>';
     }
