@@ -130,7 +130,10 @@ const MODES = {
 
   // ── Ask: free-form question ────────────────────────────────────────────────
   ask: {
-    needsScreen: true,
+    // Text-only by default so typed questions are fast (no forced screenshot +
+    // vision model). Attach a screenshot on demand with the toolbar camera
+    // button, or use Assist (Ctrl+Enter) for a screen-aware answer.
+    needsScreen: false,
     userBubble: null,
     small: false,
     resumeMode: 'ask',

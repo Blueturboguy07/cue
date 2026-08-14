@@ -312,13 +312,16 @@ function createLLM(settings) {
   let apiKey = keys[provider];
   let baseURL = '';
   let configurationError = '';
-  const tier = settings.smart ? 'smart' : 'fast';
   const models = settings.models || {};
-  let model = (models[provider] || {})[tier];
-  if (provider === 'gemini' && DEAD_GEMINI_MODEL_RE.test(model || '')) {
-    model = CURRENT_GEMINI_DEFAULT;
-  }
-  if (!model) model = DEFAULT_MODELS[provider] || '';
+  const providerModels = models[provider] || {};
+  const migrate = (m) => (provider === 'gemini' && DEAD_GEMINI_MODEL_RE.test(m || '') ? CURRENT_GEMINI_DEFAULT : m);
+  const fastModel = migrate(providerModels.fast) || DEFAULT_MODELS[provider] || '';
+  const smartModel = migrate(providerModels.smart) || DEFAULT_MODELS[provider] || '';
+  // Vision model: an explicit per-provider image model if set, else fall back to
+  // the smart/fast text model (gpt-4o, gemini, claude etc. are already multimodal).
+  const imageModel = migrate(providerModels.image) || smartModel || fastModel;
+  const textModel = settings.smart ? smartModel : fastModel;
+  const model = textModel; // the model shown in status/errors when no image is attached
   const minimaxRegion = settings.minimaxRegion || 'global_en';
   const endpoint = settings.azureEndpoint || '';
 
@@ -352,7 +355,9 @@ function createLLM(settings) {
     configurationError,
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
-      const args = { apiKey, baseURL, endpoint, model, maxTokens, ...params, turns: sanitizeTurns(params.turns) };
+      // Route to the vision model only when an image is actually attached.
+      const chosenModel = params.imageDataUrl ? imageModel : textModel;
+      const args = { apiKey, baseURL, endpoint, maxTokens, ...params, model: chosenModel, turns: sanitizeTurns(params.turns) };
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
@@ -364,7 +369,7 @@ function createLLM(settings) {
         if (provider === 'azure') return await streamAzure(args);
         throw new Error('unknown provider: ' + provider);
       } catch (error) {
-        throw new Error(formatProviderErrorMessage(error, provider, model));
+        throw new Error(formatProviderErrorMessage(error, provider, chosenModel));
       }
     }
   };

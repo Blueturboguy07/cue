@@ -545,7 +545,7 @@ async function setCapturing(active) {
 }
 
 // -------- feature runner --------
-async function runFeature(mode, userText) {
+async function runFeature(mode, userText, providedImage) {
   if (state.busy) return;
   const def = MODES[mode];
   if (!def) return;
@@ -566,8 +566,10 @@ async function runFeature(mode, userText) {
       return;
     }
 
-    let imageDataUrl = null;
-    if (def.needsScreen) {
+    // A screenshot the renderer already captured (camera button) takes priority;
+    // otherwise capture now for screen-based modes (Assist / LeetCode).
+    let imageDataUrl = providedImage || null;
+    if (!imageDataUrl && def.needsScreen) {
       try {
         imageDataUrl = await captureScreenshot();
         if (!imageDataUrl) throw new Error('No screen source was available.');
@@ -687,7 +689,8 @@ ipcMain.handle('transcript:clear', () => {
   transcript.splice(0, transcript.length);
   return { ok: true };
 });
-ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
+ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text, payload.imageDataUrl));
+ipcMain.handle('screen:capture', () => captureScreenshot());
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
 // Linux never ignores mouse events: {forward:true} is macOS/Windows-only, and

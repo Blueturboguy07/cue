@@ -19,6 +19,7 @@
       <button class="tb-hide" id="hide-btn"><span class="chev"></span><span>Hide</span></button>
       <div class="tb-divider"></div>
       <button class="tb-stop" id="stop-btn" title="Start / stop listening"></button>
+      <button class="tb-shot" id="shot-btn" title="Attach a screenshot to your next question"></button>
       <div class="tb-divider"></div>
       <button class="tb-quit" id="quit-btn" title="Quit cue (⌘⇧X)"></button>
     </div>
@@ -165,9 +166,10 @@
           <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
         </div>
 
-        <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
+        <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on · image = used with a screenshot</span></label>
         <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
         <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
+        <div class="s-field"><span>Image</span><input id="model-image" type="text" placeholder="vision model — e.g. gpt-4o, gemini-2.5-flash, or an Azure vision deployment" autocomplete="off" /></div>
         <div id="azure-deploy-hint" class="s-help hidden">For Azure, <strong>Fast/Smart must be your Azure <em>deployment</em> name</strong> (what you named the model in the Azure portal), not the base model id — otherwise Azure returns 404.</div>
 
         <label class="s-label">Assistant access <span class="s-hint">programs allowed to see what cue is doing</span></label>

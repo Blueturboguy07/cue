@@ -891,3 +891,27 @@ body.on-linux #action-row .act-primary { padding-left: 8px; padding-right: 8px; 
 body.on-linux #action-row .sep { margin: 0; }
 body.on-linux #action-row .shortcut-hint { margin-left: 2px; }
 
+
+/* ============================ Screenshot / vision ============================ */
+.tb-shot { width: 28px; height: 28px; border-radius: var(--r-8); color: rgba(255,255,255,0.85); }
+.tb-shot:hover { background: rgba(255,255,255,0.08); }
+.tb-shot.armed { color: var(--accent-hi); background: rgba(60,131,245,0.18); }
+.tb-shot.disabled { opacity: 0.35; cursor: not-allowed; }
+.tb-shot.capturing { opacity: 0.55; }
+
+.shot-chip { position: relative; display: inline-block; margin: 2px 0 8px; }
+.shot-chip img { max-width: 160px; max-height: 92px; border-radius: 8px; border: 1px solid var(--bd-hair); display: block; }
+.shot-x { position: absolute; top: -7px; right: -7px; width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(20,22,28,0.96); color: #fff; font-size: 13px; line-height: 1; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
+
+.msg-shot { max-width: 240px; max-height: 140px; border-radius: 10px; border: 1px solid var(--bd-hair); margin: 8px 0 2px; display: block; }
+
+/* Markdown: headings, ordered lists, emphasis, links inside AI answers */
+.ai-text h3, .ai-text h4, .ai-text h5, .ai-text h6 { margin: 12px 0 6px; font-weight: 650; line-height: 1.3; color: var(--tx-1); }
+.ai-text h3 { font-size: 17px; }
+.ai-text h4 { font-size: 15px; }
+.ai-text h5, .ai-text h6 { font-size: 14px; }
+.ai-text.small h3 { font-size: 15px; }
+.ai-text ol { margin: 8px 0; padding-left: 22px; }
+.ai-text ol li { margin: 4px 0; }
+.ai-text em { font-style: italic; }
+.ai-text a { color: var(--accent-hi); text-decoration: underline; }

@@ -19,6 +19,7 @@
     $('#stop-btn').title = active ? 'Stop listening' : 'Start listening to meeting audio';
   }
   setListenIcon(false);
+  $('#shot-btn').innerHTML = icon('image', { size: 15 });
   $('#quit-btn').innerHTML = icon('x', { size: 14 });
   document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
   document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
@@ -45,25 +46,33 @@
 
   // minimal, safe markdown: fenced code, bullets, inline code, bold, paragraphs
   function renderMarkdown(text) {
-    const lines = text.split('\n');
-    let html = '', inCode = false, inList = false, buf = [];
-    const flushP = () => { if (buf.length) { html += '<p>' + inline(buf.join(' ')) + '</p>'; buf = []; } };
+    const lines = String(text).split('\n');
+    let html = '', inCode = false, listType = null, buf = [];
     const inline = (s) => esc(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*_])[*_]([^*_\s][^*_]*?)[*_](?!\w)/g, '$1<em>$2</em>')
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    const flushP = () => { if (buf.length) { html += '<p>' + inline(buf.join(' ')) + '</p>'; buf = []; } };
+    const closeList = () => { if (listType) { html += listType === 'ol' ? '</ol>' : '</ul>'; listType = null; } };
     for (const raw of lines) {
       const line = raw;
       if (/^```/.test(line.trim())) {
-        if (!inCode) { flushP(); if (inList) { html += '</ul>'; inList = false; } html += '<pre><code>'; inCode = true; }
+        if (!inCode) { flushP(); closeList(); html += '<pre><code>'; inCode = true; }
         else { html += '</code></pre>'; inCode = false; }
         continue;
       }
       if (inCode) { html += esc(line) + '\n'; continue; }
-      if (/^\s*[-*]\s+/.test(line)) { flushP(); if (!inList) { html += '<ul>'; inList = true; } html += '<li>' + inline(line.replace(/^\s*[-*]\s+/, '')) + '</li>'; continue; }
-      if (line.trim() === '') { flushP(); if (inList) { html += '</ul>'; inList = false; } continue; }
+      const h = line.match(/^(#{1,4})\s+(.*)$/);
+      if (h) { flushP(); closeList(); const lvl = Math.min(h[1].length + 2, 6); html += '<h' + lvl + '>' + inline(h[2].trim()) + '</h' + lvl + '>'; continue; }
+      const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+      if (ol) { flushP(); if (listType !== 'ol') { closeList(); html += '<ol>'; listType = 'ol'; } html += '<li>' + inline(ol[1]) + '</li>'; continue; }
+      const ul = line.match(/^\s*[-*+]\s+(.*)$/);
+      if (ul) { flushP(); if (listType !== 'ul') { closeList(); html += '<ul>'; listType = 'ul'; } html += '<li>' + inline(ul[1]) + '</li>'; continue; }
+      if (line.trim() === '') { flushP(); closeList(); continue; }
       buf.push(line.trim());
     }
-    flushP(); if (inList) html += '</ul>'; if (inCode) html += '</code></pre>';
+    flushP(); closeList(); if (inCode) html += '</code></pre>';
     return html;
   }
 
@@ -155,10 +164,14 @@
   }
 
   // ---- actions -----------------------------------------------------------
+  let pendingImage = null; // a screenshot armed by the camera button, for the next send
+  let lastSentImage = null; // shown as a thumbnail in the response group
   function runMode(mode, text) {
     if (busy) return;
     setBusy(true);
-    cue.ask({ mode, text: text || '' });
+    lastSentImage = pendingImage;
+    cue.ask({ mode, text: text || '', imageDataUrl: pendingImage || undefined });
+    clearPendingImage();
   }
 
   document.querySelectorAll('.act').forEach((btn) => {
@@ -511,6 +524,46 @@
     runMode(wasFromSTT ? 'answerThis' : 'ask', text);
   }
   $('#send-btn').addEventListener('click', send);
+
+  // ---- screenshot attach (the camera button beside the mic) --------------
+  function renderShotChip() {
+    let chip = document.getElementById('shot-chip');
+    if (!pendingImage) { if (chip) chip.remove(); return; }
+    if (!chip) {
+      chip = document.createElement('div');
+      chip.id = 'shot-chip';
+      chip.className = 'shot-chip';
+      const im = document.createElement('img'); im.alt = 'attached screenshot';
+      const x = document.createElement('button'); x.className = 'shot-x'; x.textContent = '×'; x.title = 'Remove screenshot';
+      x.addEventListener('click', clearPendingImage);
+      chip.appendChild(im); chip.appendChild(x);
+      composer.insertBefore(chip, composer.firstChild);
+    }
+    chip.querySelector('img').src = pendingImage;
+  }
+  function clearPendingImage() { pendingImage = null; renderShotChip(); updateShotButton(); }
+  function armImage(dataUrl) { pendingImage = dataUrl; renderShotChip(); updateShotButton(); }
+  function updateShotButton() {
+    const btn = $('#shot-btn'); if (!btn) return;
+    const pm = (settings && settings.models && settings.models[settings.provider]) || {};
+    const hasImageModel = !!String(pm.image || '').trim();
+    btn.classList.toggle('disabled', !hasImageModel);
+    btn.classList.toggle('armed', !!pendingImage);
+    btn.title = !hasImageModel
+      ? 'Set an Image model in Settings → Keys to attach screenshots'
+      : (pendingImage ? 'Screenshot attached — type your question and send' : 'Attach a screenshot to your next question');
+  }
+  $('#shot-btn').addEventListener('click', async () => {
+    const btn = $('#shot-btn');
+    if (btn.classList.contains('disabled') || btn.classList.contains('capturing')) return;
+    btn.classList.add('capturing');
+    try {
+      const img = await cue.captureScreen();
+      if (img) armImage(img); else showToast('Screenshot could not be captured', 2000);
+    } catch (_) { showToast('Screenshot could not be captured', 2000); }
+    finally { btn.classList.remove('capturing'); }
+  });
+
   input.addEventListener('keydown', (e) => {
     // Ctrl+Z / Cmd+Z: restore last question if input is empty
     if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !input.value.trim()) {
@@ -1098,6 +1151,16 @@
       b.textContent = userBubble;
       group.appendChild(b);
     }
+    // Show the screenshot cue sent (like a coding agent showing what it looked at).
+    if (lastSentImage) {
+      const shot = document.createElement('img');
+      shot.className = 'msg-shot';
+      shot.src = lastSentImage;
+      shot.alt = 'screenshot sent to the model';
+      shot.title = 'Screenshot sent with this question';
+      group.appendChild(shot);
+      lastSentImage = null;
+    }
     if (category) {
       const pill = document.createElement('div');
       pill.className = 'category-pill';
@@ -1349,7 +1412,7 @@
     $('#azure-endpoint').value = settings.azureEndpoint || '';
     $('#azure-stt-deployment').value = settings.azureSttDeployment || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
-    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
+    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart; $('#model-image').value = m.image || '';
     fillAppLinkCallers();
     $('#s-status').textContent = statusText();
     // Transcription tab
@@ -1451,10 +1514,18 @@
     document.querySelectorAll('#provider-seg button').forEach((x) => x.classList.toggle('on', x === b));
     updateProviderFields();
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
-    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
+    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart; $('#model-image').value = m.image || '';
     $('#s-status').textContent = statusText();
     updateSmartTooltip();
+    updateShotButton();
   }));
+  // Live-enable the camera button as soon as an image model is typed.
+  const modelImageEl = $('#model-image');
+  if (modelImageEl) modelImageEl.addEventListener('input', () => {
+    if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
+    settings.models[settings.provider].image = modelImageEl.value.trim();
+    updateShotButton();
+  });
   document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.addEventListener('click', () => {
     settings.minimaxRegion = b.dataset.region;
     document.querySelectorAll('#minimax-region-seg button').forEach((x) => x.classList.toggle('on', x === b));
@@ -1637,6 +1708,7 @@
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
+    settings.models[settings.provider].image = $('#model-image').value.trim();
     // Transcription
     if (!settings.localWhisper) settings.localWhisper = {};
     settings.localWhisper.modelId = $('#whisper-model').value || settings.localWhisper.modelId || 'base.en';
@@ -1868,6 +1940,7 @@
     updatePrepStatus();
     // R6: smart tooltip
     updateSmartTooltip();
+    updateShotButton();
     // Fix 3: Adjust permission buttons based on actual Windows version.
     // ms-settings:privacy-screenrecorder only exists on Windows 11.
     // On Windows 10, screen capture needs no permission — so replace the button

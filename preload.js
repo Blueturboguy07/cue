@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('cue', {
   platformInfo: () => ipcRenderer.invoke('platform:info'),
   linuxAudioSources: () => ipcRenderer.invoke('linux-audio:sources'),
   ask: (payload) => ipcRenderer.send('ask', payload),
+  captureScreen: () => ipcRenderer.invoke('screen:capture'),
   captureToggle: () => ipcRenderer.invoke('capture:toggle').catch((err) => {
     console.error('[cue] captureToggle error', err);
     return false;
