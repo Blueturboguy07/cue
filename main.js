@@ -545,6 +545,11 @@ async function setCapturing(active) {
 }
 
 // -------- feature runner --------
+// Rolling chat memory for typed Q&A (ask / answerThis) so the model remembers
+// the conversation like a normal chat. Compacted to the most recent turns to
+// stay within the context window on long chats.
+let chatTurns = [];
+const MAX_CHAT_TURNS = 20; // 10 user+assistant exchanges
 async function runFeature(mode, userText, providedImage) {
   if (state.busy) return;
   const def = MODES[mode];
@@ -601,11 +606,16 @@ async function runFeature(mode, userText, providedImage) {
       };
       rearm();
     });
+    // Typed questions carry the running conversation; one-shot modes (assist,
+    // recap, say…) stay stateless snapshots.
+    const isChat = mode === 'ask' || mode === 'answerThis';
+    const turns = isChat ? chatTurns.concat([{ role: 'user', text: built }]) : [{ role: 'user', text: built }];
+    let full = '';
     try {
-      await Promise.race([
+      full = await Promise.race([
         llm.stream({
           system,
-          turns: [{ role: 'user', text: built }],
+          turns,
           imageDataUrl,
           onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); }
         }),
@@ -614,6 +624,10 @@ async function runFeature(mode, userText, providedImage) {
     } finally {
       streamSettled = true;
       clearTimeout(watchdog);
+    }
+    if (isChat && full) {
+      chatTurns.push({ role: 'user', text: userText || built }, { role: 'assistant', text: full });
+      if (chatTurns.length > MAX_CHAT_TURNS) chatTurns = chatTurns.slice(-MAX_CHAT_TURNS);
     }
     send('llm:done', {});
   } catch (e) {
@@ -687,6 +701,7 @@ ipcMain.handle('platform:info', () => ({
 }));
 ipcMain.handle('transcript:clear', () => {
   transcript.splice(0, transcript.length);
+  chatTurns = []; // also reset the chat memory
   return { ok: true };
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text, payload.imageDataUrl));

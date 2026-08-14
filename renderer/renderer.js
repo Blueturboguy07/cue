@@ -1534,6 +1534,12 @@
   }
 
   document.querySelectorAll('#provider-seg button').forEach((b) => b.addEventListener('click', () => {
+    // Persist the models currently typed for the outgoing provider before we
+    // load the new one — otherwise switching providers loses unsaved edits.
+    if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
+    settings.models[settings.provider].fast = $('#model-fast').value.trim();
+    settings.models[settings.provider].smart = $('#model-smart').value.trim();
+    settings.models[settings.provider].image = $('#model-image').value.trim();
     settings.provider = b.dataset.provider;
     document.querySelectorAll('#provider-seg button').forEach((x) => x.classList.toggle('on', x === b));
     updateProviderFields();

@@ -35,10 +35,10 @@ for (const relPath of FILES_THAT_CALL_GEMINI) {
   });
 }
 
-test('store.js default Gemini models match the shared current default', () => {
+test('store.js ships no pre-filled model ids (user sets their own)', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src/store.js'), 'utf8');
-  const match = /gemini:\s*\{\s*fast:\s*'([^']+)',\s*smart:\s*'([^']+)'/.exec(source);
-  assert.ok(match, 'could not find the gemini default models block in store.js');
-  assert.equal(match[1], CURRENT_GEMINI_DEFAULT);
-  assert.equal(match[2], CURRENT_GEMINI_DEFAULT);
+  const match = /gemini:\s*\{\s*fast:\s*'([^']*)',\s*smart:\s*'([^']*)'/.exec(source);
+  assert.ok(match, 'could not find the gemini models block in store.js');
+  assert.equal(match[1], '');
+  assert.equal(match[2], '');
 });

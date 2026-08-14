@@ -247,17 +247,17 @@ function geminiSettings(overrides) {
   }, overrides || {});
 }
 
-test('createLLM: falls back to CURRENT_GEMINI_DEFAULT when no model is configured', () => {
+test('createLLM: with no model configured, is not ready and asks for one', () => {
   const llm = createLLM(geminiSettings({ models: {} }));
-  assert.equal(llm.model, CURRENT_GEMINI_DEFAULT);
-  assert.equal(llm.ready, true);
+  assert.equal(llm.ready, false);
+  assert.match(llm.configurationError, /set a fast or smart model/i);
 });
 
-test('createLLM: a fresh install (store.js DEFAULTS shape) resolves to the current default', () => {
-  const llm = createLLM(geminiSettings({
-    models: { gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-flash' } }
-  }));
-  assert.equal(llm.model, CURRENT_GEMINI_DEFAULT);
+test('createLLM: a fresh install (empty models) resolves once the user sets a model', () => {
+  assert.equal(createLLM(geminiSettings({ models: { gemini: { fast: '', smart: '' } } })).ready, false);
+  const llm = createLLM(geminiSettings({ models: { gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-flash' } } }));
+  assert.equal(llm.model, 'gemini-2.5-flash');
+  assert.equal(llm.ready, true);
 });
 
 test('createLLM: self-heals a settings file saved with the retired gemini-2.0-flash default', () => {

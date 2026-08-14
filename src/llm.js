@@ -10,15 +10,9 @@ const CUSTOM_PROVIDER = 'custom';
 // Google's own SDK examples standardize on and is documented as free-tier
 // available, so it is the single default used everywhere in this file.
 const CURRENT_GEMINI_DEFAULT = 'gemini-2.5-flash';
-const DEFAULT_MODELS = {
-  openai: 'gpt-4o-mini',
-  anthropic: 'claude-3-5-haiku-latest',
-  gemini: CURRENT_GEMINI_DEFAULT,
-  ollama: 'llama3.2',
-  groq: 'llama-3.1-8b-instant',
-  minimax: 'MiniMax-M2.7',
-  azure: 'gpt-4o-mini'
-};
+// No baked-in model ids — you set current models yourself, so nothing goes
+// stale. (CURRENT_GEMINI_DEFAULT below is only cue's internal STT fallback.)
+const DEFAULT_MODELS = {};
 
 // Gemini model ids that Google has since deprecated/retired. A settings file
 // saved before this fix can still have one of these persisted on disk, so
@@ -346,6 +340,10 @@ function createLLM(settings) {
   // Azure needs a second credential: the resource endpoint.
   if (!configurationError && provider === 'azure' && !endpoint) {
     configurationError = 'Add your Azure AI Foundry endpoint in Settings.';
+  }
+  // No models are pre-filled, so require at least one to be set.
+  if (!configurationError && provider !== CUSTOM_PROVIDER && !fastModel && !smartModel) {
+    configurationError = `Set a Fast or Smart model for ${normalizeProviderName(provider)} in Settings → Keys.`;
   }
 
   const ready = !configurationError && !!model;
