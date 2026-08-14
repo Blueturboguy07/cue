@@ -441,6 +441,9 @@ button:focus { outline: none; }
 .smart-pill:hover { background: rgba(255,255,255,0.09); }
 .smart-pill.on { border-color: rgba(60,131,245,0.5); color: #7FB0F9; background: rgba(60,131,245,0.10); }
 .smart-pill.on .ic { color: #7FB0F9; }
+/* Image mode gets a distinct violet so it's obvious it's a third state. */
+.smart-pill.image { border-color: rgba(167,139,250,0.55); color: #C4B5FD; background: rgba(139,92,246,0.14); }
+.smart-pill.image .ic { color: #C4B5FD; }
 /* History button */
 .history-btn {
   width: 28px; height: 28px; border-radius: var(--r-8);

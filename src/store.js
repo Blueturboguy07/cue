@@ -19,6 +19,9 @@ const DEFAULTS = {
     threads: 0
   },
   smart: false,
+  // The composer pill cycles through these: 'fast' | 'smart' | 'image'. `smart`
+  // is kept in sync (smart === tier==='smart') for anything still reading it.
+  tier: 'fast',
   // Linux only: which PulseAudio/PipeWire source feeds the "Them" channel
   // (a pactl source name). Empty = auto-pick the default sink's monitor.
   linuxMonitorSource: '',

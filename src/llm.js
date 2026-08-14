@@ -320,7 +320,9 @@ function createLLM(settings) {
   // Vision model: an explicit per-provider image model if set, else fall back to
   // the smart/fast text model (gpt-4o, gemini, claude etc. are already multimodal).
   const imageModel = migrate(providerModels.image) || smartModel || fastModel;
-  const textModel = settings.smart ? smartModel : fastModel;
+  // Composer tier: fast | smart | image. Falls back to the old `smart` bool.
+  const tier = settings.tier || (settings.smart ? 'smart' : 'fast');
+  const textModel = tier === 'image' ? imageModel : tier === 'smart' ? smartModel : fastModel;
   const model = textModel; // the model shown in status/errors when no image is attached
   const minimaxRegion = settings.minimaxRegion || 'global_en';
   const endpoint = settings.azureEndpoint || '';
@@ -347,7 +349,7 @@ function createLLM(settings) {
   }
 
   const ready = !configurationError && !!model;
-  const maxTokens = settings.smart ? 1400 : 700;
+  const maxTokens = tier === 'fast' ? 700 : 1400;
 
   return {
     provider, model, apiKey, baseURL,

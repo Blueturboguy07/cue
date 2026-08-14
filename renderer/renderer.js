@@ -545,13 +545,18 @@
   function armImage(dataUrl) { pendingImage = dataUrl; renderShotChip(); updateShotButton(); }
   function updateShotButton() {
     const btn = $('#shot-btn'); if (!btn) return;
+    const tier = settings && (settings.tier || (settings.smart ? 'smart' : 'fast'));
     const pm = (settings && settings.models && settings.models[settings.provider]) || {};
     const hasImageModel = !!String(pm.image || '').trim();
-    btn.classList.toggle('disabled', !hasImageModel);
+    // Only usable in Image mode AND with an image model configured.
+    const enabled = tier === 'image' && hasImageModel;
+    btn.classList.toggle('disabled', !enabled);
     btn.classList.toggle('armed', !!pendingImage);
-    btn.title = !hasImageModel
-      ? 'Set an Image model in Settings → Keys to attach screenshots'
-      : (pendingImage ? 'Screenshot attached — type your question and send' : 'Attach a screenshot to your next question');
+    btn.title = tier !== 'image'
+      ? 'Switch the composer pill to Image mode to attach screenshots'
+      : (!hasImageModel
+          ? 'Set an Image model in Settings → Keys to attach screenshots'
+          : (pendingImage ? 'Screenshot attached — type your question and send' : 'Attach a screenshot to your next question'));
   }
   $('#shot-btn').addEventListener('click', async () => {
     const btn = $('#shot-btn');
@@ -604,12 +609,29 @@
     sendBtn.title = `Send · ${forceKey} to force answer`;
   }
 
-  // Smart toggle
+  // Composer pill cycles Fast -> Smart -> Image. Image mode is the ONLY state
+  // that unlocks the screenshot/camera button.
   const smartBtn = $('#smart-toggle');
+  const TIER_ORDER = ['fast', 'smart', 'image'];
+  function currentTier() { return settings.tier || (settings.smart ? 'smart' : 'fast'); }
+  function updateModePill() {
+    const tier = currentTier();
+    const label = smartBtn.querySelector('span:last-child');
+    const ic = smartBtn.querySelector('.ic');
+    if (label) label.textContent = tier === 'image' ? 'Image' : 'Smart';
+    if (ic) ic.innerHTML = icon(tier === 'image' ? 'image' : 'zap', { size: 14 });
+    smartBtn.classList.toggle('on', tier !== 'fast');
+    smartBtn.classList.toggle('image', tier === 'image');
+    if (tier !== 'image' && pendingImage) clearPendingImage();
+    updateShotButton();
+    updateSmartTooltip();
+  }
   smartBtn.addEventListener('click', async () => {
-    settings.smart = !settings.smart;
-    smartBtn.classList.toggle('on', settings.smart);
-    await cue.settingsSet({ smart: settings.smart });
+    const next = TIER_ORDER[(TIER_ORDER.indexOf(currentTier()) + 1) % TIER_ORDER.length];
+    settings.tier = next;
+    settings.smart = next === 'smart';
+    updateModePill();
+    await cue.settingsSet({ tier: next, smart: settings.smart });
   });
 
   // Hide / collapse
@@ -1281,11 +1303,13 @@
 
   function updateSmartTooltip() {
     if (!settings) return;
-    const m = settings.models[settings.provider] || { fast: '', smart: '' };
+    const m = settings.models[settings.provider] || {};
     const fast = m.fast || 'fast model';
     const smart = m.smart || 'smart model';
+    const img = m.image || '(set an Image model)';
+    const tier = settings.tier || (settings.smart ? 'smart' : 'fast');
     const btn = document.getElementById('smart-toggle');
-    if (btn) btn.title = 'Fast: ' + fast + ' · Smart: ' + smart + ' (higher quality, ~2× slower)';
+    if (btn) btn.title = 'Click to cycle Fast → Smart → Image.\nFast: ' + fast + '  ·  Smart: ' + smart + '  ·  Image: ' + img + '\nNow: ' + tier.charAt(0).toUpperCase() + tier.slice(1);
   }
 
   // ---- microphone permission banner --------------------------------------
@@ -1965,7 +1989,7 @@
       }
     }
 
-    smartBtn.classList.toggle('on', !!settings.smart);
+    updateModePill();
     showExample();
     syncPlaceholder();
     updateHistoryBadge(); // FIX #3: Initialize badge on boot
