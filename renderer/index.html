@@ -168,9 +168,7 @@
         <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
         <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
         <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
-
-        <label class="s-label">Transcription key <span class="s-hint">for listening — an OpenAI or Gemini key above works too</span></label>
-        <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
+        <div id="azure-deploy-hint" class="s-help hidden">For Azure, <strong>Fast/Smart must be your Azure <em>deployment</em> name</strong> (what you named the model in the Azure portal), not the base model id — otherwise Azure returns 404.</div>
 
         <label class="s-label">Assistant access <span class="s-hint">programs allowed to see what cue is doing</span></label>
         <div class="s-callers" id="applink-callers"></div>
@@ -189,6 +187,12 @@
           <button data-stt-provider="gemini">Gemini</button>
         </div>
         <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider.</div>
+
+        <label class="s-label">Transcription keys <span class="s-hint">used by the cloud modes above — Local needs none</span></label>
+        <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-… (lowest latency)" autocomplete="off" /></div>
+        <div class="s-field"><span>OpenAI</span><input id="stt-key-openai" type="password" placeholder="sk-… (same key as OpenAI provider)" autocomplete="off" /></div>
+        <div class="s-field"><span>Gemini</span><input id="stt-key-gemini" type="password" placeholder="AIza… (same key as Gemini provider)" autocomplete="off" /></div>
+        <div class="s-note">OpenAI and Gemini here are the same keys as on the Keys tab — set them in either place. <strong>Auto</strong> uses whichever of these you've filled in (Deepgram &gt; OpenAI &gt; Gemini).</div>
 
         <div id="linux-audio-field" class="hidden">
           <label class="s-label" for="linux-monitor-device">Meeting audio source <span class="s-hint">the PipeWire/PulseAudio input that carries system audio</span></label>

@@ -82,6 +82,12 @@ function formatProviderErrorMessage(error, provider, model) {
 
   if (isNotFoundError(error)) {
     const modelHint = model ? ` "${model}"` : '';
+    if (provider === 'azure') {
+      // Azure routes by *deployment* name, not the base model id — a 404
+      // "Resource not found" almost always means the Fast/Smart field doesn't
+      // match a deployment in the resource (or the endpoint is wrong).
+      return `Azure returned 404 (Resource not found). The Fast/Smart model field must be your Azure *deployment* name${modelHint} (the name you gave the model in the Azure portal), not the base model id. Check that name and that your endpoint is the resource's, then try again.`;
+    }
     return `${label} model${modelHint} is unavailable (404) — it may have been renamed, retired by the provider, or misspelled. Open Settings and pick a current model for ${label} (or clear the field to use cue's default), then try again.`;
   }
 
@@ -136,7 +142,10 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
 function normalizeAzureBaseURL(raw) {
   let u = String(raw || '').trim().replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
   if (!u) return '';
-  if (/cognitiveservices\.azure\.com/i.test(u) && !/\/openai\/v1$/i.test(u)) {
+  // Azure AI Foundry hosts (both the older cognitiveservices.azure.com and the
+  // newer services.ai.azure.com) expose the OpenAI-compatible API under
+  // /openai/v1. Append it when the user pasted just the resource host.
+  if (/(cognitiveservices|services\.ai)\.azure\.com/i.test(u) && !/\/openai(\/v1)?$/i.test(u)) {
     u += '/openai/v1';
   }
   return u;

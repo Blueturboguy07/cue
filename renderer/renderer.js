@@ -1282,7 +1282,20 @@
     document.querySelectorAll('.prov-group').forEach((group) => {
       group.classList.toggle('hidden', group.dataset.prov !== settings.provider);
     });
+    const azureHint = $('#azure-deploy-hint');
+    if (azureHint) azureHint.classList.toggle('hidden', settings.provider !== 'azure');
   }
+
+  // OpenAI/Gemini keys double as transcription keys, so they appear on both the
+  // Keys tab (LLM) and the Audio tab (STT). Mirror edits live between the two
+  // inputs so whichever the user types into wins and saveSettings reads a single
+  // consistent value — otherwise the hidden twin's stale value could clobber it.
+  [['#key-openai', '#stt-key-openai'], ['#key-gemini', '#stt-key-gemini']].forEach(([aSel, bSel]) => {
+    const a = $(aSel), b = $(bSel);
+    if (!a || !b) return;
+    a.addEventListener('input', () => { b.value = a.value; });
+    b.addEventListener('input', () => { a.value = b.value; });
+  });
 
   // Linux only: populate the meeting-audio source dropdown from PulseAudio/
   // PipeWire (via main — Chromium hides monitor devices from enumerateDevices).
@@ -1315,6 +1328,9 @@
     $('#key-anthropic').value = settings.apiKeys.anthropic || '';
     $('#key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-deepgram').value = settings.apiKeys.deepgram || '';
+    // STT-tab twins of the dual-use keys (kept in sync by the mirror listeners).
+    $('#stt-key-openai').value = settings.apiKeys.openai || '';
+    $('#stt-key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-custom').value = settings.apiKeys.custom || '';
     $('#base-url').value = settings.baseUrl || '';
     updateProviderFields();
@@ -1634,14 +1650,9 @@
     }
   }
 
-  // ---- example conversation (matches the reference screenshot) ------------
+  // Start with a clean panel — no canned example conversation.
   function showExample() {
     clearMessages();
-    addUserBubble('What should I say?');
-    const ai = document.createElement('div');
-    ai.className = 'ai-text';
-    ai.textContent = '“A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.”';
-    messages.appendChild(ai);
   }
 
   // ---- global keys -------------------------------------------------------
