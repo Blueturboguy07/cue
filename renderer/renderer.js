@@ -12,7 +12,13 @@
   // ---- paint icons -------------------------------------------------------
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
-  $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
+  // Listen button: a mic when idle ("start listening"), a stop square while
+  // listening. setListenIcon keeps it in sync with capture state.
+  function setListenIcon(active) {
+    $('#stop-btn').innerHTML = icon(active ? 'stop-square' : 'mic', { size: 15 });
+    $('#stop-btn').title = active ? 'Stop listening' : 'Start listening to meeting audio';
+  }
+  setListenIcon(false);
   $('#quit-btn').innerHTML = icon('x', { size: 14 });
   document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
   document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
@@ -948,6 +954,7 @@
   cue.on('capture:state', ({ active, streaming, mode }) => {
     setLiveDotState(active ? 'idle' : 'off');
     $('#stop-btn').classList.toggle('active', active);
+    setListenIcon(active);
     // FIX #4: Add .listening class to composer when capture is active
     composer.classList.toggle('listening', active);
     // Update history button to show active state when listening
@@ -1346,9 +1353,8 @@
     fillAppLinkCallers();
     $('#s-status').textContent = statusText();
     // Transcription tab
-    document.querySelectorAll('#stt-provider-seg button').forEach((button) => {
-      button.classList.toggle('on', button.dataset.sttProvider === (settings.sttProvider || 'auto'));
-    });
+    $('#stt-provider-select').value = settings.sttProvider || 'auto';
+    updateSttFields();
     const localWhisper = settings.localWhisper || { modelId: 'base.en', language: 'auto', threads: 0 };
     $('#whisper-language').value = localWhisper.language || 'auto';
     $('#whisper-threads').value = Number(localWhisper.threads) || 0;
@@ -1454,13 +1460,25 @@
     document.querySelectorAll('#minimax-region-seg button').forEach((x) => x.classList.toggle('on', x === b));
   }));
 
-  document.querySelectorAll('#stt-provider-seg button').forEach((button) => button.addEventListener('click', () => {
-    settings.sttProvider = button.dataset.sttProvider;
-    document.querySelectorAll('#stt-provider-seg button').forEach((candidate) => {
-      candidate.classList.toggle('on', candidate === button);
+  // One control for speech-to-text: the dropdown picks the provider, and only
+  // that provider's field(s) show (Auto shows all cloud keys; Local shows the
+  // whisper.cpp card).
+  function updateSttFields() {
+    const sel = ($('#stt-provider-select') || {}).value || settings.sttProvider || 'auto';
+    const isLocal = sel === 'local';
+    document.querySelectorAll('.stt-field').forEach((el) => {
+      el.classList.toggle('hidden', isLocal || (sel !== 'auto' && sel !== el.dataset.sttKey));
     });
+    const keysLabel = $('#stt-keys-label'); if (keysLabel) keysLabel.classList.toggle('hidden', isLocal);
+    const keysNote = $('#stt-keys-note'); if (keysNote) keysNote.classList.toggle('hidden', isLocal);
+    const card = document.querySelector('.whisper-card'); if (card) card.classList.toggle('hidden', !isLocal);
+  }
+  const sttSelect = $('#stt-provider-select');
+  if (sttSelect) sttSelect.addEventListener('change', () => {
+    settings.sttProvider = sttSelect.value;
+    updateSttFields();
     $('#s-status').textContent = statusText();
-  }));
+  });
 
   function formatBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
@@ -1890,6 +1908,7 @@
     const st = await cue.captureState();
     $('#live-dot').classList.toggle('off', !st.active);
     $('#stop-btn').classList.toggle('active', st.active);
+    setListenIcon(st.active);
     if (!settings.onboarded) showOnboard();
   })();
 })();

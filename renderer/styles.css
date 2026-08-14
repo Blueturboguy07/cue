@@ -56,7 +56,10 @@ html, body {
   pointer-events: none;                  /* only the actual UI blocks; gaps pass through */
 }
 #toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
-#toolbar { -webkit-app-region: drag; }   /* drag the top pill to move the window */
+/* Only the labelled "Drag" pill moves the window. The toolbar itself is NOT a
+   drag region, so the buttons and gaps keep normal cursors instead of the WM's
+   move cursor bleeding over them (esp. on Linux). */
+#toolbar { -webkit-app-region: no-drag; }
 #panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary { -webkit-app-region: no-drag; }
 
 /* ============================ Toolbar pill ============================ */
@@ -72,7 +75,7 @@ html, body {
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
 }
-.drag-handle { -webkit-app-region: drag; }
+.drag-handle { -webkit-app-region: no-drag; }
 .drag-pill {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 8px; border-radius: var(--r-pill);
@@ -83,6 +86,7 @@ html, body {
   -webkit-app-region: drag;
 }
 .drag-pill:hover { background: rgba(255,255,255,0.10); }
+.drag-pill:active { cursor: grabbing; }
 .drag-dots {
   width: 14px; height: 10px;
   display: inline-block;

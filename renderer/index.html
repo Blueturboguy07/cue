@@ -14,7 +14,7 @@
         <span class="drag-dots" aria-hidden="true"></span>
         <span class="drag-label">Drag</span>
       </div>
-      <button class="tb-logo" id="logo-btn" title="cue"></button>
+      <button class="tb-logo" id="logo-btn" title="Guide — reopen the welcome walkthrough"></button>
       <div class="tb-divider"></div>
       <button class="tb-hide" id="hide-btn"><span class="chev"></span><span>Hide</span></button>
       <div class="tb-divider"></div>
@@ -178,23 +178,23 @@
 
       <!-- Tab: Transcription -->
       <div class="s-body s-tab-pane hidden" data-pane="transcription">
-        <label class="s-label">Speech-to-text provider</label>
-        <div class="s-seg s-seg-wrap" id="stt-provider-seg">
-          <button data-stt-provider="auto">Auto</button>
-          <button data-stt-provider="local">Local</button>
-          <button data-stt-provider="deepgram">Deepgram</button>
-          <button data-stt-provider="openai">OpenAI</button>
-          <button data-stt-provider="gemini">Gemini</button>
-          <button data-stt-provider="azure">Azure</button>
-        </div>
-        <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider.</div>
+        <label class="s-label" for="stt-provider-select">Speech-to-text</label>
+        <select id="stt-provider-select" class="s-select">
+          <option value="auto">Auto — use whichever key I've set</option>
+          <option value="local">Local — offline, on this computer, no key</option>
+          <option value="deepgram">Deepgram — lowest latency</option>
+          <option value="openai">OpenAI</option>
+          <option value="gemini">Gemini</option>
+          <option value="azure">Azure</option>
+        </select>
+        <div class="s-note">Local keeps your microphone and meeting audio on this computer and never falls back to a cloud provider.</div>
 
-        <label class="s-label">Transcription keys <span class="s-hint">used by the cloud modes above — Local needs none</span></label>
-        <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-… (lowest latency)" autocomplete="off" /></div>
-        <div class="s-field"><span>OpenAI</span><input id="stt-key-openai" type="password" placeholder="sk-… (same key as OpenAI provider)" autocomplete="off" /></div>
-        <div class="s-field"><span>Gemini</span><input id="stt-key-gemini" type="password" placeholder="AIza… (same key as Gemini provider)" autocomplete="off" /></div>
-        <div class="s-field"><span>Azure audio deployment</span><input id="azure-stt-deployment" type="text" placeholder="e.g. whisper (your Azure audio model deployment)" autocomplete="off" /></div>
-        <div class="s-note">OpenAI and Gemini reuse the keys from the Keys tab. <strong>Azure</strong> reuses your Azure key + endpoint from the Keys tab — enter the deployment name of an <em>audio</em> model (whisper / gpt-4o-transcribe), not your chat deployment. <strong>Auto</strong> uses whichever you've filled in (Deepgram &gt; OpenAI &gt; Gemini &gt; Azure).</div>
+        <label class="s-label" id="stt-keys-label">Transcription key</label>
+        <div class="s-field stt-field" data-stt-key="deepgram"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-…" autocomplete="off" /></div>
+        <div class="s-field stt-field" data-stt-key="openai"><span>OpenAI</span><input id="stt-key-openai" type="password" placeholder="sk-… (same key as the OpenAI provider)" autocomplete="off" /></div>
+        <div class="s-field stt-field" data-stt-key="gemini"><span>Gemini</span><input id="stt-key-gemini" type="password" placeholder="AIza… (same key as the Gemini provider)" autocomplete="off" /></div>
+        <div class="s-field stt-field" data-stt-key="azure"><span>Azure deployment</span><input id="azure-stt-deployment" type="text" placeholder="e.g. whisper (an audio model deployment)" autocomplete="off" /></div>
+        <div class="s-note" id="stt-keys-note">OpenAI and Gemini reuse your keys from the Keys tab. <strong>Azure</strong> reuses your Azure key + endpoint from the Keys tab — give an <em>audio</em> deployment (whisper / gpt-4o-transcribe), not your chat deployment.</div>
 
         <div id="linux-audio-field" class="hidden">
           <label class="s-label" for="linux-monitor-device">Meeting audio source <span class="s-hint">the PipeWire/PulseAudio input that carries system audio</span></label>
