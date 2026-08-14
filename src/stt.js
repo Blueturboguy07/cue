@@ -2,7 +2,7 @@
 // no audio API — we transcribe with whatever audio-capable key is available, and
 // fall back across providers. Returns { text, provider } or { text:'', error }.
 const { pcmToWav } = require('./wav');
-const { formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT } = require('./llm');
+const { formatProviderErrorMessage, isQuotaError, normalizeAzureBaseURL, CURRENT_GEMINI_DEFAULT } = require('./llm');
 
 const BASE_VOCAB = 'CI/CD, Docker, Kubernetes, Terraform, Jenkins, AWS, Azure, GCP, ' +
   'CodeCommit, CodePipeline, CodeBuild, CodeDeploy, DevOps, SRE, microservices, deployment, ' +
@@ -45,6 +45,35 @@ async function transcribeOpenAI(apiKey, wav, model, baseURL, prompt) {
   return (res.text || '').trim();
 }
 
+// Azure transcription. Needs the resource endpoint + an *audio* deployment name
+// (e.g. a whisper or gpt-4o-transcribe deployment) — the chat deployment won't
+// work here. Mirrors streamAzure's auth: AzureOpenAI SDK for *.openai.azure.com,
+// else the OpenAI-compatible base with the api-key header.
+async function transcribeAzure(apiKey, wav, deployment, endpoint, prompt) {
+  const OpenAI = require('openai');
+  const url = normalizeAzureBaseURL(endpoint);
+  if (!url) throw new Error('Add your Azure endpoint in Settings to transcribe with Azure.');
+  if (!deployment) throw new Error('Set your Azure audio deployment name in Settings → Audio.');
+  const toFile = OpenAI.toFile || require('openai/uploads').toFile;
+  const file = await toFile(wav, 'audio.wav', { type: 'audio/wav' });
+  let client;
+  if (/\.openai\.azure\.com/i.test(url)) {
+    client = new OpenAI.AzureOpenAI({ endpoint: url, apiKey, apiVersion: '2024-10-21' });
+  } else {
+    const azureFetch = async (input, init) => {
+      const headers = new Headers(init && init.headers);
+      headers.set('api-key', apiKey);
+      headers.delete('authorization');
+      return fetch(input, { ...init, headers });
+    };
+    client = new OpenAI({ baseURL: url, apiKey, fetch: azureFetch });
+  }
+  const res = await client.audio.transcriptions.create({
+    file, model: deployment, language: 'en', temperature: 0, prompt: prompt || ''
+  });
+  return (res.text || '').trim();
+}
+
 async function transcribeGemini(apiKey, wav) {
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
@@ -71,6 +100,9 @@ function createSTT(settings) {
   }
   if ((selectedProvider === 'auto' || selectedProvider === 'gemini') && keys.gemini) {
     chain.push({ p: 'gemini', fn: (wav) => transcribeGemini(keys.gemini, wav) });
+  }
+  if ((selectedProvider === 'auto' || selectedProvider === 'azure') && keys.azure && settings.azureEndpoint && settings.azureSttDeployment) {
+    chain.push({ p: 'azure', fn: (wav) => transcribeAzure(keys.azure, wav, settings.azureSttDeployment, settings.azureEndpoint, vocabPrompt) });
   }
   if (keys.openai && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'openai'), 1)[0]);
 

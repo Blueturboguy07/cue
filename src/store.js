@@ -26,6 +26,9 @@ const DEFAULTS = {
   minimaxRegion: 'global_en',
   apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '' , azure: '' },
   azureEndpoint: '',
+  // Azure STT: the deployment name of an *audio* model (whisper / gpt-4o-transcribe)
+  // in the same Azure resource. Empty = Azure isn't used for transcription.
+  azureSttDeployment: '',
   // Tab 2: Profile
   resumeText: '',
   jobDescription: '',

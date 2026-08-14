@@ -139,16 +139,21 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
 
 // Azure AI Foundry Models API (cognitiveservices.azure.com hosts) lives under
 // {endpoint}/openai/v1 and authenticates with the `api-key` header.
+function azureOrigin(u) {
+  const m = String(u).match(/^(https?:\/\/[^/]+)/i);
+  return m ? m[1] : String(u);
+}
+
+// Reduce whatever the user pasted to the base cue's client needs, regardless of
+// the trailing path (…/openai/v1/responses, …/chat/completions, a bare host, …):
+//   *.openai.azure.com        -> the bare origin (AzureOpenAI SDK adds the rest)
+//   *.services.ai / *.cognitiveservices -> {origin}/openai/v1 (OpenAI-compatible)
 function normalizeAzureBaseURL(raw) {
-  let u = String(raw || '').trim().replace(/\/+$/, '').replace(/\/chat\/completions$/i, '');
+  const u = String(raw || '').trim().replace(/\/+$/, '');
   if (!u) return '';
-  // Azure AI Foundry hosts (both the older cognitiveservices.azure.com and the
-  // newer services.ai.azure.com) expose the OpenAI-compatible API under
-  // /openai/v1. Append it when the user pasted just the resource host.
-  if (/(cognitiveservices|services\.ai)\.azure\.com/i.test(u) && !/\/openai(\/v1)?$/i.test(u)) {
-    u += '/openai/v1';
-  }
-  return u;
+  if (/\.openai\.azure\.com/i.test(u)) return azureOrigin(u);
+  if (/(services\.ai|cognitiveservices)\.azure\.com/i.test(u)) return azureOrigin(u) + '/openai/v1';
+  return u.replace(/\/chat\/completions$/i, '');
 }
 
 async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, endpoint }) {
@@ -365,4 +370,4 @@ function createLLM(settings) {
   };
 }
 
-module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT };
+module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, normalizeAzureBaseURL, CURRENT_GEMINI_DEFAULT };

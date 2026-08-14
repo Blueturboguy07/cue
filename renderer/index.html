@@ -185,6 +185,7 @@
           <button data-stt-provider="deepgram">Deepgram</button>
           <button data-stt-provider="openai">OpenAI</button>
           <button data-stt-provider="gemini">Gemini</button>
+          <button data-stt-provider="azure">Azure</button>
         </div>
         <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider.</div>
 
@@ -192,7 +193,8 @@
         <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-… (lowest latency)" autocomplete="off" /></div>
         <div class="s-field"><span>OpenAI</span><input id="stt-key-openai" type="password" placeholder="sk-… (same key as OpenAI provider)" autocomplete="off" /></div>
         <div class="s-field"><span>Gemini</span><input id="stt-key-gemini" type="password" placeholder="AIza… (same key as Gemini provider)" autocomplete="off" /></div>
-        <div class="s-note">OpenAI and Gemini here are the same keys as on the Keys tab — set them in either place. <strong>Auto</strong> uses whichever of these you've filled in (Deepgram &gt; OpenAI &gt; Gemini).</div>
+        <div class="s-field"><span>Azure audio deployment</span><input id="azure-stt-deployment" type="text" placeholder="e.g. whisper (your Azure audio model deployment)" autocomplete="off" /></div>
+        <div class="s-note">OpenAI and Gemini reuse the keys from the Keys tab. <strong>Azure</strong> reuses your Azure key + endpoint from the Keys tab — enter the deployment name of an <em>audio</em> model (whisper / gpt-4o-transcribe), not your chat deployment. <strong>Auto</strong> uses whichever you've filled in (Deepgram &gt; OpenAI &gt; Gemini &gt; Azure).</div>
 
         <div id="linux-audio-field" class="hidden">
           <label class="s-label" for="linux-monitor-device">Meeting audio source <span class="s-hint">the PipeWire/PulseAudio input that carries system audio</span></label>

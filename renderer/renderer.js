@@ -1340,6 +1340,7 @@
     document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.classList.toggle('on', b.dataset.region === (settings.minimaxRegion || 'global_en')));
     $('#key-azure').value = settings.apiKeys.azure || '';
     $('#azure-endpoint').value = settings.azureEndpoint || '';
+    $('#azure-stt-deployment').value = settings.azureSttDeployment || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     fillAppLinkCallers();
@@ -1614,6 +1615,7 @@
     settings.apiKeys.minimax = $('#key-minimax').value.trim();
     settings.apiKeys.azure = $('#key-azure').value.trim();
     settings.azureEndpoint = $('#azure-endpoint').value.trim();
+    settings.azureSttDeployment = $('#azure-stt-deployment').value.trim();
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
