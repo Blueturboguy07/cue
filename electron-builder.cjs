@@ -76,5 +76,8 @@ module.exports = {
   linux: {
     target: [{ target: "AppImage", arch: ["x64", "arm64"] }],
     category: "Utility",
+    icon: "build-resources/icon.png",
+    synopsis: "Private AI copilot overlay",
+    description: "cue — a private AI copilot that floats over your screen.",
   },
 };
