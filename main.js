@@ -249,6 +249,10 @@ function createWindow() {
   // On macOS, this is not needed (dock hiding + Mission Control handle it).
   if (isWindows) {
     winOptions.type = 'toolbar';
+  } else if (isLinux) {
+    // 'notification' puts the overlay in a layer above fullscreen windows on
+    // X11/KWin, so a fullscreen app (video, game, presentation) can't cover it.
+    winOptions.type = 'notification';
   }
 
   win = new BrowserWindow(winOptions);
@@ -717,6 +721,10 @@ ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio(
 ipcMain.on('mouse:ignore', (_e, v) => {
   if (!win || isLinux) return;
   win.setIgnoreMouseEvents(!!v, { forward: true });
+});
+ipcMain.handle('window:get-pos', () => (win && !win.isDestroyed() ? win.getPosition() : [0, 0]));
+ipcMain.on('window:move-to', (_e, { x, y }) => {
+  if (win && !win.isDestroyed()) win.setPosition(Math.round(x), Math.round(y));
 });
 ipcMain.on('window:fit', (_e, h) => {
   if (!isLinux || !win || win.isDestroyed()) return;

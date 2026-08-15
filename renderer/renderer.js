@@ -648,6 +648,26 @@
   // shortcut is unreliable, leaving no way to quit from the UI.
   $('#quit-btn').addEventListener('click', () => cue.quit());
 
+  // Custom window drag on the "Drag" pill — the renderer moves the window itself
+  // (no -webkit-app-region), so the cursor never flips to the WM's move/hand
+  // cursor on mousedown or during the drag; it stays the default arrow.
+  (() => {
+    const handle = document.querySelector('.drag-pill');
+    if (!handle) return;
+    let dragging = false, startX = 0, startY = 0, winX = 0, winY = 0;
+    handle.addEventListener('mousedown', async (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      try { const pos = await cue.getWindowPos(); winX = pos[0]; winY = pos[1]; } catch (_) { return; }
+      startX = e.screenX; startY = e.screenY; dragging = true;
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (dragging) cue.moveWindowTo(winX + (e.screenX - startX), winY + (e.screenY - startY));
+    });
+    window.addEventListener('mouseup', () => { dragging = false; });
+    window.addEventListener('blur', () => { dragging = false; });
+  })();
+
   // Stop = start/stop listening. Kick off system-audio capture straight from the click so
   // the user-gesture is fresh for getDisplayMedia (loopback capture needs it).
   $('#stop-btn').addEventListener('click', async () => {

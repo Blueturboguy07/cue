@@ -30,6 +30,11 @@
 
 * { box-sizing: border-box; }
 
+/* User preference: the cursor stays a plain arrow everywhere in cue — never a
+   pointer hand on buttons, a text I-beam in the input/textarea, or a grab on the
+   drag pill. */
+* { cursor: default !important; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -76,17 +81,18 @@ html, body {
   -webkit-backdrop-filter: blur(24px) saturate(160%);
 }
 .drag-handle { -webkit-app-region: no-drag; }
+/* Dragged with custom JS (renderer moves the window), NOT -webkit-app-region so
+   the window manager never swaps in its own move/hand cursor. Cursor stays the
+   default arrow the whole time — on hover, on click, and while dragging. */
 .drag-pill {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 8px; border-radius: var(--r-pill);
   background: rgba(255,255,255,0.06);
   color: rgba(255,255,255,0.8);
   font-size: 12px; font-weight: 600; letter-spacing: 0.01em;
-  cursor: grab;
-  -webkit-app-region: drag;
+  cursor: default;
 }
 .drag-pill:hover { background: rgba(255,255,255,0.10); }
-.drag-pill:active { cursor: grabbing; }
 .drag-dots {
   width: 14px; height: 10px;
   display: inline-block;

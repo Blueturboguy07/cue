@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('cue', {
   systemPcm: (arrayBuffer) => ipcRenderer.send('system:pcm', arrayBuffer),
   setIgnoreMouse: (v) => ipcRenderer.send('mouse:ignore', v),
   fitWindow: (h) => ipcRenderer.send('window:fit', h),
+  getWindowPos: () => ipcRenderer.invoke('window:get-pos'),
+  moveWindowTo: (x, y) => ipcRenderer.send('window:move-to', { x, y }),
   clearTranscript: () => ipcRenderer.invoke('transcript:clear'),
   openPane: (url) => ipcRenderer.send('open-pane', url),
   appLinkState: () => ipcRenderer.invoke('applink:state'),
