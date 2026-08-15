@@ -23,9 +23,12 @@ const RULE_DESC = 'cue: hide from screen recording';
 const MIN_MAJOR = 6;
 const MIN_MINOR = 6;
 
-// Pure: the kwinrulesrc key/value pairs for excluding `windowClass`.
-// wmclassmatch=1 (exact), excludefromcapturerule=2 (Force). Case-sensitive —
-// windowClass must be the exact WM_CLASS/app_id KWin sees.
+// Pure: the kwinrulesrc key/value pairs for `windowClass`. wmclassmatch=1
+// (exact), *rule=2 (Force). Case-sensitive — windowClass must be the exact
+// WM_CLASS/app_id KWin sees. Besides excluding the window's pixels from capture,
+// we also force it out of the taskbar, pager and Alt+Tab switcher: the taskbar
+// entry lives in the panel, which IS captured, so leaving it visible would
+// reveal cue during a screen share even though its window is hidden.
 function buildRule(windowClass) {
   return {
     Description: RULE_DESC,
@@ -33,7 +36,13 @@ function buildRule(windowClass) {
     wmclassmatch: '1',
     wmclasscomplete: 'false',
     excludefromcapture: 'true',
-    excludefromcapturerule: '2'
+    excludefromcapturerule: '2',
+    skiptaskbar: 'true',
+    skiptaskbarrule: '2',
+    skippager: 'true',
+    skippagerrule: '2',
+    skipswitcher: 'true',
+    skipswitcherrule: '2'
   };
 }
 
