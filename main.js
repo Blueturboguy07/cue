@@ -190,7 +190,10 @@ function createWindow() {
 
   if (savedSettings.windowX !== null && savedSettings.windowY !== null) {
     const clampedX = Math.max(workArea.x - W + 100, Math.min(savedSettings.windowX, workArea.x + workArea.width - 100));
-    const clampedY = Math.max(workArea.y, Math.min(savedSettings.windowY, workArea.y + workArea.height - 40));
+    // Keep the whole window on screen, not just a 40px sliver of it. The old
+    // `- 40` let a 600px-tall window sit at y=607 on a 960px display, pushing
+    // the composer and action row off the bottom edge with no way to reach them.
+    const clampedY = Math.max(workArea.y, Math.min(savedSettings.windowY, workArea.y + workArea.height - H));
     startX = clampedX;
     startY = clampedY;
   }
