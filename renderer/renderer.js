@@ -1089,9 +1089,17 @@
     aiEl.appendChild(caretEl);
     group.appendChild(aiEl);
     messages.appendChild(group);
-    // Use requestAnimationFrame so the DOM is fully updated before scrolling
+    // Use requestAnimationFrame so the DOM is fully updated before scrolling.
+    // Scroll #messages directly rather than calling sep.scrollIntoView(): that
+    // scrolls *every* scrollable ancestor, and once the panel is tall enough it
+    // scrolls the document too, aligning the separator to the top of the window
+    // and pushing #toolbar out of view. html/body are overflow:hidden, so there
+    // is no scrollbar or wheel gesture to undo it — the Stop/Hide/Quit controls
+    // just never come back.
     requestAnimationFrame(() => {
-      if (sep && sep.isConnected) sep.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (sep && sep.isConnected) {
+        messages.scrollTo({ top: sep.offsetTop - messages.offsetTop, behavior: 'smooth' });
+      }
     });
     setBusy(true);
   });
@@ -1592,6 +1600,13 @@
     if (e.key === 'Escape' && !scrim.classList.contains('hidden')) closeSettings();
     if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); }
   });
+
+  // Safety net for the same class of bug: html/body are overflow:hidden, so any
+  // stray programmatic scroll of the document is invisible to the user and
+  // unrecoverable by mouse. Snap it back so the toolbar cannot be stranded.
+  window.addEventListener('scroll', () => {
+    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+  }, { passive: true });
 
   // ---- click-through: only the UI blocks the mouse; empty gaps pass to your screen ----
   let ignoring = null;
