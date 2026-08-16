@@ -190,7 +190,7 @@ test('formatProviderErrorMessage: maps a Gemini 429 to a free-tier quota message
     status: 429,
     body: { error: { message: 'You exceeded your current quota', code: 429, status: 'RESOURCE_EXHAUSTED' } }
   });
-  const message = formatProviderErrorMessage(error, 'gemini', 'gemini-2.5-flash');
+  const message = formatProviderErrorMessage(error, 'gemini', 'gemini-3.6-flash');
   assert.match(message, /Gemini free-tier quota exhausted \(429/);
   assert.match(message, /billing/);
   assert.doesNotMatch(message, /RESOURCE_EXHAUSTED/);
@@ -255,7 +255,7 @@ test('createLLM: falls back to CURRENT_GEMINI_DEFAULT when no model is configure
 
 test('createLLM: a fresh install (store.js DEFAULTS shape) resolves to the current default', () => {
   const llm = createLLM(geminiSettings({
-    models: { gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-flash' } }
+    models: { gemini: { fast: 'gemini-3.6-flash', smart: 'gemini-3.6-flash' } }
   }));
   assert.equal(llm.model, CURRENT_GEMINI_DEFAULT);
 });
@@ -280,4 +280,11 @@ test('createLLM: leaves a user-chosen current Gemini model alone', () => {
     models: { gemini: { fast: 'gemini-3.5-flash', smart: 'gemini-3.5-flash' } }
   }));
   assert.equal(llm.model, 'gemini-3.5-flash');
+});
+
+test('createLLM: self-heals gemini-2.5-* , which Google closed to new API keys', () => {
+  const llm = createLLM(geminiSettings({
+    models: { gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-flash-lite' } }
+  }));
+  assert.equal(llm.model, CURRENT_GEMINI_DEFAULT);
 });

@@ -6,7 +6,7 @@
 
 const { looksLikeHallucination } = require('./stt');
 const { pcmToWav } = require('./wav');
-const { CURRENT_GEMINI_DEFAULT } = require('./llm');
+const { resolveGeminiModel } = require('./llm');
 
 // ============================================================================
 // OpenAI Realtime Transcription Session (WebSocket)
@@ -385,11 +385,11 @@ async function transcribeBatchOpenAI(apiKey, wav, model) {
   return (typeof res === 'string' ? res : res.text || '').trim();
 }
 
-async function transcribeBatchGemini(apiKey, wav) {
+async function transcribeBatchGemini(apiKey, wav, model) {
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
   const res = await ai.models.generateContent({
-    model: CURRENT_GEMINI_DEFAULT,
+    model: model || resolveGeminiModel(),
     contents: [{ role: 'user', parts: [
       { text: 'Transcribe this audio verbatim. Return only the spoken words with no commentary. If there is no clear speech, return an empty response.' },
       { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }
