@@ -2,7 +2,7 @@
 // no audio API — we transcribe with whatever audio-capable key is available, and
 // fall back across providers. Returns { text, provider } or { text:'', error }.
 const { pcmToWav } = require('./wav');
-const { formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT } = require('./llm');
+const { formatProviderErrorMessage, isQuotaError, resolveGeminiModel } = require('./llm');
 
 const BASE_VOCAB = 'CI/CD, Docker, Kubernetes, Terraform, Jenkins, AWS, Azure, GCP, ' +
   'CodeCommit, CodePipeline, CodeBuild, CodeDeploy, DevOps, SRE, microservices, deployment, ' +
@@ -45,11 +45,11 @@ async function transcribeOpenAI(apiKey, wav, model, baseURL, prompt) {
   return (res.text || '').trim();
 }
 
-async function transcribeGemini(apiKey, wav) {
+async function transcribeGemini(apiKey, wav, model) {
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
   const res = await ai.models.generateContent({
-    model: CURRENT_GEMINI_DEFAULT,
+    model,
     contents: [{ role: 'user', parts: [
       { text: 'Transcribe this audio verbatim. Return only the spoken words with no commentary. If there is no clear speech, return an empty response.' },
       { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }
@@ -63,14 +63,19 @@ function createSTT(settings) {
   const selectedProvider = settings.sttProvider || 'auto';
   const vocabPrompt = buildVocabPrompt(settings);
   const chain = [];
+  // Each entry carries the model id it actually sends, so a failure can name
+  // that id back to the user instead of a hardcoded one they never picked.
   if ((selectedProvider === 'auto' || selectedProvider === 'openai') && keys.openai) {
-    chain.push({ p: 'openai', fn: (wav) => transcribeOpenAI(keys.openai, wav, settings.sttModel, undefined, vocabPrompt) });
+    const model = settings.sttModel || 'whisper-1';
+    chain.push({ p: 'openai', m: model, fn: (wav) => transcribeOpenAI(keys.openai, wav, model, undefined, vocabPrompt) });
   }
   if ((selectedProvider === 'auto' || selectedProvider === 'groq') && keys.groq) {
-    chain.push({ p: 'groq', fn: (wav) => transcribeOpenAI(keys.groq, wav, 'whisper-large-v3-turbo', 'https://api.groq.com/openai/v1', vocabPrompt) });
+    const model = 'whisper-large-v3-turbo';
+    chain.push({ p: 'groq', m: model, fn: (wav) => transcribeOpenAI(keys.groq, wav, model, 'https://api.groq.com/openai/v1', vocabPrompt) });
   }
   if ((selectedProvider === 'auto' || selectedProvider === 'gemini') && keys.gemini) {
-    chain.push({ p: 'gemini', fn: (wav) => transcribeGemini(keys.gemini, wav) });
+    const model = resolveGeminiModel(settings);
+    chain.push({ p: 'gemini', m: model, fn: (wav) => transcribeGemini(keys.gemini, wav, model) });
   }
   if (keys.openai && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'openai'), 1)[0]);
 
@@ -80,6 +85,7 @@ function createSTT(settings) {
   return {
     available: chain.length > 0,
     providers: chain.map((c) => c.p),
+    models: chain.map((c) => c.m),
     async transcribe(pcm) {
       if (!chain.length || !pcm || pcm.length < 3200) return { text: '' };
       const now = Date.now();
@@ -98,8 +104,8 @@ function createSTT(settings) {
           // 404 (dead/misspelled model) or 429 (quota) reads the same whether it
           // came from a chat request or a transcription request.
           const quota = isQuotaError(e);
-          const message = formatProviderErrorMessage(e, c.p);
-          lastErr = { status: e && e.status, code: e && e.code, message, provider: c.p };
+          const message = formatProviderErrorMessage(e, c.p, c.m);
+          lastErr = { status: e && e.status, code: e && e.code, message, provider: c.p, model: c.m };
           if (quota) {
             lastProvider = c.p;
             disabledUntil = now + 30000;

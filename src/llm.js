@@ -5,11 +5,13 @@ const { createCompatibleClientOptions } = require('./openai-compatible');
 
 const CUSTOM_PROVIDER = 'custom';
 // gemini-2.0-flash was Google's default here until it was deprecated (Feb 2026)
-// and fully retired (Mar 3 2026) — every request against it now 404s with a
-// generic "exception parsing response" body. gemini-2.5-flash is the model
-// Google's own SDK examples standardize on and is documented as free-tier
-// available, so it is the single default used everywhere in this file.
-const CURRENT_GEMINI_DEFAULT = 'gemini-2.5-flash';
+// and fully retired (Mar 3 2026). Its replacement, gemini-2.5-flash, has since
+// been closed to new API keys — Google answers those requests with
+// "This model models/gemini-2.5-flash is no longer available to new users",
+// a 404 that reads as a dead model to anyone who signed up recently. Google
+// names gemini-3.6-flash as 2.5-flash's successor, so that is the single
+// default used everywhere in this file.
+const CURRENT_GEMINI_DEFAULT = 'gemini-3.6-flash';
 const DEFAULT_MODELS = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-5-haiku-latest',
@@ -20,11 +22,26 @@ const DEFAULT_MODELS = {
   azure: 'gpt-4o-mini'
 };
 
-// Gemini model ids that Google has since deprecated/retired. A settings file
-// saved before this fix can still have one of these persisted on disk, so
-// createLLM migrates them at read time rather than only fixing the default —
-// otherwise an existing user would keep re-hitting the same 404 forever.
-const DEAD_GEMINI_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0)(?:-|$)/i;
+// Gemini model ids that Google has since deprecated/retired/closed to new keys.
+// A settings file saved before this fix can still have one of these persisted
+// on disk, so resolveGeminiModel migrates them at read time rather than only
+// fixing the default — otherwise an existing user would keep re-hitting the
+// same 404 forever.
+const DEAD_GEMINI_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0|2\.5)(?:-|$)/i;
+
+// Single place that answers "which Gemini model should this request use?".
+// Both the chat path (createLLM) and the transcription paths (src/stt.js,
+// src/stt-streaming.js) go through here. STT used to skip this and hardcode
+// the default instead, so a user who picked a working model in Settings still
+// got 404s from a model they had never selected — the app reported a failure
+// against a model id that appeared nowhere in their config.
+function resolveGeminiModel(settings) {
+  const s = settings || {};
+  const tier = s.smart ? 'smart' : 'fast';
+  const configured = ((s.models || {}).gemini || {})[tier];
+  if (!configured || DEAD_GEMINI_MODEL_RE.test(configured)) return CURRENT_GEMINI_DEFAULT;
+  return configured;
+}
 
 const PROVIDER_LABELS = { azure: 'Azure AI Foundry', openai: 'OpenAI', minimax: 'MiniMax' };
 
@@ -301,8 +318,8 @@ function createLLM(settings) {
   const tier = settings.smart ? 'smart' : 'fast';
   const models = settings.models || {};
   let model = (models[provider] || {})[tier];
-  if (provider === 'gemini' && DEAD_GEMINI_MODEL_RE.test(model || '')) {
-    model = CURRENT_GEMINI_DEFAULT;
+  if (provider === 'gemini') {
+    model = resolveGeminiModel(settings);
   }
   if (!model) model = DEFAULT_MODELS[provider] || '';
   const minimaxRegion = settings.minimaxRegion || 'global_en';
@@ -356,4 +373,4 @@ function createLLM(settings) {
   };
 }
 
-module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, CURRENT_GEMINI_DEFAULT };
+module.exports = { createLLM, formatProviderErrorMessage, isQuotaError, resolveGeminiModel, CURRENT_GEMINI_DEFAULT };
