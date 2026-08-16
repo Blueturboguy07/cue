@@ -53,6 +53,10 @@ html, body {
   pointer-events: none;                  /* only the actual UI blocks; gaps pass through */
 }
 #toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
+/* #app is a flex column: without this the toolbar is a shrinkable flex item, so
+   a tall panel (long transcript, long response) squeezes the Stop/Hide/Quit
+   controls down to nothing and leaves no way to stop listening. */
+#toolbar { flex-shrink: 0; }
 #toolbar { -webkit-app-region: drag; }   /* drag the top pill to move the window */
 #panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary { -webkit-app-region: no-drag; }
 
