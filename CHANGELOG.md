@@ -30,6 +30,12 @@ All notable technical updates, fixes, and architecture iterations are documented
    * Transferred repository from `/Users/milan/cue` to `/Users/milan/Projects/cue`.
 8. **Gemini 429 & 503 Auto-Retry & Backoff:**
    * Added exponential backoff retry and automatic model fallback in `src/llm.js` so transient 429 rate limits and 503 high demand spikes self-heal transparently without throwing modal errors.
+9. **Settings Modal UI & Layout Redesign:**
+   * Replaced non-wrapping flex row for provider selection with a 4-column responsive grid (2 rows of 4 clean chips).
+   * Eliminated ugly native white horizontal and vertical scrollbars using custom thin dark-mode scrollbars and hidden overflow on the tab bar.
+   * Redesigned the tab bar as a segmented macOS glass pill track with concise tab labels (`🔑 Keys`, `🎙️ Audio`, `📄 Profile`, `🎯 Prep`, `✨ Style`, `💬 Q&A`).
+   * Aligned all form fields and inputs in uniform 2-column grids with consistent padding, borders, and accent focus rings.
+   * Enhanced macOS glassmorphism depth with 40px backdrop blur, subtle 1px border highlight, and 18px border radius.
 
 ---
 
