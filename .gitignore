@@ -29,3 +29,12 @@ test-resume.js
 
 # Electron dist cache
 node_modules/electron/dist/electron.exe.bak
+
+# Local Agent & Developer Notes
+.cursorrules
+AGENTS.md
+CONTEXT.md
+ARCHITECTURE.md
+CHANGELOG.md
+DEVELOPMENT.md
+

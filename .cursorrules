@@ -1,9 +1,0 @@
-# Cue Project Agent Rules
-
-- Primary project location: /Users/milan/Projects/cue
-- Standalone app: /Applications/cue.app
-- Code Signing: Always sign /Applications/cue.app with identity "Apple Development: milantiwari2003@gmail.com (9KYMR669PW)"
-- Always update CHANGELOG.md upon making iterations.
-- Run `npm test` to ensure all 130 tests pass.
-- Active Gemini model: gemini-3.5-flash
-- Local Whisper runtime: whisper.cpp v1.9.1 (Metal GPU, darwin-arm64)
