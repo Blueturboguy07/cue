@@ -130,7 +130,7 @@ const MODES = {
 
   // ── Ask: free-form question ────────────────────────────────────────────────
   ask: {
-    needsScreen: true,
+    needsScreen: false,
     userBubble: null,
     small: false,
     resumeMode: 'ask',

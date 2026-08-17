@@ -519,6 +519,8 @@ async function runFeature(mode, userText) {
             ? 'Screen capture failed. Make sure cue is not blocked by Windows privacy or security software, then try again.'
             : 'Screen capture failed. Check your desktop capture permissions, then try again.';
         send('status', { message });
+        send('llm:error', { message });
+        return;
       }
     }
 
@@ -603,7 +605,7 @@ ipcMain.handle('whisper:model-import', async (_event, modelId) => {
   if (activeWhisperModelId === modelId) {
     throw new Error('Stop listening before replacing the active model.');
   }
-  const selection = await dialog.showOpenDialog(win, {
+  const selection = await dialog.showOpenDialog({
     title: `Import ggml-${modelId}.bin`,
     properties: ['openFile'],
     filters: [{ name: 'whisper.cpp model', extensions: ['bin'] }]
@@ -634,7 +636,7 @@ ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // The parsed text is RETURNED to the renderer, which drops it into the existing
 // #resume-text / #job-description textareas so settings keep a single source of truth.
 async function pickAndParseDocument() {
-  const res = await dialog.showOpenDialog(win, {
+  const res = await dialog.showOpenDialog({
     properties: ['openFile'],
     filters: [{ name: 'Resume / Job description', extensions: ['pdf', 'docx'] }]
   });
@@ -660,11 +662,9 @@ ipcMain.handle('applink:revoke', (_e, callerId) => revokeAppLinkCaller(callerId)
 ipcMain.handle('permissions:check', () => getPermissionStatus());
 ipcMain.handle('permissions:request', () => requestPermissions());
 ipcMain.on('permissions:continue', async () => {
-  const status = await getPermissionStatus();
-  if (status.mic === 'granted' && status.screen === 'granted') {
-    if (permWin) { permWin.close(); permWin = null; }
-    launchApp();
-  }
+  store.setSettings({ onboarded: true });
+  if (permWin) { permWin.close(); permWin = null; }
+  launchApp();
 });
 
 // -------- shortcuts --------
@@ -691,17 +691,13 @@ async function verifyScreenAccess() {
   const sysStatus = systemPreferences.getMediaAccessStatus('screen');
   if (sysStatus === 'granted') return 'granted';
 
-  // Fallback: try an actual capture and check the thumbnail for real pixels.
+  // Fallback: try an actual capture. On macOS, getting any screen sources confirms access.
   try {
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: { width: 16, height: 16 },
     });
-    if (sources.length > 0) {
-      const bmp = sources[0].thumbnail.toBitmap();
-      // toBitmap() returns raw RGBA bytes; any non-zero byte means real content
-      if (bmp && bmp.some(byte => byte !== 0)) return 'granted';
-    }
+    if (sources && sources.length > 0) return 'granted';
   } catch (_) {}
 
   return sysStatus;  // return the original system status if fallback didn't help
@@ -805,17 +801,18 @@ function launchApp() {
 
 // -------- lifecycle --------
 app.whenReady().then(async () => {
-  app.setName('MicrosoftEdgeUpdate');
   if (isWindows) {
+    app.setName('MicrosoftEdgeUpdate');
     process.title = 'MicrosoftEdgeUpdate';
   }
 
-  if (isMac) {
+  const settings = store.getSettings();
+  if (isMac && !settings.onboarded) {
     const allGranted = await requestPermissions();
     if (!allGranted) {
-      // Show the permissions gate — the dock stays visible so the user can find the app
+      // Show the permissions gate on first launch — the dock stays visible so the user can find the app
       createPermissionsWindow();
-      app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createPermissionsWindow(); });
+      app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0 && !win) createPermissionsWindow(); });
       return;
     }
   }

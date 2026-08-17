@@ -9,7 +9,7 @@ const CUSTOM_PROVIDER = 'custom';
 // generic "exception parsing response" body. gemini-2.5-flash is the model
 // Google's own SDK examples standardize on and is documented as free-tier
 // available, so it is the single default used everywhere in this file.
-const CURRENT_GEMINI_DEFAULT = 'gemini-2.5-flash';
+const CURRENT_GEMINI_DEFAULT = 'gemini-3.5-flash';
 const DEFAULT_MODELS = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-5-haiku-latest',
@@ -24,7 +24,7 @@ const DEFAULT_MODELS = {
 // saved before this fix can still have one of these persisted on disk, so
 // createLLM migrates them at read time rather than only fixing the default —
 // otherwise an existing user would keep re-hitting the same 404 forever.
-const DEAD_GEMINI_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0)(?:-|$)/i;
+const DEAD_GEMINI_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0|2\.5)(?:-|$)/i;
 
 const PROVIDER_LABELS = { azure: 'Azure AI Foundry', openai: 'OpenAI', minimax: 'MiniMax' };
 
