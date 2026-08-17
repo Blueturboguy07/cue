@@ -209,6 +209,9 @@ async function getWhisperOverview() {
 
 // -------- window --------
 const OVERLAY_W = 700, OVERLAY_H = 600;
+// The fitted (Linux) window may grow past the default canvas when the user
+// resizes the panel in resize mode; cap it at the panel's own max + margins.
+const FIT_MAX_W = 1140, FIT_MAX_H = 960;
 // Where the fitted UI box currently sits inside the full overlay canvas (Linux fit).
 let fitOffset = { x: 0, y: 0 };
 function createWindow() {
@@ -745,8 +748,8 @@ ipcMain.on('window:fit', (_e, box) => {
     }
     return;
   }
-  const w = Math.max(64, Math.min(Math.round(box.width), OVERLAY_W));
-  const h = Math.max(48, Math.min(Math.round(box.height), OVERLAY_H));
+  const w = Math.max(64, Math.min(Math.round(box.width), FIT_MAX_W));
+  const h = Math.max(48, Math.min(Math.round(box.height), FIT_MAX_H));
   const offX = Math.max(0, Math.round(box.left));
   const offY = Math.max(0, Math.round(box.top));
   if (w === curW && h === curH && offX === fitOffset.x && offY === fitOffset.y) return;

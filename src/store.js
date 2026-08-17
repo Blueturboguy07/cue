@@ -51,6 +51,9 @@ const DEFAULTS = {
   // Window position
   windowX: null,
   windowY: null,
+  // User-chosen panel size from resize mode (null = designed default).
+  panelWidth: null,
+  panelHeight: null,
   // No pre-filled model ids — you pick current models yourself (Fast / Smart /
   // Image) per provider. Nothing is assumed, so nothing goes stale.
   models: {

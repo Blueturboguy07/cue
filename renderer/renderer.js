@@ -648,6 +648,67 @@
   // shortcut is unreliable, leaving no way to quit from the UI.
   $('#quit-btn').addEventListener('click', () => cue.quit());
 
+  // ---- resize mode ---------------------------------------------------------
+  // A toolbar toggle. Off (default): the panel cannot be resized and there are
+  // no resize cursors anywhere. On: a corner grip appears on the panel and ONLY
+  // there the cursor becomes a resize arrow; drag it to reshape the panel within
+  // sane bounds. The window keeps hugging the panel (fit-to-content), so
+  // resizing never creates dead click zones. The chosen size persists.
+  const resizeBtn = $('#resize-btn');
+  const grip = $('#resize-grip');
+  const panelWrap = $('#panel-wrap');
+  const PANEL_MIN_W = 360, PANEL_MAX_W = 1100, PANEL_MIN_H = 160, PANEL_MAX_H = 900;
+  let resizeMode = false;
+  resizeBtn.innerHTML = icon('resize', { size: 15 });
+  function applyPanelSize(w, h) {
+    if (!panelWrap) return;
+    if (w) panelWrap.style.width = Math.round(w) + 'px';
+    // Height governs the scrollable messages area so the panel doesn't just
+    // grow with content past what the user chose.
+    const msgs = $('#messages');
+    if (h && msgs) msgs.style.maxHeight = Math.max(80, Math.round(h) - 220) + 'px';
+  }
+  function setResizeMode(on) {
+    resizeMode = !!on;
+    document.body.classList.toggle('resize-mode', resizeMode);
+    resizeBtn.classList.toggle('on', resizeMode);
+    resizeBtn.title = resizeMode
+      ? 'Resize mode ON — drag the corner grip to reshape, click to lock'
+      : 'Resize mode — click to reshape the panel, click again to lock';
+  }
+  resizeBtn.addEventListener('click', () => setResizeMode(!resizeMode));
+  if (grip && panelWrap) {
+    let rs = null;
+    grip.addEventListener('mousedown', (e) => {
+      if (!resizeMode || e.button !== 0) return;
+      e.preventDefault(); e.stopPropagation();
+      const r = panelWrap.getBoundingClientRect();
+      rs = { sx: e.screenX, sy: e.screenY, w: r.width, h: r.height };
+      document.body.classList.add('resizing');
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!rs) return;
+      const w = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, rs.w + (e.screenX - rs.sx)));
+      const h = Math.min(PANEL_MAX_H, Math.max(PANEL_MIN_H, rs.h + (e.screenY - rs.sy)));
+      applyPanelSize(w, h);
+    });
+    const endResize = async () => {
+      if (!rs) return;
+      rs = null;
+      document.body.classList.remove('resizing');
+      const r = panelWrap.getBoundingClientRect();
+      settings.panelWidth = Math.round(r.width);
+      settings.panelHeight = Math.round(r.height);
+      try { await cue.settingsSet({ panelWidth: settings.panelWidth, panelHeight: settings.panelHeight }); } catch (_) {}
+    };
+    window.addEventListener('mouseup', endResize);
+    window.addEventListener('blur', endResize);
+  }
+  // Restore a previously chosen size once settings load (see boot).
+  function restorePanelSize() {
+    if (settings && (settings.panelWidth || settings.panelHeight)) applyPanelSize(settings.panelWidth, settings.panelHeight);
+  }
+
   // Custom window drag on the "Drag" pill — the renderer moves the window itself
   // (no -webkit-app-region), so the cursor never flips to the WM's move/hand
   // cursor on mousedown or during the drag; it stays the default arrow.
@@ -2052,6 +2113,7 @@
     }
 
     updateModePill();
+    restorePanelSize();
     showExample();
     syncPlaceholder();
     updateHistoryBadge(); // FIX #3: Initialize badge on boot
