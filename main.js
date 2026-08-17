@@ -237,7 +237,11 @@ function createWindow() {
     frame: false,
     transparent: true,
     hasShadow: false,
-    resizable: true,
+    // Not WM-resizable: a resizable frameless window makes the window manager
+    // show double-arrow resize cursors at its edges (even when cue's own resize
+    // mode is off) and intercept drags there. cue resizes itself via its own
+    // in-panel grip instead (setContentSize), which needs no WM handles.
+    resizable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
     fullscreenable: false,
