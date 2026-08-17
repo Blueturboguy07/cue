@@ -209,6 +209,8 @@ async function getWhisperOverview() {
 
 // -------- window --------
 const OVERLAY_W = 700, OVERLAY_H = 600;
+// Where the fitted UI box currently sits inside the full overlay canvas (Linux fit).
+let fitOffset = { x: 0, y: 0 };
 function createWindow() {
   const { workArea } = screen.getPrimaryDisplay();
   const W = OVERLAY_W, H = OVERLAY_H;
@@ -727,11 +729,34 @@ ipcMain.handle('window:get-pos', () => (win && !win.isDestroyed() ? win.getPosit
 ipcMain.on('window:move-to', (_e, { x, y }) => {
   if (win && !win.isDestroyed()) win.setPosition(Math.round(x), Math.round(y));
 });
-ipcMain.on('window:fit', (_e, h) => {
+ipcMain.on('window:fit', (_e, box) => {
   if (!isLinux || !win || win.isDestroyed()) return;
-  const target = h < 0 ? OVERLAY_H : Math.max(64, Math.min(Math.round(h), OVERLAY_H));
-  const [w, current] = win.getContentSize();
-  if (current !== target) win.setContentSize(w, target);
+  const [curW, curH] = win.getContentSize();
+  const [curX, curY] = win.getPosition();
+  if (!box) {
+    // A modal is open: give it the full overlay canvas, anchored where the
+    // fitted window's top-left was (renderer content origin is the same).
+    if (curW !== OVERLAY_W || curH !== OVERLAY_H) {
+      win.setContentSize(OVERLAY_W, OVERLAY_H);
+      // keep the UI's screen position: the fitted box sat at (offX, offY) inside
+      // the full canvas, so move the window back by that offset.
+      win.setPosition(Math.round(curX - fitOffset.x), Math.round(curY - fitOffset.y));
+      fitOffset = { x: 0, y: 0 };
+    }
+    return;
+  }
+  const w = Math.max(64, Math.min(Math.round(box.width), OVERLAY_W));
+  const h = Math.max(48, Math.min(Math.round(box.height), OVERLAY_H));
+  const offX = Math.max(0, Math.round(box.left));
+  const offY = Math.max(0, Math.round(box.top));
+  if (w === curW && h === curH && offX === fitOffset.x && offY === fitOffset.y) return;
+  // The window's top-left must move by the change in the UI's in-window offset
+  // so the UI stays exactly where it was on screen while the window shrinks
+  // around it (renderer content is laid out from the window's origin).
+  const dx = offX - fitOffset.x, dy = offY - fitOffset.y;
+  win.setContentSize(w, h);
+  win.setPosition(Math.round(curX + dx), Math.round(curY + dy));
+  fitOffset = { x: offX, y: offY };
 });
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
 ipcMain.on('app:quit', () => app.quit());

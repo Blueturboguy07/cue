@@ -1835,25 +1835,41 @@
     // ignored window gets no mouse events, and cursor polling goes stale under
     // Wayland. Instead the window stays interactive and is resized to hug the
     // visible UI, so the empty gaps aren't part of the window in the first place.
+    // Measure the exact bounding box of the visible UI (left/right/top/bottom),
+    // not just the height. Previously only the height was fitted while the window
+    // stayed at its full 700px width and kept the top/bottom padding — leaving
+    // invisible dead strips beside and below the panel that swallowed clicks and
+    // felt like an "imaginary boundary". Now the window shrinks to the UI's true
+    // box in BOTH dimensions.
     const measureFit = () => {
       const scrimOpen = ['#settings-scrim', '#onboard-scrim', '#consent-scrim'].some((s) => {
         const el = $(s);
         return el && !el.classList.contains('hidden');
       });
-      if (scrimOpen) return -1; // full overlay height while a modal is up
-      let bottom = 0;
-      ['#toolbar', '#panel-wrap', '#transcript-sidebar'].forEach((sel) => {
+      if (scrimOpen) return null; // full overlay while a modal is up
+      let left = Infinity, top = Infinity, right = 0, bottom = 0;
+      ['#toolbar', '#panel-wrap', '#transcript-sidebar', '#toast'].forEach((sel) => {
         const el = $(sel);
         if (!el || el.classList.contains('hidden')) return;
+        if (sel === '#toast' && !el.classList.contains('show')) return;
         const r = el.getBoundingClientRect();
-        if (r.height > 0) bottom = Math.max(bottom, r.bottom);
+        if (r.width <= 0 || r.height <= 0) return;
+        left = Math.min(left, r.left); top = Math.min(top, r.top);
+        right = Math.max(right, r.right); bottom = Math.max(bottom, r.bottom);
       });
-      return Math.ceil(bottom) + 24; // room for the panel shadow and toast
+      if (!isFinite(left)) return null;
+      // Small margin for the panel's soft shadow so it isn't hard-clipped.
+      const PAD = 8;
+      return {
+        left: Math.floor(left) - PAD, top: Math.floor(top) - PAD,
+        width: Math.ceil(right - left) + PAD * 2, height: Math.ceil(bottom - top) + PAD * 2
+      };
     };
-    let lastFit = 0;
+    let lastFit = '';
     const pushFit = () => {
-      const h = measureFit();
-      if (h !== lastFit) { lastFit = h; cue.fitWindow(h); }
+      const box = measureFit();
+      const key = box ? [box.left, box.top, box.width, box.height].join(',') : 'full';
+      if (key !== lastFit) { lastFit = key; cue.fitWindow(box); }
     };
     // Event-driven instead of polling: a ResizeObserver on the content elements
     // fires exactly when the visible UI grows/shrinks (messages, collapse, the

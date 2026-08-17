@@ -876,6 +876,12 @@ button:focus { outline: none; }
    their 700x600 equivalents. */
 body.on-linux #messages { max-height: 300px; }
 body.on-linux #settings { max-height: 528px; }
+/* Fixed panel width on Linux: the window is fitted to the UI's box, so any
+   viewport-relative width (94vw) would feed back into the fit and shrink the
+   panel each round. Pin it to its designed 624px. Sidebar-open narrows it to a
+   fixed 420px the same way. */
+body.on-linux #panel-wrap { width: 624px; }
+body.on-linux #panel-wrap.sidebar-open { width: 420px; }
 
 /* Keys tab: one provider's fields at a time (renderer toggles .hidden) */
 .prov-group { display: flex; flex-direction: column; gap: 8px; }
