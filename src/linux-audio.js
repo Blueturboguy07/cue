@@ -69,10 +69,15 @@ async function startThemCapture(preferredName, onData, onStatus) {
     return false;
   }
   if (generation !== myGeneration) return false; // final check before spawning
+  // Passive tap on the monitor: a comfortable 200ms latency so parec never
+  // competes with playback for tight buffers, and role=music-capture-less
+  // metadata isn't needed — a monitor read is read-only by construction and
+  // cannot mute, duck, or reroute the streams it mirrors.
   const child = spawn('parec', [
     '--device=' + source.name,
     '--format=s16le', '--rate=16000', '--channels=1',
-    '--latency-msec=60'
+    '--latency-msec=200',
+    '--property=media.role=production'
   ], { stdio: ['ignore', 'pipe', 'ignore'] });
   proc = child;
   child.stdout.on('data', (chunk) => { if (proc === child) onData(chunk); });

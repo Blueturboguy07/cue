@@ -715,9 +715,14 @@
     micStarting = true;
     try {
       const audio = {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+        // Linux: passive capture only. echoCancellation makes the audio server
+        // reroute/duck OTHER streams to reference them — exactly the "listening
+        // interferes with my playback" effect. cue must never touch anything but
+        // its own mic input, so keep all voice processing off there. mac/win keep
+        // their previous behaviour.
+        echoCancellation: !isLinux,
+        noiseSuppression: !isLinux,
+        autoGainControl: !isLinux,
         channelCount: 1,
         sampleRate: 16000
       };
