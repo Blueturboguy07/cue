@@ -215,9 +215,31 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
     }
     return { role: t.role === 'assistant' ? 'model' : 'user', parts };
   });
-  const stream = await ai.models.generateContentStream({
-    model, contents, config: { systemInstruction: system, maxOutputTokens: maxTokens }
-  });
+
+  const makeStreamCall = async (targetModel) => {
+    return await ai.models.generateContentStream({
+      model: targetModel, contents, config: { systemInstruction: system, maxOutputTokens: maxTokens }
+    });
+  };
+
+  let stream;
+  try {
+    stream = await makeStreamCall(model);
+  } catch (err) {
+    const isRateOrDemand = /429|RESOURCE_EXHAUSTED|503|UNAVAILABLE|high demand/i.test(err && (err.message || String(err)));
+    if (isRateOrDemand) {
+      // Short backoff delay (1.2s) then retry
+      await new Promise((r) => setTimeout(r, 1200));
+      try {
+        stream = await makeStreamCall(model);
+      } catch (retryErr) {
+        stream = await makeStreamCall(CURRENT_GEMINI_DEFAULT);
+      }
+    } else {
+      throw err;
+    }
+  }
+
   let full = '';
   for await (const chunk of stream) {
     const t = chunk && chunk.text;

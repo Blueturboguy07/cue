@@ -28,6 +28,8 @@ All notable technical updates, fixes, and architecture iterations are documented
    * Fixed non-responsive "Import PDF/DOCX" buttons in Profile settings.
 7. **Workspace Migration:**
    * Transferred repository from `/Users/milan/cue` to `/Users/milan/Projects/cue`.
+8. **Gemini 429 & 503 Auto-Retry & Backoff:**
+   * Added exponential backoff retry and automatic model fallback in `src/llm.js` so transient 429 rate limits and 503 high demand spikes self-heal transparently without throwing modal errors.
 
 ---
 
