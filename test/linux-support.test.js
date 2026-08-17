@@ -3,7 +3,7 @@ const test = require('node:test');
 
 const builder = require('../electron-builder.cjs');
 const pkg = require('../package.json');
-const { parseSourcesShort, pickMonitorSource } = require('../src/linux-audio');
+const { parseSourcesShort, pickMonitorSource, pickNonBluetoothMic } = require('../src/linux-audio');
 const kwin = require('../src/kwin-capture');
 const hypr = require('../src/hypr-capture');
 
@@ -79,4 +79,17 @@ test('hypr-capture builds a noscreenshare rule and gates on 0.50', () => {
   assert.equal(hypr.versionMeetsFloor(hypr.parseVersion('v1.0.0')), true);
   assert.equal(hypr.versionMeetsFloor(null), false);
   assert.equal(hypr.parseVersion('no version'), null);
+});
+
+test('pickNonBluetoothMic avoids flipping a Bluetooth headset to HFP', () => {
+  const bt = { id: '1', name: 'bluez_input.88:0E:85:66:81:97', monitor: false };
+  const wired = { id: '2', name: 'alsa_input.pci-0000_00_1f.3.analog-stereo', monitor: false };
+  const mon = { id: '3', name: 'alsa_output.foo.monitor', monitor: true };
+  // default is the BT headset -> use the wired mic instead
+  assert.equal(pickNonBluetoothMic([bt, wired, mon], bt.name), wired.name);
+  // default is already wired -> nothing to change
+  assert.equal(pickNonBluetoothMic([bt, wired], wired.name), null);
+  // BT default but no wired mic exists -> null (renderer keeps the default)
+  assert.equal(pickNonBluetoothMic([bt, mon], bt.name), null);
+  assert.equal(pickNonBluetoothMic([], ''), null);
 });

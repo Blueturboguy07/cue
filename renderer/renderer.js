@@ -714,15 +714,30 @@
     if (micStream || micStarting) return;
     micStarting = true;
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 16000
-        }
-      });
+      const audio = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+        sampleRate: 16000
+      };
+      // Linux: if the default mic is a Bluetooth headset, opening it flips the
+      // headset from A2DP (music) to HFP (mono phone codec) and wrecks whatever
+      // the user is listening to. Prefer a wired/built-in mic and leave the
+      // headset alone so playback keeps going untouched.
+      if (isLinux) {
+        try {
+          const advice = await cue.linuxMicAdvice();
+          if (advice && advice.sourceName) {
+            const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+            const want = (advice.description || '').toLowerCase();
+            const match = devs.find((d) => want && d.label && d.label.toLowerCase().includes(want))
+              || devs.find((d) => d.label && !/bluetooth|bluez|headset/i.test(d.label) && !/default|communications/i.test(d.label));
+            if (match) { audio.deviceId = { exact: match.deviceId }; cue.log('mic: using ' + match.label + ' (keeping Bluetooth headset in music mode)'); }
+          }
+        } catch (_) { /* fall back to the default mic */ }
+      }
+      micStream = await navigator.mediaDevices.getUserMedia({ audio });
       // getUserMedia can resolve with a stream that has no usable audio track
       // (e.g. a virtual/placeholder device, or a device that was unplugged
       // between permission grant and capture start). Fail loudly here instead

@@ -695,6 +695,7 @@ ipcMain.handle('whisper:model-import', async (_event, modelId) => {
   return result;
 });
 ipcMain.handle('linux-audio:sources', () => (isLinux ? linuxAudio.listSources() : { sources: [], defaultSink: '' }));
+ipcMain.handle('linux-audio:mic-advice', () => (isLinux ? linuxAudio.micAdvice() : { sourceName: null, reason: 'not-linux' }));
 ipcMain.handle('platform:info', () => ({
   platform: process.platform,
   winBuild: WIN_BUILD,

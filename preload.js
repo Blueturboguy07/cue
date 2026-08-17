@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('cue', {
   whisperModelImport: (modelId) => ipcRenderer.invoke('whisper:model-import', modelId),
   platformInfo: () => ipcRenderer.invoke('platform:info'),
   linuxAudioSources: () => ipcRenderer.invoke('linux-audio:sources'),
+  linuxMicAdvice: () => ipcRenderer.invoke('linux-audio:mic-advice'),
   ask: (payload) => ipcRenderer.send('ask', payload),
   captureScreen: () => ipcRenderer.invoke('screen:capture'),
   captureToggle: () => ipcRenderer.invoke('capture:toggle').catch((err) => {

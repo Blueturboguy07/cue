@@ -100,4 +100,42 @@ function stopThemCapture() {
   }
 }
 
-module.exports = { parseSourcesShort, pickMonitorSource, listSources, startThemCapture, stopThemCapture };
+// ---- microphone: don't break the user's Bluetooth music ----------------------
+// Opening a Bluetooth headset's mic forces PipeWire to flip it from A2DP (music
+// quality, no mic) to HFP/HSP (mono phone-call codec) — which collapses whatever
+// the user is listening to. So when the default mic is a Bluetooth headset, cue
+// records from a different, wired/built-in mic instead and leaves the headset
+// alone. Pure helper: given `pactl list sources short` output + the default,
+// return the pactl name of a non-Bluetooth mic, or null if there is none.
+function pickNonBluetoothMic(sources, defaultSource) {
+  const list = (sources || []).filter((s) => !s.monitor);
+  const isBt = (name) => /^bluez_/i.test(name || '');
+  if (!isBt(defaultSource)) return null; // default is fine, nothing to do
+  const wired = list.find((s) => !isBt(s.name));
+  return wired ? wired.name : null;
+}
+
+// Main-side: what mic should the renderer open? Returns { deviceLabelHint,
+// sourceName, reason } — the renderer matches deviceLabelHint against
+// enumerateDevices labels (Chromium exposes PulseAudio source descriptions).
+async function micAdvice() {
+  const [short, def, descs] = await Promise.all([
+    pactl(['list', 'sources', 'short']),
+    pactl(['get-default-source']),
+    pactl(['list', 'sources'])
+  ]);
+  if (short === null) return { sourceName: null, reason: 'no-pactl' };
+  const sources = parseSourcesShort(short);
+  const defaultSource = def ? def.trim() : '';
+  const alt = pickNonBluetoothMic(sources, defaultSource);
+  if (!alt) return { sourceName: null, reason: 'default-ok' };
+  // Find the human description PipeWire gives this source — that's the label
+  // Chromium's enumerateDevices shows, which the renderer can match on.
+  let description = '';
+  const block = String(descs || '').split(/\n(?=Source #)/).find((b) => b.includes('Name: ' + alt));
+  const m = block && block.match(/Description:\s*(.+)/);
+  if (m) description = m[1].trim();
+  return { sourceName: alt, description, reason: 'avoid-bluetooth-hfp' };
+}
+
+module.exports = { parseSourcesShort, pickMonitorSource, pickNonBluetoothMic, micAdvice, listSources, startThemCapture, stopThemCapture };
