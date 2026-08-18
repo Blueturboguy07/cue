@@ -131,6 +131,7 @@ function getWhisperRuntime() {
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     appPath: app.getAppPath(),
+    userDataPath: app.getPath('userData'),
     platform: process.platform,
     architecture: process.arch,
     environment: process.env
@@ -203,6 +204,7 @@ async function getWhisperOverview() {
       available: runtime.available,
       version: runtime.version,
       target: runtime.target,
+      backend: runtime.backend || 'cpu',
       message: runtime.message || null
     },
     models

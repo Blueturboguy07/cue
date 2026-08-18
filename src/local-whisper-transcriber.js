@@ -2,7 +2,11 @@ const { UtteranceSegmenter } = require('./utterance-segmenter');
 const { WhisperServerSession } = require('./whisper-server-session');
 
 const CHANNELS = Object.freeze(['you', 'them']);
-const DEFAULT_DRAIN_TIMEOUT_MS = 15000;
+// On stop, keep transcribing whatever is still queued rather than discarding it
+// (previously anything not finished within 15s was thrown away, which on a slow
+// CPU model silently lost the tail of every long session). Generous cap only
+// as a safety net against a hung model.
+const DEFAULT_DRAIN_TIMEOUT_MS = 180000;
 
 class LocalWhisperTranscriber {
   /** Coordinate two audio channels through one sequential, persistent model session. */

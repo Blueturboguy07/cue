@@ -1800,10 +1800,16 @@
       const runtimeBadge = $('#whisper-runtime-status');
       runtimeBadge.classList.toggle('ready', whisperOverview.runtime.available);
       runtimeBadge.classList.toggle('error', !whisperOverview.runtime.available);
+      const backend = (whisperOverview.runtime.backend || 'cpu').toUpperCase();
       runtimeBadge.textContent = whisperOverview.runtime.available
-        ? `Ready · v${whisperOverview.runtime.version} · ${whisperOverview.runtime.target}`
+        ? `Ready · v${whisperOverview.runtime.version} · ${backend}`
         : 'Not prepared';
-      runtimeBadge.title = whisperOverview.runtime.message || '';
+      runtimeBadge.classList.toggle('gpu', backend !== 'CPU');
+      runtimeBadge.title = whisperOverview.runtime.available
+        ? (backend === 'CPU'
+            ? 'Running on CPU. Large models (v3-turbo) are ~50x slower on CPU — build the GPU runtime: scripts/build-whisper-vulkan.sh'
+            : `GPU-accelerated (${backend}) — large models run fast`)
+        : (whisperOverview.runtime.message || '');
 
       const select = $('#whisper-model');
       select.innerHTML = '';
