@@ -931,11 +931,30 @@ body.resize-mode #resize-grip { display: block; cursor: nwse-resize !important; 
 body.resize-mode #panel { outline: 1px dashed rgba(60,131,245,0.55); outline-offset: -1px; }
 body.resizing, body.resizing * { cursor: nwse-resize !important; }
 
-.shot-chip { position: relative; display: inline-block; margin: 2px 0 8px; }
-.shot-chip img { max-width: 160px; max-height: 92px; border-radius: 8px; border: 1px solid var(--bd-hair); display: block; }
+.shot-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 2px 0 8px; }
+.shot-chip { position: relative; display: inline-block; }
+.shot-chip img { max-width: 120px; max-height: 72px; border-radius: 8px; border: 1px solid var(--bd-hair); display: block; }
+.shot-count { font-size: 11px; color: var(--tx-mut); margin-left: 2px; }
+.msg-shots { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
 .shot-x { position: absolute; top: -7px; right: -7px; width: 18px; height: 18px; border-radius: 50%; border: none; background: rgba(20,22,28,0.96); color: #fff; font-size: 13px; line-height: 1; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.4); }
 
-.msg-shot { max-width: 240px; max-height: 140px; border-radius: 10px; border: 1px solid var(--bd-hair); margin: 8px 0 2px; display: block; }
+.msg-shot { max-width: 180px; max-height: 110px; border-radius: 10px; border: 1px solid var(--bd-hair); display: block; }
+
+/* Markdown extras: paragraphs breathe, tables, blockquotes, rules, code labels */
+.ai-text p { margin: 0 0 10px; }
+.ai-text p:last-child { margin-bottom: 0; }
+.ai-text pre { position: relative; white-space: pre; }
+.ai-text pre code[data-lang]::before {
+  content: attr(data-lang); position: absolute; top: 6px; right: 10px;
+  font-size: 10.5px; color: var(--tx-mut); text-transform: lowercase; letter-spacing: 0.02em;
+}
+.ai-text table { border-collapse: collapse; margin: 10px 0; font-size: 0.85em; width: 100%; display: block; overflow-x: auto; }
+.ai-text th, .ai-text td { border: 1px solid rgba(255,255,255,0.14); padding: 6px 10px; text-align: left; vertical-align: top; }
+.ai-text th { background: rgba(255,255,255,0.06); font-weight: 600; }
+.ai-text blockquote { margin: 10px 0; padding: 4px 14px; border-left: 3px solid rgba(60,131,245,0.6); color: var(--tx-2); background: rgba(255,255,255,0.03); border-radius: 0 8px 8px 0; }
+.ai-text blockquote p { margin: 4px 0; }
+.ai-text hr { border: none; border-top: 1px solid var(--bd-hair); margin: 12px 0; }
+.ai-text del { opacity: 0.6; }
 
 /* Markdown: headings, ordered lists, emphasis, links inside AI answers */
 .ai-text h3, .ai-text h4, .ai-text h5, .ai-text h6 { margin: 12px 0 6px; font-weight: 650; line-height: 1.3; color: var(--tx-1); }

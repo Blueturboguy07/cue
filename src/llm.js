@@ -1,5 +1,5 @@
 // LLM factory — OpenAI, Anthropic, Gemini, and OpenAI-compatible APIs behind one streaming interface.
-// stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken }) -> Promise<fullText>
+// stream({ system, turns:[{role,text}], images:[dataUrl,...] | imageDataUrl, maxTokens, onToken }) -> Promise<fullText>
 
 const { createCompatibleClientOptions } = require('./openai-compatible');
 
@@ -105,17 +105,17 @@ function stripDataUrl(dataUrl) {
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, images, maxTokens, onToken }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
   turns.forEach((t, i) => {
     const last = i === turns.length - 1;
-    if (last && imageDataUrl && t.role === 'user') {
+    if (last && images && images.length && t.role === 'user') {
       messages.push({
         role: 'user', content: [
           { type: 'text', text: t.text },
-          { type: 'image_url', image_url: { url: imageDataUrl } }
+          ...images.map((url) => ({ type: 'image_url', image_url: { url } }))
         ]
       });
     } else {
@@ -150,16 +150,16 @@ function normalizeAzureBaseURL(raw) {
   return u.replace(/\/chat\/completions$/i, '');
 }
 
-async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, endpoint }) {
+async function streamAzure({ apiKey, model, system, turns, images, maxTokens, onToken, endpoint }) {
   const url = normalizeAzureBaseURL(endpoint);
   if (!url) throw new Error('Missing Azure endpoint. Add your Azure AI Foundry or Azure OpenAI endpoint in Settings.');
   const messages = [{ role: 'system', content: system }];
   turns.forEach((t, i) => {
     const last = i === turns.length - 1;
-    if (last && imageDataUrl && t.role === 'user') {
+    if (last && images && images.length && t.role === 'user') {
       messages.push({ role: 'user', content: [
         { type: 'text', text: t.text },
-        { type: 'image_url', image_url: { url: imageDataUrl } }
+        ...images.map((u) => ({ type: 'image_url', image_url: { url: u } }))
       ] });
     } else {
       messages.push({ role: t.role, content: t.text });
@@ -189,15 +189,17 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
   return full;
 }
 
-async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamAnthropic({ apiKey, model, system, turns, images, maxTokens, onToken }) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
   const messages = turns.map((t, i) => {
     const last = i === turns.length - 1;
-    if (last && imageDataUrl && t.role === 'user') {
-      const img = stripDataUrl(imageDataUrl);
+    if (last && images && images.length && t.role === 'user') {
       const content = [];
-      if (img) content.push({ type: 'image', source: { type: 'base64', media_type: img.mime, data: img.b64 } });
+      for (const u of images) {
+        const img = stripDataUrl(u);
+        if (img) content.push({ type: 'image', source: { type: 'base64', media_type: img.mime, data: img.b64 } });
+      }
       content.push({ type: 'text', text: t.text });
       return { role: 'user', content };
     }
@@ -211,15 +213,17 @@ async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, max
   return full;
 }
 
-async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamGemini({ apiKey, model, system, turns, images, maxTokens, onToken }) {
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
   const contents = turns.map((t, i) => {
     const last = i === turns.length - 1;
     const parts = [{ text: t.text }];
-    if (last && imageDataUrl && t.role === 'user') {
-      const img = stripDataUrl(imageDataUrl);
-      if (img) parts.push({ inlineData: { mimeType: img.mime, data: img.b64 } });
+    if (last && images && images.length && t.role === 'user') {
+      for (const u of images) {
+        const img = stripDataUrl(u);
+        if (img) parts.push({ inlineData: { mimeType: img.mime, data: img.b64 } });
+      }
     }
     return { role: t.role === 'assistant' ? 'model' : 'user', parts };
   });
@@ -234,17 +238,17 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
   return full;
 }
 
-async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamOllama({ apiKey, model, system, turns, images, maxTokens, onToken }) {
   const baseUrl = apiKey || 'http://localhost:11434';
   const url = `${baseUrl.replace(/\/$/, '')}/api/chat`;
 
   const messages = [{ role: 'system', content: system }];
   turns.forEach((t, i) => {
     const last = i === turns.length - 1;
-    if (last && imageDataUrl && t.role === 'user') {
-      const img = stripDataUrl(imageDataUrl);
-      if (img) {
-        messages.push({ role: 'user', content: t.text, images: [img.b64] });
+    if (last && images && images.length && t.role === 'user') {
+      const b64s = images.map(stripDataUrl).filter(Boolean).map((img) => img.b64);
+      if (b64s.length) {
+        messages.push({ role: 'user', content: t.text, images: b64s });
       } else {
         messages.push({ role: 'user', content: t.text });
       }
@@ -355,9 +359,11 @@ function createLLM(settings) {
     configurationError,
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
-      // Route to the vision model only when an image is actually attached.
-      const chosenModel = params.imageDataUrl ? imageModel : textModel;
-      const args = { apiKey, baseURL, endpoint, maxTokens, ...params, model: chosenModel, turns: sanitizeTurns(params.turns) };
+      // Accept either `images` (array of data URLs) or the legacy single
+      // `imageDataUrl`; route to the vision model only when at least one is set.
+      const images = (Array.isArray(params.images) ? params.images : (params.imageDataUrl ? [params.imageDataUrl] : [])).filter(Boolean);
+      const chosenModel = images.length ? imageModel : textModel;
+      const args = { apiKey, baseURL, endpoint, maxTokens, ...params, images, model: chosenModel, turns: sanitizeTurns(params.turns) };
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);

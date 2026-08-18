@@ -563,7 +563,7 @@ async function setCapturing(active) {
 // stay within the context window on long chats.
 let chatTurns = [];
 const MAX_CHAT_TURNS = 20; // 10 user+assistant exchanges
-async function runFeature(mode, userText, providedImage) {
+async function runFeature(mode, userText, providedImages) {
   if (state.busy) return;
   const def = MODES[mode];
   if (!def) return;
@@ -584,13 +584,15 @@ async function runFeature(mode, userText, providedImage) {
       return;
     }
 
-    // A screenshot the renderer already captured (camera button) takes priority;
-    // otherwise capture now for screen-based modes (Assist / LeetCode).
-    let imageDataUrl = providedImage || null;
-    if (!imageDataUrl && def.needsScreen) {
+    // Screenshots the renderer already attached (camera button, possibly several)
+    // take priority; otherwise capture one now for screen-based modes.
+    let images = Array.isArray(providedImages) ? providedImages.filter(Boolean)
+      : (providedImages ? [providedImages] : []);
+    if (!images.length && def.needsScreen) {
       try {
-        imageDataUrl = await captureScreenshot();
-        if (!imageDataUrl) throw new Error('No screen source was available.');
+        const shot = await captureScreenshot();
+        if (!shot) throw new Error('No screen source was available.');
+        images = [shot];
       }
       catch (e) {
         recordEvent({ level: 'error', event: 'screen_capture_failed', msg: e && e.message ? e.message : String(e), frame: 'captureScreenshot', context: { mode } });
@@ -629,7 +631,7 @@ async function runFeature(mode, userText, providedImage) {
         llm.stream({
           system,
           turns,
-          imageDataUrl,
+          images,
           onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); }
         }),
         stalled
@@ -718,7 +720,7 @@ ipcMain.handle('transcript:clear', () => {
   chatTurns = []; // also reset the chat memory
   return { ok: true };
 });
-ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text, payload.imageDataUrl));
+ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text, payload.images || payload.imageDataUrl));
 ipcMain.handle('screen:capture', () => captureScreenshot());
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });

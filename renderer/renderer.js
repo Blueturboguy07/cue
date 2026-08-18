@@ -45,34 +45,76 @@
   function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
   // minimal, safe markdown: fenced code, bullets, inline code, bold, paragraphs
+  // Markdown -> HTML. Deliberately preserves single newlines inside a paragraph
+  // as <br> (models emit hard-wrapped text; collapsing them to spaces was why
+  // answers rendered as one run-on blob). Handles: ``` / ~~~ fenced code with a
+  // language class, inline code, headings, ordered/bulleted lists, blockquotes,
+  // simple pipe tables, horizontal rules, bold/italic/strike, links.
   function renderMarkdown(text) {
-    const lines = String(text).split('\n');
-    let html = '', inCode = false, listType = null, buf = [];
-    const inline = (s) => esc(s)
+    const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+    let html = '', inCode = false, codeLang = '', codeFence = '', listType = null, inQuote = false, buf = [], table = null;
+    const inline = (str) => esc(str)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|[^*_])[*_]([^*_\s][^*_]*?)[*_](?!\w)/g, '$1<em>$2</em>')
+      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      .replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?!\w)/g, '$1<em>$2</em>')
+      .replace(/(^|[^_\w])_([^_\s][^_]*?)_(?!\w)/g, '$1<em>$2</em>')
+      .replace(/~~([^~]+)~~/g, '<del>$1</del>')
       .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    const flushP = () => { if (buf.length) { html += '<p>' + inline(buf.join(' ')) + '</p>'; buf = []; } };
+    const flushP = () => { if (buf.length) { html += '<p>' + buf.map(inline).join('<br>') + '</p>'; buf = []; } };
     const closeList = () => { if (listType) { html += listType === 'ol' ? '</ol>' : '</ul>'; listType = null; } };
-    for (const raw of lines) {
-      const line = raw;
-      if (/^```/.test(line.trim())) {
-        if (!inCode) { flushP(); closeList(); html += '<pre><code>'; inCode = true; }
-        else { html += '</code></pre>'; inCode = false; }
+    const closeQuote = () => { if (inQuote) { html += '</blockquote>'; inQuote = false; } };
+    const flushTable = () => {
+      if (!table) return;
+      html += '<table><thead><tr>' + table.head.map((c) => '<th>' + inline(c) + '</th>').join('') + '</tr></thead>';
+      if (table.rows.length) html += '<tbody>' + table.rows.map((r) => '<tr>' + r.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('') + '</tbody>';
+      html += '</table>';
+      table = null;
+    };
+    const splitRow = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+    const isHr = (l) => /^\s*([-*_])(\s*\1){2,}\s*$/.test(l);
+    // A table separator row must contain a pipe (a bare '---' is a horizontal rule).
+    const isSep = (l) => l.includes('|') && !isHr(l) && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const fence = line.trim().match(/^(```|~~~)\s*([\w+#.-]*)\s*$/);
+      if (fence && (!inCode || fence[1] === codeFence)) {
+        if (!inCode) {
+          flushP(); closeList(); closeQuote(); flushTable();
+          codeFence = fence[1]; codeLang = fence[2] || '';
+          html += '<pre><code' + (codeLang ? ' class="lang-' + esc(codeLang) + '" data-lang="' + esc(codeLang) + '"' : '') + '>';
+          inCode = true;
+        } else { html += '</code></pre>'; inCode = false; codeLang = ''; codeFence = ''; }
         continue;
       }
       if (inCode) { html += esc(line) + '\n'; continue; }
-      const h = line.match(/^(#{1,4})\s+(.*)$/);
-      if (h) { flushP(); closeList(); const lvl = Math.min(h[1].length + 2, 6); html += '<h' + lvl + '>' + inline(h[2].trim()) + '</h' + lvl + '>'; continue; }
+      // table: header row followed by a separator row
+      if (line.includes('|') && i + 1 < lines.length && isSep(lines[i + 1])) {
+        flushP(); closeList(); closeQuote(); flushTable();
+        table = { head: splitRow(line), rows: [] };
+        i += 1; // skip separator
+        continue;
+      }
+      if (table) {
+        if (line.includes('|') && line.trim()) { table.rows.push(splitRow(line)); continue; }
+        flushTable();
+      }
+      if (isHr(line)) { flushP(); closeList(); closeQuote(); html += '<hr>'; continue; }
+      const h = line.match(/^(#{1,6})\s+(.*)$/);
+      if (h) { flushP(); closeList(); closeQuote(); const lvl = Math.min(h[1].length + 2, 6); html += '<h' + lvl + '>' + inline(h[2].trim().replace(/\s+#+$/, '')) + '</h' + lvl + '>'; continue; }
+      const q = line.match(/^\s*>\s?(.*)$/);
+      if (q) { flushP(); closeList(); if (!inQuote) { html += '<blockquote>'; inQuote = true; } html += '<p>' + inline(q[1]) + '</p>'; continue; }
+      else closeQuote();
       const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
       if (ol) { flushP(); if (listType !== 'ol') { closeList(); html += '<ol>'; listType = 'ol'; } html += '<li>' + inline(ol[1]) + '</li>'; continue; }
       const ul = line.match(/^\s*[-*+]\s+(.*)$/);
       if (ul) { flushP(); if (listType !== 'ul') { closeList(); html += '<ul>'; listType = 'ul'; } html += '<li>' + inline(ul[1]) + '</li>'; continue; }
       if (line.trim() === '') { flushP(); closeList(); continue; }
-      buf.push(line.trim());
+      closeList();
+      buf.push(line.replace(/\s+$/, ''));
     }
-    flushP(); closeList(); if (inCode) html += '</code></pre>';
+    flushP(); closeList(); closeQuote(); flushTable(); if (inCode) html += '</code></pre>';
     return html;
   }
 
@@ -164,13 +206,14 @@
   }
 
   // ---- actions -----------------------------------------------------------
-  let pendingImage = null; // a screenshot armed by the camera button, for the next send
-  let lastSentImage = null; // shown as a thumbnail in the response group
+  let pendingImages = []; // screenshots armed by the camera button, for the next send
+  let lastSentImages = []; // echoed as thumbnails in the response group
+  const MAX_IMAGES = 8;
   function runMode(mode, text) {
     if (busy) return;
     setBusy(true);
-    lastSentImage = pendingImage;
-    cue.ask({ mode, text: text || '', imageDataUrl: pendingImage || undefined });
+    lastSentImages = pendingImages.slice();
+    cue.ask({ mode, text: text || '', images: pendingImages.length ? pendingImages.slice() : undefined });
     clearPendingImage();
   }
 
@@ -526,23 +569,38 @@
   $('#send-btn').addEventListener('click', send);
 
   // ---- screenshot attach (the camera button beside the mic) --------------
+  // Multiple screenshots can be armed for one question; each shows as a
+  // thumbnail with its own × so you can drop just that one.
   function renderShotChip() {
-    let chip = document.getElementById('shot-chip');
-    if (!pendingImage) { if (chip) chip.remove(); return; }
-    if (!chip) {
-      chip = document.createElement('div');
-      chip.id = 'shot-chip';
-      chip.className = 'shot-chip';
-      const im = document.createElement('img'); im.alt = 'attached screenshot';
-      const x = document.createElement('button'); x.className = 'shot-x'; x.textContent = '×'; x.title = 'Remove screenshot';
-      x.addEventListener('click', clearPendingImage);
-      chip.appendChild(im); chip.appendChild(x);
-      composer.insertBefore(chip, composer.firstChild);
+    let strip = document.getElementById('shot-strip');
+    if (!pendingImages.length) { if (strip) strip.remove(); return; }
+    if (!strip) {
+      strip = document.createElement('div');
+      strip.id = 'shot-strip';
+      strip.className = 'shot-strip';
+      composer.insertBefore(strip, composer.firstChild);
     }
-    chip.querySelector('img').src = pendingImage;
+    strip.innerHTML = '';
+    pendingImages.forEach((dataUrl, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'shot-chip';
+      const im = document.createElement('img'); im.alt = 'attached screenshot ' + (i + 1); im.src = dataUrl;
+      const x = document.createElement('button'); x.className = 'shot-x'; x.textContent = '×'; x.title = 'Remove this screenshot';
+      x.addEventListener('click', (e) => { e.stopPropagation(); removePendingImage(i); });
+      chip.appendChild(im); chip.appendChild(x);
+      strip.appendChild(chip);
+    });
+    const count = document.createElement('span');
+    count.className = 'shot-count';
+    count.textContent = pendingImages.length + '/' + MAX_IMAGES;
+    strip.appendChild(count);
   }
-  function clearPendingImage() { pendingImage = null; renderShotChip(); updateShotButton(); }
-  function armImage(dataUrl) { pendingImage = dataUrl; renderShotChip(); updateShotButton(); }
+  function clearPendingImage() { pendingImages = []; renderShotChip(); updateShotButton(); }
+  function removePendingImage(i) { pendingImages.splice(i, 1); renderShotChip(); updateShotButton(); }
+  function armImage(dataUrl) {
+    if (pendingImages.length >= MAX_IMAGES) { showToast('Up to ' + MAX_IMAGES + ' screenshots per question', 2000); return; }
+    pendingImages.push(dataUrl); renderShotChip(); updateShotButton();
+  }
   function updateShotButton() {
     const btn = $('#shot-btn'); if (!btn) return;
     const tier = settings && (settings.tier || (settings.smart ? 'smart' : 'fast'));
@@ -551,12 +609,12 @@
     // Only usable in Image mode AND with an image model configured.
     const enabled = tier === 'image' && hasImageModel;
     btn.classList.toggle('disabled', !enabled);
-    btn.classList.toggle('armed', !!pendingImage);
+    btn.classList.toggle('armed', pendingImages.length > 0);
     btn.title = tier !== 'image'
       ? 'Switch the composer pill to Image mode to attach screenshots'
       : (!hasImageModel
           ? 'Set an Image model in Settings → Keys to attach screenshots'
-          : (pendingImage ? 'Screenshot attached — type your question and send' : 'Attach a screenshot to your next question'));
+          : (pendingImages.length ? pendingImages.length + ' screenshot(s) attached — click to add another, or type and send' : 'Attach a screenshot to your next question (click again to add more)'));
   }
   $('#shot-btn').addEventListener('click', async () => {
     const btn = $('#shot-btn');
@@ -622,7 +680,7 @@
     if (ic) ic.innerHTML = icon(tier === 'image' ? 'image' : 'zap', { size: 14 });
     smartBtn.classList.toggle('on', tier !== 'fast');
     smartBtn.classList.toggle('image', tier === 'image');
-    if (tier !== 'image' && pendingImage) clearPendingImage();
+    if (tier !== 'image' && pendingImages.length) clearPendingImage();
     updateShotButton();
     updateSmartTooltip();
   }
@@ -1274,15 +1332,20 @@
       b.textContent = userBubble;
       group.appendChild(b);
     }
-    // Show the screenshot cue sent (like a coding agent showing what it looked at).
-    if (lastSentImage) {
-      const shot = document.createElement('img');
-      shot.className = 'msg-shot';
-      shot.src = lastSentImage;
-      shot.alt = 'screenshot sent to the model';
-      shot.title = 'Screenshot sent with this question';
-      group.appendChild(shot);
-      lastSentImage = null;
+    // Show the screenshot(s) cue sent (like a coding agent showing what it looked at).
+    if (lastSentImages.length) {
+      const row = document.createElement('div');
+      row.className = 'msg-shots';
+      lastSentImages.forEach((u, i) => {
+        const shot = document.createElement('img');
+        shot.className = 'msg-shot';
+        shot.src = u;
+        shot.alt = 'screenshot ' + (i + 1) + ' sent to the model';
+        shot.title = 'Screenshot ' + (i + 1) + ' sent with this question';
+        row.appendChild(shot);
+      });
+      group.appendChild(row);
+      lastSentImages = [];
     }
     if (category) {
       const pill = document.createElement('div');
