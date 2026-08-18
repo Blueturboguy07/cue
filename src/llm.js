@@ -9,7 +9,7 @@ const CUSTOM_PROVIDER = 'custom';
 // generic "exception parsing response" body. gemini-2.5-flash is the model
 // Google's own SDK examples standardize on and is documented as free-tier
 // available, so it is the single default used everywhere in this file.
-const CURRENT_GEMINI_DEFAULT = 'gemini-2.5-flash';
+const CURRENT_GEMINI_DEFAULT = 'gemini-3.5-flash';
 const DEFAULT_MODELS = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-5-haiku-latest',
@@ -24,7 +24,7 @@ const DEFAULT_MODELS = {
 // saved before this fix can still have one of these persisted on disk, so
 // createLLM migrates them at read time rather than only fixing the default —
 // otherwise an existing user would keep re-hitting the same 404 forever.
-const DEAD_GEMINI_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0)(?:-|$)/i;
+const DEAD_GEMINI_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0|2\.5)(?:-|$)/i;
 
 const PROVIDER_LABELS = { azure: 'Azure AI Foundry', openai: 'OpenAI', minimax: 'MiniMax' };
 
@@ -215,9 +215,31 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
     }
     return { role: t.role === 'assistant' ? 'model' : 'user', parts };
   });
-  const stream = await ai.models.generateContentStream({
-    model, contents, config: { systemInstruction: system, maxOutputTokens: maxTokens }
-  });
+
+  const makeStreamCall = async (targetModel) => {
+    return await ai.models.generateContentStream({
+      model: targetModel, contents, config: { systemInstruction: system, maxOutputTokens: maxTokens }
+    });
+  };
+
+  let stream;
+  try {
+    stream = await makeStreamCall(model);
+  } catch (err) {
+    const isRateOrDemand = /429|RESOURCE_EXHAUSTED|503|UNAVAILABLE|high demand/i.test(err && (err.message || String(err)));
+    if (isRateOrDemand) {
+      // Short backoff delay (1.2s) then retry
+      await new Promise((r) => setTimeout(r, 1200));
+      try {
+        stream = await makeStreamCall(model);
+      } catch (retryErr) {
+        stream = await makeStreamCall(CURRENT_GEMINI_DEFAULT);
+      }
+    } else {
+      throw err;
+    }
+  }
+
   let full = '';
   for await (const chunk of stream) {
     const t = chunk && chunk.text;
@@ -330,7 +352,7 @@ function createLLM(settings) {
   }
 
   const ready = !configurationError && !!model;
-  const maxTokens = settings.smart ? 1400 : 700;
+  const maxTokens = settings.smart ? 4096 : 2048;
 
   return {
     provider, model, apiKey, baseURL,
@@ -338,7 +360,8 @@ function createLLM(settings) {
     configurationError,
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
-      const args = { apiKey, baseURL, endpoint, model, maxTokens, ...params, turns: sanitizeTurns(params.turns) };
+      const streamMaxTokens = (params && params.maxTokens) ? params.maxTokens : maxTokens;
+      const args = { apiKey, baseURL, endpoint, model, ...params, maxTokens: streamMaxTokens, turns: sanitizeTurns(params.turns) };
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);

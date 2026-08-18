@@ -12,7 +12,7 @@ const { CURRENT_GEMINI_DEFAULT } = require('../src/llm');
 // Gemini model id (two still pointing at the dead one), so this scans every
 // source file that talks to the Gemini API and fails if a known-retired id
 // or a hardcoded id that has drifted from the shared default sneaks back in.
-const DEAD_MODEL_IDS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro'];
+const DEAD_MODEL_IDS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro'];
 
 const FILES_THAT_CALL_GEMINI = [
   'src/llm.js',

@@ -409,8 +409,8 @@ function createStreamingSTT(settings, channel, callbacks) {
   const selectedProvider = settings.sttProvider || 'auto';
   const { onTranscript, onInterim, onError, onStatusChange } = callbacks;
 
-  if (selectedProvider === 'local' || selectedProvider === 'gemini') {
-    return { type: 'batch', provider: selectedProvider, instance: null };
+  if (selectedProvider === 'local' || selectedProvider === 'gemini' || (selectedProvider === 'auto' && settings.provider === 'gemini' && !keys.deepgram)) {
+    return { type: 'batch', provider: (selectedProvider === 'auto' || selectedProvider === 'gemini') ? 'gemini' : 'local', instance: null };
   }
 
   // Priority 1: Deepgram (purpose-built for streaming STT, lowest latency)
@@ -426,7 +426,7 @@ function createStreamingSTT(settings, channel, callbacks) {
   }
 
   // Priority 2: OpenAI Realtime API (excellent quality, slightly higher latency)
-  if ((selectedProvider === 'auto' || selectedProvider === 'openai') && keys.openai) {
+  if ((selectedProvider === 'auto' || selectedProvider === 'openai') && keys.openai && settings.provider !== 'gemini') {
     const stt = new OpenAIRealtimeSTT(keys.openai, {
       model: 'gpt-realtime-whisper', // only this model gives true streaming deltas
       onTranscript: (text) => onTranscript(channel, text),
