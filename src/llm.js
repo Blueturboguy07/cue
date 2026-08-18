@@ -352,7 +352,7 @@ function createLLM(settings) {
   }
 
   const ready = !configurationError && !!model;
-  const maxTokens = settings.smart ? 1400 : 700;
+  const maxTokens = settings.smart ? 4096 : 2048;
 
   return {
     provider, model, apiKey, baseURL,
@@ -360,7 +360,8 @@ function createLLM(settings) {
     configurationError,
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
-      const args = { apiKey, baseURL, endpoint, model, maxTokens, ...params, turns: sanitizeTurns(params.turns) };
+      const streamMaxTokens = (params && params.maxTokens) ? params.maxTokens : maxTokens;
+      const args = { apiKey, baseURL, endpoint, model, ...params, maxTokens: streamMaxTokens, turns: sanitizeTurns(params.turns) };
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);

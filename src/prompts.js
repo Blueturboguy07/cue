@@ -184,6 +184,7 @@ const MODES = {
     userBubble: 'Solve what\'s on screen',
     small: false,
     resumeMode: 'leetcode',
+    maxTokens: 4096,
     buildSystem(_contextBlock, _aiRules) {
       // Context block AND aiRules intentionally ignored — code answers must
       // stay strict regardless of personal style or context.

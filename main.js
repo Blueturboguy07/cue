@@ -546,6 +546,7 @@ async function runFeature(mode, userText) {
           system,
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
+          maxTokens: def.maxTokens,
           onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); }
         }),
         stalled

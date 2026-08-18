@@ -34,14 +34,15 @@
 
   function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
-  // minimal, safe markdown: fenced code, bullets, inline code, bold, paragraphs
+  // minimal, safe markdown: fenced code, bullets, inline code, bold, headers, paragraphs, math
   function renderMarkdown(text) {
     const lines = text.split('\n');
     let html = '', inCode = false, inList = false, buf = [];
     const flushP = () => { if (buf.length) { html += '<p>' + inline(buf.join(' ')) + '</p>'; buf = []; } };
     const inline = (s) => esc(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\$([^\$]+)\$/g, '<code class="ai-math">$1</code>');
     for (const raw of lines) {
       const line = raw;
       if (/^```/.test(line.trim())) {
@@ -50,6 +51,21 @@
         continue;
       }
       if (inCode) { html += esc(line) + '\n'; continue; }
+      if (/^###\s+(.*)/.test(line.trim())) {
+        flushP(); if (inList) { html += '</ul>'; inList = false; }
+        html += '<h3 class="ai-heading">' + inline(line.trim().replace(/^###\s+/, '')) + '</h3>';
+        continue;
+      }
+      if (/^##\s+(.*)/.test(line.trim())) {
+        flushP(); if (inList) { html += '</ul>'; inList = false; }
+        html += '<h2 class="ai-heading">' + inline(line.trim().replace(/^##\s+/, '')) + '</h2>';
+        continue;
+      }
+      if (/^#\s+(.*)/.test(line.trim())) {
+        flushP(); if (inList) { html += '</ul>'; inList = false; }
+        html += '<h1 class="ai-heading">' + inline(line.trim().replace(/^#\s+/, '')) + '</h1>';
+        continue;
+      }
       if (/^\s*[-*]\s+/.test(line)) { flushP(); if (!inList) { html += '<ul>'; inList = true; } html += '<li>' + inline(line.replace(/^\s*[-*]\s+/, '')) + '</li>'; continue; }
       if (line.trim() === '') { flushP(); if (inList) { html += '</ul>'; inList = false; } continue; }
       buf.push(line.trim());
