@@ -13,7 +13,7 @@ A free, self-hosted alternative to Cluely. Bring your own AI key (OpenAI · Anth
 ---
 
 > [!IMPORTANT]
-> **Please read this first.** cue tries to stay out of screen recordings/shares, but this is **best-effort, not guaranteed** — on macOS 15.4+ Apple can let modern capture tools see it anyway, on Windows 10 builds older than 2004 it degrades to a black box instead of true exclusion, and a phone camera always can. Using a hidden assistant during a **proctored exam, job interview, or recorded meeting** may break that platform's rules and, in some places, consent laws. cue is built for legitimate uses — your own notes, studying, accessibility, and practice. **You are responsible for how you use it.**
+> **Please read this first.** cue tries to stay out of screen recordings/shares, but this is **best-effort, not guaranteed** — on macOS 15.4+ Apple can let modern capture tools see it anyway, on Windows 10 builds older than 2004 it degrades to a black box instead of true exclusion, on Linux it works only on **KDE Plasma 6.6+ or Hyprland 0.50+ (Wayland)** and **not** on other compositors or any X11 session (where cue is visible in shares), and a phone camera always can. Using a hidden assistant during a **proctored exam, job interview, or recorded meeting** may break that platform's rules and, in some places, consent laws. cue is built for legitimate uses — your own notes, studying, accessibility, and practice. **You are responsible for how you use it.**
 
 ---
 
@@ -23,28 +23,39 @@ cue floats a small glass panel on top of everything. It takes **three separate i
 
 | Feature | How to trigger | What it uses |
 |---|---|---|
-| **Assist** | `⌘` `↵` (macOS) or `Ctrl` `Enter` (Windows), configurable | your screen + recent conversation |
+| **Assist** | `⌘` `↵` (macOS) or `Ctrl` `Enter` (Windows/Linux), configurable | your screen + recent conversation |
 | **What should I say?** | button | meeting audio + your mic |
 | **Follow-up questions** | button | the whole conversation |
 | **Recap** | button | the whole conversation |
 | **Ask anything** | type + `↵` | your screen + conversation |
-| **Solve a coding problem** | `⌘` `H` (macOS) or `Ctrl` `H` (Windows) | your screen only |
+| **Solve a coding problem** | `⌘` `H` (macOS) or `Ctrl` `H` (Windows/Linux) | your screen only |
 | **Smart** toggle | pill in the box | switches to a smarter (slower) model |
 
 It's a copilot for **live meetings** ("what do I say to that?") and **coding problems** (screenshot → full solution), and it's designed to be **invisible in screen shares** so it stays your private assistant.
 
 ### Platform support
 
-|  | macOS | Windows 11 / 10 2004+ |
-|---|---|---|
-| Screen + coding help | ✅ | ✅ |
-| Your mic (the **You** channel) | ✅ | ✅ |
-| Meeting audio (the **Them** channel) | ✅ macOS 14.4+ | ✅ |
-| Hidden from screen shares | ⚠️ best-effort, weaker on macOS 15.4+ | ✅ `WDA_EXCLUDEFROMCAPTURE` |
-| Permissions to grant | Microphone **and** Screen Recording | Microphone only |
+|  | macOS | Windows 11 / 10 2004+ | Linux |
+|---|---|---|---|
+| Screen + coding help | ✅ | ✅ | ✅ (Wayland: via your desktop's screenshot tool) |
+| Your mic (the **You** channel) | ✅ | ✅ | ✅ |
+| Meeting audio (the **Them** channel) | ✅ macOS 14.4+ | ✅ | ✅ PipeWire/PulseAudio monitor source |
+| Hidden from screen shares | ⚠️ best-effort, weaker on macOS 15.4+ | ✅ `WDA_EXCLUDEFROMCAPTURE` | ✅ KDE Plasma 6.6+ / Hyprland 0.50+ (Wayland) · ❌ GNOME, other wlroots, X11 |
+| Permissions to grant | Microphone **and** Screen Recording | Microphone only | None |
 
 > [!NOTE]
-> **Meeting audio needs macOS 14.4+.** Capturing the *other* person — what powers **What should I say?**, **Follow-up questions**, and **Recap** — uses system-audio loopback. On Windows that works out of the box. On macOS it relies on ScreenCaptureKit, which cue enables through Chromium's `MacLoopbackAudioForScreenShare` and `MacSckSystemAudioLoopbackOverride` switches; on older macOS the *Them* channel stays silent while your screen and the **You** channel keep working.
+> **Meeting audio needs macOS 14.4+.** Capturing the *other* person — what powers **What should I say?**, **Follow-up questions**, and **Recap** — uses system-audio loopback. On Windows that works out of the box. On macOS it relies on ScreenCaptureKit, which cue enables through Chromium's `MacLoopbackAudioForScreenShare` and `MacSckSystemAudioLoopbackOverride` switches; on older macOS the *Them* channel stays silent while your screen and the **You** channel keep working. On Linux there is no Chromium loopback at all — cue records the monitor of your default output with **`parec`**, and you can pick a different source under **Settings → Audio**. `parec` is a soft dependency for the *Them* channel: it ships with **`pulseaudio-utils`** (Debian/Ubuntu), **`libpulse`** (Arch), or **`pipewire-pulse`**, and is preinstalled on virtually every desktop — if it's missing, cue says so and your screen and mic keep working.
+
+#### Linux limitations
+
+- **Screen-share hiding is a *compositor* feature, not a kernel one** — the same as Windows (the DWM compositor) and macOS (WindowServer). On Linux the compositor is your Wayland compositor, and each one either implements per-window capture exclusion or doesn't:
+  - **KDE Plasma 6.6+ (KWin):** ✅ cue writes a KWin window rule (`ExcludeFromCapture`) for itself and is genuinely hidden from every capture (Meet, Zoom, OBS, screenshots). The rule lives in `~/.config/kwinrulesrc` as `cue: hide from screen recording`.
+  - **Hyprland 0.50+:** ✅ cue adds a `noscreenshare` window rule live via `hyprctl`, so the compositor paints a black rectangle where cue is in any capture. (Session-only; re-applied each launch.)
+  - **GNOME (Mutter), sway and other wlroots compositors, and any X11 session:** ❌ no mechanism exists — Mutter exposes no client API, wlroots' screencopy has no per-window exclusion ([sway#5118](https://github.com/swaywm/sway/issues/5118), open since 2020), and on X11 any app reads the framebuffer directly. cue **is visible** there — share a **specific window or tab** instead of your whole screen, or keep cue on a second monitor.
+  cue detects which applies, enables it automatically, and says so at startup. Set `CUE_NO_PROTECT=1` to disable.
+- **Global shortcuts need X11/XWayland.** cue runs under XWayland by default, which is the supported mode. Forcing native Wayland (`ELECTRON_OZONE_PLATFORM_HINT=wayland`) breaks global shortcuts and overlay stacking. On a Wayland session, shortcuts fire reliably while another XWayland app is focused; with a native-Wayland app focused they may not — the in-panel buttons always work.
+- **A compositor is required** for the transparent window. Every Wayland session qualifies; on X11 you need picom, KWin, Mutter, or similar.
+- **Wayland screenshots use your desktop's own tool** — `spectacle` (KDE), `grim` (wlroots/Hyprland), or `gnome-screenshot` — silently, with no dialog. One of them is preinstalled on virtually every desktop; without one, screen features degrade with a clear error.
 
 ---
 
@@ -58,8 +69,9 @@ Go to the [**Releases**](../../releases) page, then choose your platform:
 
 - **Windows 10/11 (x64):** download **`cue-win-x64.exe`**, run it, and launch cue from the Start menu. The installer is unsigned, so Windows SmartScreen may show an **Unknown publisher** warning.
 - **macOS (Apple silicon):** download **`cue-…-arm64-mac.zip`**, unzip it, drag **`cue.app`** into **Applications**, and open it.
+- **Linux (x64/arm64):** download the **`.AppImage`**, make it executable (`chmod +x cue-*.AppImage`), and run it. Some distros need `libfuse2` installed for AppImages.
 
-### Option B — Run from source (macOS or Windows)
+### Option B — Run from source (macOS, Windows, or Linux)
 
 You need [Node.js](https://nodejs.org) 22.12+ installed (required by dev dependencies). No Xcode and no Visual Studio build tools required — cue deliberately avoids native modules.
 
@@ -74,10 +86,12 @@ That's the whole setup on Windows. There's no permission dance — grant the mic
 
 To build a standalone app:
 ```bash
-npm run pack        # unpacked app in dist/ (either OS)
+npm run pack        # unpacked app in dist/ (any OS)
 npm run pack:win    # unpacked Windows app -> dist/win-unpacked/cue.exe
+npm run pack:linux  # unpacked Linux app   -> dist/linux-unpacked/cue
 npm run dist:mac    # macOS zip            -> dist/
 npm run dist:win    # Windows installer    -> dist/cue-win-x64.exe
+npm run dist:linux  # Linux x64 AppImage   -> dist/
 ```
 > **macOS note:** the packaged app is **ad-hoc signed** unless a Developer ID certificate is configured. macOS ties permission grants to the exact build, so **rebuilding resets the mic/screen permissions** — you'll grant them again. For everyday use, build once and keep it. Windows has no equivalent problem.
 To build a packaged app:
@@ -110,6 +124,8 @@ cue can't help until your OS lets it see and hear. When you first use a feature 
 **On macOS — two grants.** System Settings → **Privacy & Security** → **Microphone** and **Screen Recording** → turn on **cue**. macOS may ask you to **quit & reopen** cue — let it. Screen Recording covers both the screenshot features and meeting-audio capture.
 
 **On Windows — one grant.** Only the microphone needs permission: Settings → **Privacy & security** → **Microphone** → turn on **Microphone access** *and* **Let desktop apps access your microphone**. Screenshots and meeting audio need no permission at all — they work immediately, using Windows loopback capture.
+
+**On Linux — nothing to grant.** There is no permission panel; microphone and meeting audio work through PipeWire/PulseAudio, and screenshots use your desktop's own screenshot tool. Everything works immediately.
 
 ### Step 2 — Add your AI key (bring your own)
 
@@ -149,6 +165,8 @@ In **Settings**, paste your résumé or professional background into **Résumé 
 
 ### Step 3 — The Zoom setting (only needed for Zoom)
 
+> **Linux:** this whole section doesn't apply — there is no capture-exclusion API, so cue is visible in every screen share. See [Linux limitations](#linux-limitations).
+
 cue is hidden from most screen-share tools automatically — **Google Meet, Microsoft Teams, and QuickTime need nothing.** **Zoom** has a specific setting that decides whether it respects cue's "don't capture me" flag:
 
 > **Zoom → Settings → Share Screen → Advanced → Screen capture mode → choose "Advanced capture with window filtering."**
@@ -161,14 +179,14 @@ cue is hidden from most screen-share tools automatically — **Google Meet, Micr
 
 ## How to use it
 
-> On Windows, press **`Ctrl`** wherever **`⌘`** appears below. cue's own UI relabels the keys to match your OS.
+> On Windows and Linux, press **`Ctrl`** wherever **`⌘`** appears below. cue's own UI relabels the keys to match your OS.
 
 - **`⌘` `↵` — Assist.** The do-the-smart-thing key. On a coding problem it solves it; in a conversation it tells you what to say. Works from anywhere. Change it under **Settings → Keyboard shortcuts**.
 - **`⌘` `H` — Solve what's on screen.** Screenshots a coding problem and returns the approach, code, and time/space complexity.
 - **The `▢` button** (top bar) — start/stop **listening** to a meeting. The green dot means it's live.
 - **Type a question** in the box and press `↵` to ask about your screen or conversation.
 - **Smart** — flip it on for a smarter, more thorough model; off for fast and cheap.
-- **Hide** collapses the panel to just the top bar. Drag cue around by the **top pill**. Quit with `⌘` `⇧` `X` on macOS or `Ctrl` `Shift` `X` on Windows.
+- **Hide** collapses the panel to just the top bar. Drag cue around by the **top pill**. Quit with `⌘` `⇧` `X` on macOS or `Ctrl` `Shift` `X` on Windows and Linux.
 
 The panel is see-through and click-through — the empty space around it never blocks the app behind it.
 
@@ -181,7 +199,7 @@ cue is an [Electron](https://www.electronjs.org/) app. Everything runs locally e
 **The three inputs are kept completely separate:**
 - **Screen** — captured with Electron's `desktopCapturer` (full-resolution screenshots, taken only when a feature needs one).
 - **Your mic ("You")** — `getUserMedia` → downsampled to 16 kHz audio → transcribed.
-- **Meeting audio ("Them")** — `getDisplayMedia` loopback capture of your system's output audio, kept on its own channel so cue knows *who* said what. **Windows only** — Chromium doesn't implement loopback capture elsewhere, so on macOS this stream comes back video-only and the channel stays silent.
+- **Meeting audio ("Them")** — kept on its own channel so cue knows *who* said what. On **Windows** it's `getDisplayMedia` loopback capture of the system output. On **macOS 14.4+** the same call goes through ScreenCaptureKit. On **Linux**, where Chromium has no loopback and even hides monitor devices from the renderer, cue's main process records the PipeWire/PulseAudio monitor source with **`parec`** (16 kHz mono PCM straight into the same pipeline).
 
 Both audio streams are transcribed by the independently selected speech provider (local whisper.cpp, Deepgram, OpenAI, or Gemini) and fed, with an optional screenshot, to your chat model. Responses **stream** into the panel word-by-word.
 
@@ -191,6 +209,7 @@ When Local transcription is selected, Cue runs one persistent `whisper-server` s
 
 - **macOS:** sets `NSWindowSharingNone`, asking the window server to exclude cue from capture streams. On macOS 15.4+ Apple lets some capture tools ignore it, which is why it's best-effort (see the disclaimer at the top).
 - **Windows:** sets `WDA_EXCLUDEFROMCAPTURE` via `SetWindowDisplayAffinity`, and the compositor drops the window from every capture path. Windows 10 builds before 2004 fall back to `WDA_MONITOR`, which renders a black box rather than truly excluding.
+- **Linux:** Electron's `setContentProtection` is a no-op on Linux, so cue drives the compositor itself. On **KWin (Plasma 6.6+)** it writes a window rule matched to its own window class (`ExcludeFromCapture`, Force) via `kwriteconfig6` and reloads KWin over D-Bus; because every capture on a Wayland session is composited by KWin, the window is absent from screenshots **and** the PipeWire screencast that Meet/Zoom/OBS use — verified by toggling the rule live (overlay appears/vanishes in a screenshot while staying on screen). On **Hyprland 0.50+** it adds a `noscreenshare` rule via `hyprctl keyword`. There is no standard Wayland protocol for this and no mechanism at all on Mutter/wlroots/X11, so it is necessarily per-compositor (see `src/content-protection.js`).
 
 It's the same mechanism DRM apps and Zoom's own toolbar use. It is **not** a GPU trick or a special overlay layer. Set `CUE_NO_PROTECT=1` to disable it while debugging.
 
@@ -233,6 +252,12 @@ Your API key is restricted. Most often it's an OpenAI **project key that only al
 
 **Listening does nothing / no transcript.**
 Check Settings shows a transcription-capable key (OpenAI with Whisper, or Gemini). On macOS, also make sure Screen Recording is granted (meeting audio needs it). On Windows, make sure **Let desktop apps access your microphone** is on — the top-level Microphone toggle alone isn't enough.
+
+**The "Them" channel is silent on Linux.**
+cue records the monitor of your default output with `parec`. Check the monitor exists: `pactl list sources short | grep monitor`. If meeting audio plays through a different output (e.g. USB DAC vs. built-in), pick that device's monitor under **Settings → Audio → Meeting audio source**. `parec` missing is reported in the panel — install `libpulse` (Arch) / `pulseaudio-utils` (Debian/Ubuntu).
+
+**Global shortcuts do nothing on Linux.**
+You're likely focused on a native-Wayland window; XWayland-grabbed shortcuts can't fire there. Click cue (or any XWayland app) first, use the in-panel buttons, or bind the action to a compositor shortcut. See [Linux limitations](#linux-limitations).
 
 **A Custom provider request cannot connect.**
 Confirm the Base URL includes the endpoint's `/v1` path when required, the selected model ID exists on that endpoint, and the local gateway is running. Custom provider credentials are intentionally not reused for speech-to-text.

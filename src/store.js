@@ -19,6 +19,9 @@ const DEFAULTS = {
     threads: 0
   },
   smart: false,
+  // Linux only: which PulseAudio/PipeWire source feeds the "Them" channel
+  // (a pactl source name). Empty = auto-pick the default sink's monitor.
+  linuxMonitorSource: '',
   baseUrl: '',
   minimaxRegion: 'global_en',
   apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '' , azure: '' },

@@ -16,6 +16,7 @@
     "dist:mac": "electron-builder --mac zip",
     "dist:win": "electron-builder --win",
     "pack:win": "electron-builder --win --dir",
+    "pack:linux": "electron-builder --linux --dir",
     "dist:linux": "electron-builder --linux AppImage --x64",
     "dist:linux:arm64": "electron-builder --linux AppImage --arm64"
   },
@@ -25,6 +26,7 @@
     "ai",
     "assistant",
     "windows",
+    "linux",
     "cross-platform"
   ],
   "devDependencies": {

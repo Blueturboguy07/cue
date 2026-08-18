@@ -5,6 +5,9 @@
   const $ = (s) => document.querySelector(s);
   const isWindows = cue.platform === 'win32';
   const isMac = cue.platform === 'darwin';
+  const isLinux = cue.platform === 'linux';
+  const usesCtrl = !isMac; // Windows and Linux both drive shortcuts with Ctrl
+  if (isLinux) document.body.classList.add('on-linux'); // pins vh-based caps (see styles.css)
 
   // ---- paint icons -------------------------------------------------------
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
@@ -421,7 +424,7 @@
     
     // FIX #10: Show undo hint when explicitly cleared
     if (showUndoHint && hadContent) {
-      const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
+      const undoHint = usesCtrl ? 'Ctrl+Z to undo' : '⌘Z to undo';
       showToast(`Cleared · ${undoHint}`, 2000);
     }
   }
@@ -538,7 +541,7 @@
   // FIX #4: Add tooltip with keyboard shortcuts to send button
   const sendBtn = document.getElementById('send-btn');
   if (sendBtn) {
-    const forceKey = isWindows ? 'Ctrl+Shift+A' : '⌘⇧A';
+    const forceKey = usesCtrl ? 'Ctrl+Shift+A' : '⌘⇧A';
     sendBtn.title = `Send · ${forceKey} to force answer`;
   }
 
@@ -558,6 +561,11 @@
   }
   $('#hide-btn').addEventListener('click', toggleHide);
   cue.on('hide:toggle', toggleHide);
+
+  // Quit (the ✕ in the toolbar). Upstream wired the icon and tooltip but never a
+  // click handler, so the button did nothing — and on Wayland the global quit
+  // shortcut is unreliable, leaving no way to quit from the UI.
+  $('#quit-btn').addEventListener('click', () => cue.quit());
 
   // Stop = start/stop listening. Kick off system-audio capture straight from the click so
   // the user-gesture is fresh for getDisplayMedia (loopback capture needs it).
@@ -592,15 +600,18 @@
       clearTranscriptSidebar(); // clear the history sidebar too
       hardClearSTTFill(); // clear the input box too
       
-      const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
+      const undoHint = usesCtrl ? 'Ctrl+Z to undo' : '⌘Z to undo';
       showToast(`Transcript cleared · ${undoHint}`, 3500);
     });
   }
 
   // ---- capture: mic (renderer side) — uses AudioWorklet (modern, off-main-thread) ----
-  let audioCtx = null, micStream = null, micWorklet = null;
+  let audioCtx = null, micStream = null, micWorklet = null, micStarting = false;
   async function startMic() {
-    if (micStream) return;
+    // getUserMedia is async, so `if (micStream) return` alone loses the race
+    // when two callers arrive back-to-back — that double-captured the mic.
+    if (micStream || micStarting) return;
+    micStarting = true;
     try {
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -665,12 +676,16 @@
       } else if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
         showStatus(isWindows
           ? 'Microphone permission was denied. Settings → Privacy & security → Microphone → allow cue, then try again.'
-          : 'Microphone permission was denied. System Settings → Privacy & Security → Microphone → allow cue, then try again.');
+          : isMac
+            ? 'Microphone permission was denied. System Settings → Privacy & Security → Microphone → allow cue, then try again.'
+            : 'Microphone permission was denied. Allow microphone access for cue in your system sound/privacy settings, then try again.');
       } else if (name === 'NotReadableError' || name === 'TrackStartError') {
         showStatus('The microphone could not be started — another application may be using it exclusively. Close other apps using the mic and try again.');
       } else {
         showStatus('Microphone capture could not be started. Check your mic permissions and try again.');
       }
+    } finally {
+      micStarting = false;
     }
   }
   function stopMic() {
@@ -688,27 +703,30 @@
   }
 
   // ---- capture: system/meeting audio (getDisplayMedia loopback, in cue's process) ----
+  // On Linux this whole path is handled by MAIN (parec on the PipeWire/PulseAudio
+  // monitor source — see src/linux-audio.js): Chromium neither implements
+  // loopback nor lists monitor devices there, so the renderer has nothing to do.
   let sysStream = null, sysCtx = null, sysWorklet = null, sysStarting = false;
   async function startSystemAudio() {
+    if (isLinux) return; // main records the monitor source itself
     // Called both from the stop-btn click (fresh user gesture for getDisplayMedia) and from the
     // capture:state handler. getDisplayMedia is async, so `if (sysStream) return` alone loses the
     // race and can open a second loopback stream that is then orphaned.
     if (sysStream || sysStarting) return;
     sysStarting = true;
-    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
-      cue.log('system audio unavailable: getDisplayMedia not supported');
-      showStatus('Meeting audio capture is not available on this device build.');
-      return;
-    }
     try {
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+        cue.log('system audio unavailable: getDisplayMedia not supported');
+        showStatus('Meeting audio capture is not available on this device build.');
+        return;
+      }
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-
       stream.getVideoTracks().forEach((t) => t.stop()); // we only want the audio
       const tracks = stream.getAudioTracks();
       if (!tracks.length) {
         cue.log('system audio: no loopback track on this platform');
         stream.getTracks().forEach((t) => t.stop());
-        showStatus(cue.platform === 'win32'
+        showStatus(isWindows
           ? 'No system-audio loopback track detected. Make sure "Share audio" is checked in the screen share dialog, and that your audio device is not in exclusive mode.'
           : 'No system-audio loopback track detected. Meeting audio needs macOS 14.4+ — your screen and microphone still work.');
         return;
@@ -953,8 +971,6 @@
       }
       // Don't auto-close sidebar — let user keep it open if they want
     }
-    updateSttStatus({ active, streaming });
-    if (active) { startMic(); } else { stopMic(); stopSystemAudio(); }
     if (active && mode === 'local') {
       sttState = 'local';
       const label = document.getElementById('stt-status');
@@ -1164,6 +1180,17 @@
   }
   const aiRulesEl = document.getElementById('ai-rules');
   if (aiRulesEl) aiRulesEl.addEventListener('input', updateAiRulesCounter);
+  // The prep chips (Resume/JD/Stories/Salary) show whether each field is filled;
+  // clicking one jumps to the Settings tab that owns it, so they double as
+  // shortcuts instead of dead labels.
+  const PREP_TAB = { resume: 'profile', jd: 'profile', stories: 'prep', salary: 'qa' };
+  document.querySelectorAll('#prep-status .prep-item').forEach((el) => {
+    el.addEventListener('click', () => {
+      openSettings();
+      const tab = document.querySelector(`.s-tab[data-tab="${PREP_TAB[el.dataset.field]}"]`);
+      if (tab) tab.click();
+    });
+  });
   function updatePrepStatus() {
     if (!settings) return;
     const fields = {
@@ -1177,8 +1204,8 @@
       el.classList.toggle('loaded', loaded);
       el.classList.toggle('missing', !loaded);
       el.title = loaded
-        ? el.textContent.trim() + ' loaded'
-        : el.textContent.trim() + ' not set — add in Settings';
+        ? el.textContent.trim() + ' loaded — click to edit'
+        : el.textContent.trim() + ' not set — click to add';
     });
   }
 
@@ -1249,8 +1276,49 @@
     });
   });
 
-  function updateCustomProviderFields() {
-    $('#custom-endpoint-settings').classList.toggle('hidden', settings.provider !== 'custom');
+  // Show only the selected provider's fields; everything else stays in the DOM
+  // (hidden inputs keep their values, so saveSettings reads all keys as before).
+  function updateProviderFields() {
+    document.querySelectorAll('.prov-group').forEach((group) => {
+      group.classList.toggle('hidden', group.dataset.prov !== settings.provider);
+    });
+    const azureHint = $('#azure-deploy-hint');
+    if (azureHint) azureHint.classList.toggle('hidden', settings.provider !== 'azure');
+  }
+
+  // OpenAI/Gemini keys double as transcription keys, so they appear on both the
+  // Keys tab (LLM) and the Audio tab (STT). Mirror edits live between the two
+  // inputs so whichever the user types into wins and saveSettings reads a single
+  // consistent value — otherwise the hidden twin's stale value could clobber it.
+  [['#key-openai', '#stt-key-openai'], ['#key-gemini', '#stt-key-gemini']].forEach(([aSel, bSel]) => {
+    const a = $(aSel), b = $(bSel);
+    if (!a || !b) return;
+    a.addEventListener('input', () => { b.value = a.value; });
+    b.addEventListener('input', () => { a.value = b.value; });
+  });
+
+  // Linux only: populate the meeting-audio source dropdown from PulseAudio/
+  // PipeWire (via main — Chromium hides monitor devices from enumerateDevices).
+  async function fillLinuxMonitorSelect() {
+    if (!isLinux) return;
+    const sel = $('#linux-monitor-device');
+    if (!sel) return;
+    $('#linux-audio-field').classList.remove('hidden');
+    let sources = [], defaultSink = '';
+    try { ({ sources, defaultSink } = await cue.linuxAudioSources()); } catch (_) { sources = []; }
+    sel.innerHTML = '';
+    const auto = document.createElement('option');
+    auto.value = '';
+    auto.textContent = 'Auto (monitor of your default output)';
+    sel.appendChild(auto);
+    (sources || []).filter((s) => s.monitor).forEach((s) => {
+      const o = document.createElement('option');
+      o.value = s.name;
+      o.textContent = s.name === defaultSink + '.monitor' ? s.name + ' (default)' : s.name;
+      sel.appendChild(o);
+    });
+    sel.value = settings.linuxMonitorSource || '';
+    if (sel.value !== (settings.linuxMonitorSource || '')) sel.value = ''; // stored source gone
   }
 
   function fillSettings() {
@@ -1260,9 +1328,12 @@
     $('#key-anthropic').value = settings.apiKeys.anthropic || '';
     $('#key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-deepgram').value = settings.apiKeys.deepgram || '';
+    // STT-tab twins of the dual-use keys (kept in sync by the mirror listeners).
+    $('#stt-key-openai').value = settings.apiKeys.openai || '';
+    $('#stt-key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-custom').value = settings.apiKeys.custom || '';
     $('#base-url').value = settings.baseUrl || '';
-    updateCustomProviderFields();
+    updateProviderFields();
     $('#key-ollama').value = settings.apiKeys.ollama || '';
     $('#key-groq').value = settings.apiKeys.groq || '';
     $('#key-minimax').value = settings.apiKeys.minimax || '';
@@ -1280,6 +1351,7 @@
     const localWhisper = settings.localWhisper || { modelId: 'base.en', language: 'auto', threads: 0 };
     $('#whisper-language').value = localWhisper.language || 'auto';
     $('#whisper-threads').value = Number(localWhisper.threads) || 0;
+    void fillLinuxMonitorSelect();
     // Profile tab
     $('#resume-text').value = settings.resumeText || '';
     $('#job-description').value = settings.jobDescription || '';
@@ -1370,7 +1442,7 @@
   document.querySelectorAll('#provider-seg button').forEach((b) => b.addEventListener('click', () => {
     settings.provider = b.dataset.provider;
     document.querySelectorAll('#provider-seg button').forEach((x) => x.classList.toggle('on', x === b));
-    updateCustomProviderFields();
+    updateProviderFields();
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     $('#s-status').textContent = statusText();
@@ -1550,6 +1622,7 @@
     settings.localWhisper.modelId = $('#whisper-model').value || settings.localWhisper.modelId || 'base.en';
     settings.localWhisper.language = $('#whisper-language').value || 'auto';
     settings.localWhisper.threads = Math.max(0, Math.min(64, Number.parseInt($('#whisper-threads').value, 10) || 0));
+    if (isLinux) settings.linuxMonitorSource = $('#linux-monitor-device').value || '';
     // Profile
     settings.resumeText = $('#resume-text').value.trim();
     settings.jobDescription = $('#job-description').value.trim();
@@ -1577,14 +1650,9 @@
     }
   }
 
-  // ---- example conversation (matches the reference screenshot) ------------
+  // Start with a clean panel — no canned example conversation.
   function showExample() {
     clearMessages();
-    addUserBubble('What should I say?');
-    const ai = document.createElement('div');
-    ai.className = 'ai-text';
-    ai.textContent = '“A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.”';
-    messages.appendChild(ai);
   }
 
   // ---- global keys -------------------------------------------------------
@@ -1596,12 +1664,57 @@
   // ---- click-through: only the UI blocks the mouse; empty gaps pass to your screen ----
   let ignoring = null;
   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
-  document.addEventListener('mousemove', (e) => {
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
-    setIgnore(!overUI);
-  });
-  setIgnore(true); // start fully click-through; hovering the panel re-enables it
+  function overUI(x, y) {
+    const el = document.elementFromPoint(x, y);
+    return !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
+  }
+  if (isLinux) {
+    // setIgnoreMouseEvents can't work here: {forward:true} is mac/win-only, so an
+    // ignored window gets no mouse events, and cursor polling goes stale under
+    // Wayland. Instead the window stays interactive and is resized to hug the
+    // visible UI, so the empty gaps aren't part of the window in the first place.
+    const measureFit = () => {
+      const scrimOpen = ['#settings-scrim', '#onboard-scrim', '#consent-scrim'].some((s) => {
+        const el = $(s);
+        return el && !el.classList.contains('hidden');
+      });
+      if (scrimOpen) return -1; // full overlay height while a modal is up
+      let bottom = 0;
+      ['#toolbar', '#panel-wrap', '#transcript-sidebar'].forEach((sel) => {
+        const el = $(sel);
+        if (!el || el.classList.contains('hidden')) return;
+        const r = el.getBoundingClientRect();
+        if (r.height > 0) bottom = Math.max(bottom, r.bottom);
+      });
+      return Math.ceil(bottom) + 24; // room for the panel shadow and toast
+    };
+    let lastFit = 0;
+    const pushFit = () => {
+      const h = measureFit();
+      if (h !== lastFit) { lastFit = h; cue.fitWindow(h); }
+    };
+    // Event-driven instead of polling: a ResizeObserver on the content elements
+    // fires exactly when the visible UI grows/shrinks (messages, collapse, the
+    // sidebar toggling), and a MutationObserver on the scrims catches modals
+    // opening/closing — those flip a class rather than resize, and must apply in
+    // the same frame or the settings sheet visibly jumps as it re-centers. The
+    // observed elements are content-sized, so resizing the window can't feed back
+    // into them (no observer loop).
+    const resizeObserver = new ResizeObserver(pushFit);
+    ['#toolbar', '#panel-wrap', '#panel', '#transcript-sidebar'].forEach((s) => {
+      const el = $(s);
+      if (el) resizeObserver.observe(el);
+    });
+    const scrimObserver = new MutationObserver(pushFit);
+    ['#settings-scrim', '#onboard-scrim', '#consent-scrim'].forEach((s) => {
+      const el = $(s);
+      if (el) scrimObserver.observe(el, { attributes: true, attributeFilter: ['class'] });
+    });
+    pushFit(); // initial fit
+  } else {
+    document.addEventListener('mousemove', (e) => setIgnore(!overUI(e.clientX, e.clientY)));
+    setIgnore(true); // start fully click-through; hovering the panel re-enables it
+  }
 
   // ---- assistant access request ------------------------------------------
   // Shown here rather than as a native dialog because cue hides its dock icon:
@@ -1644,19 +1757,23 @@
   const obScrim = $('#onboard-scrim');
   const permissionHelp = isWindows
     ? 'cue needs permission to see and hear. Open Windows Privacy & security settings, allow <strong>Microphone</strong> and <strong>Screen recording</strong> for cue, then come back here.'
-    : 'cue needs two macOS permissions. Click each button, turn <strong>cue</strong> ON in the window that opens, then come back here.';
+    : isLinux
+      ? 'Linux has no permission panel to visit — the microphone, screen, and meeting audio work through PipeWire/PulseAudio and your desktop\'s screenshot tool automatically. Nothing to grant.'
+      : 'cue needs two macOS permissions. Click each button, turn <strong>cue</strong> ON in the window that opens, then come back here.';
   const permissionButtons = isWindows
     ? [
         { label: 'Open Microphone settings', action: () => cue.openPane('ms-settings:privacy-microphone') },
         { label: 'Open Screen recording settings', action: () => cue.openPane('ms-settings:privacy-screenrecorder') }
       ]
-    : [
+    : isLinux
+      ? []
+      : [
         { label: 'Open Microphone settings', action: () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone') },
         { label: 'Open Screen Recording settings', action: () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture') }
       ];
-  const assistShortcut = isWindows ? '<span class="kbd">Ctrl</span> <span class="kbd">↵</span>' : '<span class="kbd">⌘</span> <span class="kbd">↵</span>';
-  const solveShortcut = isWindows ? '<span class="kbd">Ctrl</span> <span class="kbd">H</span>' : '<span class="kbd">⌘</span> <span class="kbd">H</span>';
-  const quitShortcut = isWindows ? '<span class="kbd">Ctrl</span><span class="kbd">⇧</span><span class="kbd">X</span>' : '<span class="kbd">⌘</span><span class="kbd">⇧</span><span class="kbd">X</span>';
+  const assistShortcut = usesCtrl ? '<span class="kbd">Ctrl</span> <span class="kbd">↵</span>' : '<span class="kbd">⌘</span> <span class="kbd">↵</span>';
+  const solveShortcut = usesCtrl ? '<span class="kbd">Ctrl</span> <span class="kbd">H</span>' : '<span class="kbd">⌘</span> <span class="kbd">H</span>';
+  const quitShortcut = usesCtrl ? '<span class="kbd">Ctrl</span><span class="kbd">⇧</span><span class="kbd">X</span>' : '<span class="kbd">⌘</span><span class="kbd">⇧</span><span class="kbd">X</span>';
   const OB_STEPS = [
     {
       icon: '👋',
@@ -1675,11 +1792,17 @@
       body: 'cue uses <strong>your own</strong> API key — pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, <span class="hl">Google Gemini</span>, or <span class="hl">Azure AI Foundry</span>. Get a key from your provider, then paste it into cue\'s Settings.<br><br><strong>Tip:</strong> For the <em>best</em> real-time listening, add a <span class="hl">Deepgram</span> key (lowest latency streaming transcription). Otherwise, an OpenAI key enables streaming via the Realtime API, and Gemini/Whisper work as batch fallbacks.',
       buttons: [{ label: 'Open cue Settings', action: () => { finishOnboard(); openSettings(); } }]
     },
-    {
-      icon: '🫥',
-      title: 'Stay hidden in Zoom',
-      body: 'cue is hidden from most screen shares automatically (Google Meet, Teams, QuickTime — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals cue.'
-    },
+    isLinux
+      ? {
+          icon: '👁️',
+          title: 'Screen-share visibility on Linux',
+          body: 'Heads up: Linux has no API to hide a window from screen shares, so <strong>cue is visible if you share your whole screen</strong>.<br><br>To keep cue private in a call, share a <strong>specific window or tab</strong> instead of the entire screen, or keep cue on a second monitor.'
+        }
+      : {
+          icon: '🫥',
+          title: 'Stay hidden in Zoom',
+          body: 'cue is hidden from most screen shares automatically (Google Meet, Teams, QuickTime — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals cue.'
+        },
     {
       icon: '✨',
       title: 'You’re all set',
@@ -1718,8 +1841,8 @@
     // R4: shortcut hints
     const sayHintEl = document.getElementById('say-shortcut-hint');
     const assistHintEl = document.getElementById('assist-shortcut-hint');
-    if (sayHintEl) sayHintEl.textContent = isWindows ? 'Ctrl+Shift+↵' : '⌘⇧↵';
-    if (assistHintEl) assistHintEl.textContent = isWindows ? 'Ctrl+↵' : '⌘↵';
+    if (sayHintEl) sayHintEl.textContent = usesCtrl ? 'Ctrl+Shift+↵' : '⌘⇧↵';
+    if (assistHintEl) assistHintEl.textContent = usesCtrl ? 'Ctrl+↵' : '⌘↵';
 
     // R5: prep status
     updatePrepStatus();
@@ -1736,6 +1859,19 @@
       ob.body = 'cue needs microphone permission to hear you. Click the button below to open Windows microphone settings and allow cue.<br><br><strong>Screen capture works automatically on Windows 10</strong> — no additional permission needed.<ul><li><strong>Microphone</strong> — to hear you</li><li><strong>Screen recording</strong> — works automatically on Windows 10</li></ul>';
     }
 
+    // Where the compositor supports it (KDE Plasma 6.6+ or Hyprland 0.50+ on
+    // Wayland), cue really is hidden from screen shares — upgrade the onboarding
+    // step from the honest "visible" default to the "you're hidden" message.
+    if (isLinux && platformInfo.linuxCaptureHidden) {
+      const via = platformInfo.linuxCaptureCompositor === 'hyprland' ? 'Hyprland' : 'KWin';
+      const visStep = OB_STEPS.find((s) => s.title === 'Screen-share visibility on Linux');
+      if (visStep) {
+        visStep.icon = '🫥';
+        visStep.title = 'Hidden from screen shares';
+        visStep.body = `Good news: on this Wayland session, <strong>cue is hidden from screen recordings</strong> — ${via} excludes it from every capture (Meet, Zoom, OBS, screenshots).<br><br>It works while cue is running. As always, a phone camera pointed at your screen can still see it.`;
+      }
+    }
+
     smartBtn.classList.toggle('on', !!settings.smart);
     showExample();
     syncPlaceholder();
@@ -1743,8 +1879,10 @@
     updateSendButtonState(); // Initialize send button state
 
     // Fix placeholder shortcut hint to match platform
-    if (isWindows) {
+    if (usesCtrl) {
       placeholder.innerHTML = 'Ask about your screen or conversation, or <span class="keycap">Ctrl</span><span class="keycap">⏎</span> for Assist';
+      const quitBtn = $('#quit-btn');
+      if (quitBtn) quitBtn.title = 'Quit cue (Ctrl+Shift+X)';
     }
 
     const st = await cue.captureState();

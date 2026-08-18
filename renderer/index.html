@@ -116,7 +116,7 @@
       <!-- Tab: Keys -->
       <div class="s-body s-tab-pane" data-pane="keys">
         <label class="s-label">Provider</label>
-        <div class="s-seg" id="provider-seg">
+        <div class="s-seg s-seg-wrap" id="provider-seg">
           <button data-provider="openai">OpenAI</button>
           <button data-provider="anthropic">Anthropic</button>
           <button data-provider="gemini">Gemini</button>
@@ -127,35 +127,48 @@
           <button data-provider="azure">Azure AI</button>
         </div>
 
-        <label class="s-label">API keys &amp; URLs <span class="s-hint">stored locally · never sent to any server</span></label>
-        <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
-        <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
-        <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
-        <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
-
-        <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
-        <div class="s-seg" id="minimax-region-seg">
-          <button data-region="global_en">Global</button>
-          <button data-region="cn_zh">China</button>
+        <label class="s-label">API key <span class="s-hint">stored locally · never sent to any server</span></label>
+        <div class="prov-group" data-prov="openai">
+          <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
         </div>
-
-        <div id="custom-endpoint-settings" class="hidden">
-          <label class="s-label" for="base-url">Custom endpoint <span class="s-hint">OpenAI-compatible chat API</span></label>
-          <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
-          <div class="s-help">Your Custom key and LLM requests are sent to this URL. Speech-to-text continues to use Deepgram, OpenAI, or Gemini.</div>
+        <div class="prov-group hidden" data-prov="anthropic">
+          <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
         </div>
-        <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
-        <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
-        <div class="s-field"><span>Azure AI Foundry</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
-
-        <label class="s-label">Azure endpoint <span class="s-hint">Azure OpenAI: https://&lt;resource&gt;.openai.azure.com/openai · AI Foundry: https://&lt;host&gt;.cognitiveservices.azure.com (cue adds /openai/v1)</span></label>
-        <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
+        <div class="prov-group hidden" data-prov="gemini">
+          <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
+        </div>
+        <div class="prov-group hidden" data-prov="custom">
+          <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
+          <div id="custom-endpoint-settings">
+            <label class="s-label" for="base-url">Custom endpoint <span class="s-hint">OpenAI-compatible chat API</span></label>
+            <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
+            <div class="s-help">Your Custom key and LLM requests are sent to this URL. Speech-to-text continues to use Deepgram, OpenAI, or Gemini.</div>
+          </div>
+        </div>
+        <div class="prov-group hidden" data-prov="ollama">
+          <div class="s-field"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
+        </div>
+        <div class="prov-group hidden" data-prov="groq">
+          <div class="s-field"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
+        </div>
+        <div class="prov-group hidden" data-prov="minimax">
+          <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
+          <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
+          <div class="s-seg" id="minimax-region-seg">
+            <button data-region="global_en">Global</button>
+            <button data-region="cn_zh">China</button>
+          </div>
+        </div>
+        <div class="prov-group hidden" data-prov="azure">
+          <div class="s-field"><span>Azure AI Foundry</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
+          <label class="s-label">Azure endpoint <span class="s-hint">Azure OpenAI: https://&lt;resource&gt;.openai.azure.com/openai · AI Foundry: https://&lt;host&gt;.cognitiveservices.azure.com (cue adds /openai/v1)</span></label>
+          <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
+        </div>
 
         <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
         <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
         <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
+        <div id="azure-deploy-hint" class="s-help hidden">For Azure, <strong>Fast/Smart must be your Azure <em>deployment</em> name</strong> (what you named the model in the Azure portal), not the base model id — otherwise Azure returns 404.</div>
 
         <label class="s-label">Assistant access <span class="s-hint">programs allowed to see what cue is doing</span></label>
         <div class="s-callers" id="applink-callers"></div>
@@ -174,6 +187,18 @@
           <button data-stt-provider="gemini">Gemini</button>
         </div>
         <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider.</div>
+
+        <label class="s-label">Transcription keys <span class="s-hint">used by the cloud modes above — Local needs none</span></label>
+        <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-… (lowest latency)" autocomplete="off" /></div>
+        <div class="s-field"><span>OpenAI</span><input id="stt-key-openai" type="password" placeholder="sk-… (same key as OpenAI provider)" autocomplete="off" /></div>
+        <div class="s-field"><span>Gemini</span><input id="stt-key-gemini" type="password" placeholder="AIza… (same key as Gemini provider)" autocomplete="off" /></div>
+        <div class="s-note">OpenAI and Gemini here are the same keys as on the Keys tab — set them in either place. <strong>Auto</strong> uses whichever of these you've filled in (Deepgram &gt; OpenAI &gt; Gemini).</div>
+
+        <div id="linux-audio-field" class="hidden">
+          <label class="s-label" for="linux-monitor-device">Meeting audio source <span class="s-hint">the PipeWire/PulseAudio input that carries system audio</span></label>
+          <select id="linux-monitor-device" class="s-select"></select>
+          <div class="s-note">Auto records the monitor of your default output, which mirrors your speakers. Change it only if meeting audio plays through a different output device.</div>
+        </div>
 
         <div class="whisper-card">
           <div class="whisper-runtime-row">
