@@ -718,13 +718,20 @@
   const PANEL_MIN_W = 360, PANEL_MAX_W = 1100, PANEL_MIN_H = 160, PANEL_MAX_H = 900;
   let resizeMode = false;
   resizeBtn.innerHTML = icon('resize', { size: 15 });
+  // Height: the messages area gets BOTH a min- and max-height so the panel is
+  // truly the chosen height - taller drags grow it even when the chat is empty
+  // (previously only max-height was set, so an empty chat never grew and the
+  // resize looked horizontal-only). ~220px covers action row + composer + chips.
+  const PANEL_CHROME_H = 220;
   function applyPanelSize(w, h) {
     if (!panelWrap) return;
     if (w) panelWrap.style.width = Math.round(w) + 'px';
-    // Height governs the scrollable messages area so the panel doesn't just
-    // grow with content past what the user chose.
     const msgs = $('#messages');
-    if (h && msgs) msgs.style.maxHeight = Math.max(80, Math.round(h) - 220) + 'px';
+    if (h && msgs) {
+      const mh = Math.max(80, Math.round(h) - PANEL_CHROME_H);
+      msgs.style.maxHeight = mh + 'px';
+      msgs.style.minHeight = mh + 'px';
+    }
   }
   function setResizeMode(on) {
     resizeMode = !!on;
@@ -735,25 +742,30 @@
       : 'Resize mode — click to reshape the panel, click again to lock';
   }
   resizeBtn.addEventListener('click', () => setResizeMode(!resizeMode));
-  if (grip && panelWrap) {
+  if (panelWrap) {
+    // Three handles: right edge (width), bottom edge (height), corner (both).
     let rs = null;
-    grip.addEventListener('mousedown', (e) => {
+    const beginResize = (e, mode) => {
       if (!resizeMode || e.button !== 0) return;
       e.preventDefault(); e.stopPropagation();
       const r = panelWrap.getBoundingClientRect();
-      rs = { sx: e.screenX, sy: e.screenY, w: r.width, h: r.height };
+      rs = { sx: e.screenX, sy: e.screenY, w: r.width, h: r.height, mode };
       document.body.classList.add('resizing');
-    });
+      document.body.dataset.resizeCursor = mode === 'w' ? 'ew-resize' : mode === 'h' ? 'ns-resize' : 'nwse-resize';
+    };
+    const handles = [['#resize-grip', 'wh'], ['#resize-edge-r', 'w'], ['#resize-edge-b', 'h']];
+    handles.forEach(([sel, mode]) => { const el = $(sel); if (el) el.addEventListener('mousedown', (e) => beginResize(e, mode)); });
     window.addEventListener('mousemove', (e) => {
       if (!rs) return;
-      const w = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, rs.w + (e.screenX - rs.sx)));
-      const h = Math.min(PANEL_MAX_H, Math.max(PANEL_MIN_H, rs.h + (e.screenY - rs.sy)));
-      applyPanelSize(w, h);
+      const w = rs.mode === 'h' ? rs.w : Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, rs.w + (e.screenX - rs.sx)));
+      const h = rs.mode === 'w' ? rs.h : Math.min(PANEL_MAX_H, Math.max(PANEL_MIN_H, rs.h + (e.screenY - rs.sy)));
+      applyPanelSize(rs.mode === 'h' ? 0 : w, rs.mode === 'w' ? 0 : h);
     });
     const endResize = async () => {
       if (!rs) return;
       rs = null;
       document.body.classList.remove('resizing');
+      delete document.body.dataset.resizeCursor;
       const r = panelWrap.getBoundingClientRect();
       settings.panelWidth = Math.round(r.width);
       settings.panelHeight = Math.round(r.height);

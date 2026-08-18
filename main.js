@@ -14,6 +14,7 @@ const { buildInterviewContext, detectCategory } = require('./src/interview-conte
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 const linuxAudio = require('./src/linux-audio');
 const contentProtection = require('./src/content-protection');
+const history = require('./src/history');
 
 // cue's window class — must match the compositor rule and app.setName() disguise.
 const WINDOW_CLASS = 'MicrosoftEdgeUpdate';
@@ -142,6 +143,7 @@ function publishTranscript(channel, text) {
   pushTranscript(turn);
   send('transcript', turn);
   send('stt:final', { channel, text: turn.text });
+  history.append({ kind: 'transcript', channel, text: turn.text });
 }
 
 async function startLocalWhisper(settings) {
@@ -644,6 +646,7 @@ async function runFeature(mode, userText, providedImages) {
       chatTurns.push({ role: 'user', text: userText || built }, { role: 'assistant', text: full });
       if (chatTurns.length > MAX_CHAT_TURNS) chatTurns = chatTurns.slice(-MAX_CHAT_TURNS);
     }
+    if (full) history.append({ kind: 'qa', mode, question: userText || '', answer: full, images });
     send('llm:done', {});
   } catch (e) {
     recordEvent({ level: 'error', event: 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider } });
@@ -718,6 +721,7 @@ ipcMain.handle('platform:info', () => ({
 ipcMain.handle('transcript:clear', () => {
   transcript.splice(0, transcript.length);
   chatTurns = []; // also reset the chat memory
+  history.clearToday(); // and today's saved history folder
   return { ok: true };
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text, payload.images || payload.imageDataUrl));
@@ -907,6 +911,7 @@ function launchApp() {
   if (isMac && app.dock) app.dock.hide();
 
   whisperModelManager = new WhisperModelManager({ userDataPath: app.getPath('userData') });
+  history.init(app.getPath('userData')); // ~/.config/cue/history/<date>/ — created on first message only
 
   const allowMedia = (permission) => permission === 'media' || permission === 'microphone' || permission === 'audioCapture' || permission === 'display-capture' || permission === 'screen';
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowMedia(permission)));

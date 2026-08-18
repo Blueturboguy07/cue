@@ -928,8 +928,20 @@ body.on-linux #action-row .shortcut-hint { margin-left: 2px; }
   border-radius: 0 0 6px 0; display: none; z-index: 5; pointer-events: auto;
 }
 body.resize-mode #resize-grip { display: block; cursor: nwse-resize !important; }
+/* Edge handles: thin strips along the right and bottom edges of the panel so
+   width and height can each be dragged on their own; hidden unless resize mode. */
+.resize-edge { position: absolute; display: none; z-index: 5; pointer-events: auto; }
+#resize-edge-r { top: 12px; bottom: 28px; right: -3px; width: 10px; }
+#resize-edge-b { left: 12px; right: 28px; bottom: -3px; height: 10px; }
+body.resize-mode .resize-edge { display: block; }
+body.resize-mode #resize-edge-r { cursor: ew-resize !important; }
+body.resize-mode #resize-edge-b { cursor: ns-resize !important; }
+body.resize-mode #resize-edge-r:hover, body.resize-mode #resize-edge-b:hover { background: rgba(60,131,245,0.35); border-radius: 4px; }
 body.resize-mode #panel { outline: 1px dashed rgba(60,131,245,0.55); outline-offset: -1px; }
-body.resizing, body.resizing * { cursor: nwse-resize !important; }
+/* while dragging, hold the matching cursor everywhere so it doesn't flicker */
+body.resizing[data-resize-cursor="ew-resize"], body.resizing[data-resize-cursor="ew-resize"] * { cursor: ew-resize !important; }
+body.resizing[data-resize-cursor="ns-resize"], body.resizing[data-resize-cursor="ns-resize"] * { cursor: ns-resize !important; }
+body.resizing[data-resize-cursor="nwse-resize"], body.resizing[data-resize-cursor="nwse-resize"] * { cursor: nwse-resize !important; }
 
 .shot-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 2px 0 8px; }
 .shot-chip { position: relative; display: inline-block; }
