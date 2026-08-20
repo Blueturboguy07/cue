@@ -776,10 +776,7 @@ function launchApp() {
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
       if (!sources.length) return callback();
-      const request = { video: sources[0] };
-      if (isWindows) request.audio = true;
-      else request.audio = 'loopback';
-      callback(request);
+      callback({ video: sources[0], audio: 'loopback' });
     }).catch(() => callback());
   }, { useSystemPicker: false });
 
