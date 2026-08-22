@@ -16,7 +16,9 @@ const DEAD_MODEL_IDS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'
 
 const FILES_THAT_CALL_GEMINI = [
   'src/llm.js',
-  'src/store.js',
+  // store.js delegates its defaults to the durable store core, where the
+  // DEFAULTS block (including the Gemini models) now lives.
+  'src/settings-store-core.js',
   'src/stt.js',
   'src/stt-streaming.js'
 ];
@@ -35,10 +37,10 @@ for (const relPath of FILES_THAT_CALL_GEMINI) {
   });
 }
 
-test('store.js default Gemini models match the shared current default', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src/store.js'), 'utf8');
+test('default Gemini models match the shared current default', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src/settings-store-core.js'), 'utf8');
   const match = /gemini:\s*\{\s*fast:\s*'([^']+)',\s*smart:\s*'([^']+)'/.exec(source);
-  assert.ok(match, 'could not find the gemini default models block in store.js');
+  assert.ok(match, 'could not find the gemini default models block in settings-store-core.js');
   assert.equal(match[1], CURRENT_GEMINI_DEFAULT);
   assert.equal(match[2], CURRENT_GEMINI_DEFAULT);
 });
