@@ -1,9 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 const platform = process.platform;
+const sessionType = process.env.XDG_SESSION_TYPE || '';
 
 contextBridge.exposeInMainWorld('cue', {
   platform,
   settingsGet: () => ipcRenderer.invoke('settings:get'),
+  sessionType,
   settingsSet: (patch) => ipcRenderer.invoke('settings:set', patch),
   whisperModels: () => ipcRenderer.invoke('whisper:models'),
   whisperModelDownload: (modelId) => ipcRenderer.invoke('whisper:model-download', modelId),
@@ -13,6 +15,7 @@ contextBridge.exposeInMainWorld('cue', {
   platformInfo: () => ipcRenderer.invoke('platform:info'),
   ask: (payload) => ipcRenderer.send('ask', payload),
   captureToggle: () => ipcRenderer.invoke('capture:toggle').catch((err) => {
+  systemAudioPrepare: () => ipcRenderer.invoke('system-audio:prepare'),
     console.error('[cue] captureToggle error', err);
     return false;
   }),
@@ -23,6 +26,7 @@ contextBridge.exposeInMainWorld('cue', {
   clearTranscript: () => ipcRenderer.invoke('transcript:clear'),
   openPane: (url) => ipcRenderer.send('open-pane', url),
   appLinkState: () => ipcRenderer.invoke('applink:state'),
+  reportUiRects: (rects) => ipcRenderer.send('mouse:rects', rects),
   appLinkRevoke: (callerId) => ipcRenderer.invoke('applink:revoke', callerId),
   appLinkConsentRespond: (id, allowed) => ipcRenderer.send('applink:consent-response', { id, allowed }),
   pickProfileDocument: () => ipcRenderer.invoke('profile:pickDocument'),

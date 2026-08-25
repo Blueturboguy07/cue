@@ -35,16 +35,32 @@ It's a copilot for **live meetings** ("what do I say to that?") and **coding pro
 
 ### Platform support
 
-|  | macOS | Windows 11 / 10 2004+ |
-|---|---|---|
-| Screen + coding help | ✅ | ✅ |
-| Your mic (the **You** channel) | ✅ | ✅ |
-| Meeting audio (the **Them** channel) | ✅ macOS 14.4+ | ✅ |
-| Hidden from screen shares | ⚠️ best-effort, weaker on macOS 15.4+ | ✅ `WDA_EXCLUDEFROMCAPTURE` |
-| Permissions to grant | Microphone **and** Screen Recording | Microphone only |
+|  | macOS | Windows 11 / 10 2004+ | Linux |
+|---|---|---|---|
+| Screen + coding help | ✅ | ✅ | ✅ Verified KDE/Wayland, Untested GNOME/X11/PulseAudio |
+| Your mic (the **You** channel) | ✅ | ✅ | ✅ |
+| Meeting audio (the **Them** channel) | ✅ macOS 14.4+ | ✅ | ⚠️ Confirmed non-functional under automated/headless invocation (RMS flat regardless of source — no signal captured) — requires interactive xdg-desktop-portal audio-node selection; not yet verified with a human manually granting that via the portal picker, Untested GNOME/X11/PulseAudio |
+| Global shortcuts | ✅ | ✅ | ⚠️ Verified KDE/Wayland, Untested GNOME/X11/PulseAudio |
+| Hidden from screen shares | ⚠️ best-effort, weaker on macOS 15.4+ | ✅ `WDA_EXCLUDEFROMCAPTURE` | ✅ KDE Plasma 6.6+ via KWin script (see below) · ❌ GNOME/X11 |
+| Permissions to grant | Microphone **and** Screen Recording | Microphone only | Screencast portal / Audio |
 
 > [!NOTE]
 > **Meeting audio needs macOS 14.4+.** Capturing the *other* person — what powers **What should I say?**, **Follow-up questions**, and **Recap** — uses system-audio loopback. On Windows that works out of the box. On macOS it relies on ScreenCaptureKit, which cue enables through Chromium's `MacLoopbackAudioForScreenShare` and `MacSckSystemAudioLoopbackOverride` switches; on older macOS the *Them* channel stays silent while your screen and the **You** channel keep working.
+
+> [!NOTE]
+> **Hiding from screen shares on Linux.** Electron's `setContentProtection` is a no-op on Linux, but KWin (KDE Plasma 6.6+) exposes per-window `excludeFromCapture`. A tiny KWin script applies it to cue's overlay window automatically. One-time install:
+>
+> ```bash
+> mkdir -p ~/.local/share/kwin/scripts/cue-hide-screencast/contents/code
+> # main.js: set excludeFromCapture=true on every window whose resourceClass
+> # is the overlay's app_id ("MicrosoftEdgeUpdate" — see app.setName in main.js),
+> # for windows already open and via workspace.windowAdded
+> # metadata.json: {"KPlugin":{"Id":"cue-hide-screencast",...},"KPackageStructure":"KWin/Script"}
+> kwriteconfig6 --file kwinrc --group Plugins --key cue-hide-screencastEnabled true
+> qdbus6 org.kde.KWin /KWin reconfigure   # or log out/in
+> ```
+>
+> Verify: share your screen — the overlay should be invisible to the other side while staying on your desktop. GNOME and X11 sessions have no equivalent.
 
 ---
 

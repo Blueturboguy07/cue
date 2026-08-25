@@ -25,6 +25,7 @@ const { WhisperModelManager } = require('./src/whisper-model-manager');
 const { requireWhisperModel } = require('./src/whisper-model-catalog');
 const { locateWhisperRuntime } = require('./src/whisper-runtime');
 const { LocalWhisperTranscriber } = require('./src/local-whisper-transcriber');
+const { ensureLoopbackSource, unloadLoopbackSource } = require('./src/linux-loopback');
 
 let win = null;
 // Which global shortcuts cue actually holds. `globalShortcut.register` returns
@@ -34,6 +35,7 @@ let win = null;
 const shortcutState = { assist: false, say: false, leetcode: false, quit: false };
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
 
 // -------- Windows version helpers --------
 // WDA_EXCLUDEFROMCAPTURE (setContentProtection) requires Windows 10 build 19041+.
@@ -44,7 +46,7 @@ function getWindowsBuild() {
   return parts[2] || 0; // third segment is the build number
 }
 const WIN_BUILD = getWindowsBuild();
-const WIN_SUPPORTS_CONTENT_PROTECTION = !isWindows || WIN_BUILD >= 19041;
+const WIN_SUPPORTS_CONTENT_PROTECTION = isWindows && WIN_BUILD >= 19041;
 
 let permWin = null;
 
@@ -226,20 +228,27 @@ function createWindow() {
 
   // Fix 2: Only call setContentProtection if the OS supports it.
   // On Windows, WDA_EXCLUDEFROMCAPTURE requires build 19041+ (Windows 10 May 2020 Update).
-  // On older builds we skip it silently to avoid a no-op and send a warning to the renderer.
+  // On macOS, NSWindowSharingNone is supported.
+  // On Linux, standard desktop/compositor APIs do not provide window capture exclusion.
   const shouldProtect = !process.env.CUE_NO_PROTECT;
   if (shouldProtect) {
-    if (WIN_SUPPORTS_CONTENT_PROTECTION) {
+    if (isMac || (isWindows && WIN_SUPPORTS_CONTENT_PROTECTION)) {
       win.setContentProtection(true);
-    } else {
+    } else if (isWindows) {
       // Will notify the renderer after it loads
       console.log(`[cue] Windows build ${WIN_BUILD} < 19041 — setContentProtection not supported. Window may appear in screen shares.`);
+    } else if (isLinux) {
+      console.log('[cue] Linux does not support window capture exclusion via standard APIs. Window will appear in screen shares.');
     }
   }
 
   win.setAlwaysOnTop(true, 'screen-saver', 1);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   if (isMac && typeof win.setHiddenInMissionControl === 'function') win.setHiddenInMissionControl(true);
+  if (isLinux && !isWaylandSession) {
+    startCursorHover(win);
+    win.on('closed', () => { clearInterval(cursorHoverTimer); cursorHoverTimer = null; });
+  }
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
@@ -259,10 +268,14 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     win.showInactive();
     win.setTitle('Microsoft Edge Update');
-    // Warn about missing content protection on old Windows builds
+    // Warn about missing content protection on old Windows builds and Linux
     if (isWindows && shouldProtect && !WIN_SUPPORTS_CONTENT_PROTECTION) {
       send('status', {
         message: `Heads up: your Windows version (build ${WIN_BUILD}) does not support screen-share hiding. Upgrade to Windows 10 build 19041+ or Windows 11 to enable invisibility in screen shares.`
+      });
+    } else if (isLinux && shouldProtect) {
+      send('status', {
+        message: 'Heads up: Linux does not support screen-share window hiding via standard desktop APIs. The cue window will be visible in screen shares.'
       });
     }
   });
@@ -517,7 +530,7 @@ async function runFeature(mode, userText) {
           ? 'Screen capture needs permission — grant Screen Recording to cue in System Settings.'
           : process.platform === 'win32'
             ? 'Screen capture failed. Make sure cue is not blocked by Windows privacy or security software, then try again.'
-            : 'Screen capture failed. Check your desktop capture permissions, then try again.';
+            : 'Screen capture failed. Check your X11 or Wayland screen capture permissions (xdg-desktop-portal / PipeWire), then try again.';
         send('status', { message });
       }
     }
@@ -616,13 +629,14 @@ ipcMain.handle('whisper:model-import', async (_event, modelId) => {
 ipcMain.handle('platform:info', () => ({
   platform: process.platform,
   winBuild: WIN_BUILD,
-  winSupportsContentProtection: WIN_SUPPORTS_CONTENT_PROTECTION
+  winSupportsContentProtection: isWindows ? WIN_SUPPORTS_CONTENT_PROTECTION : isMac
 }));
 ipcMain.handle('transcript:clear', () => {
   transcript.splice(0, transcript.length);
   return { ok: true };
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
+ipcMain.handle('system-audio:prepare', async () => (isLinux ? ensureLoopbackSource() : { ok: true }));
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
@@ -632,6 +646,31 @@ ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // -------- resume / job-description file import --------
 // The dialog runs in MAIN and is filtered to pdf/docx; the renderer never supplies a path.
 // The parsed text is RETURNED to the renderer, which drops it into the existing
+
+// Linux: { forward: true } mousemove forwarding is not implemented there, so the
+// renderer's hover-based re-enable never fires and the window stays click-through.
+// On X11 the renderer reports its interactive rectangles (CSS px == DIP here) and
+// the main process polls the cursor against them. On Wayland there is no global
+// cursor query either (getCursorScreenPoint returns stale coords), so the window
+// just stays interactive: gaps in it block clicks to windows below.
+const isWaylandSession = isLinux && (process.env.XDG_SESSION_TYPE === 'wayland' || !!process.env.WAYLAND_DISPLAY);
+let uiRects = [];
+let cursorHoverTimer = null;
+let cursorHoverInteractive = null;
+ipcMain.on('mouse:rects', (_e, rects) => { uiRects = Array.isArray(rects) ? rects : []; });
+function startCursorHover(win) {
+  cursorHoverTimer = setInterval(() => {
+    if (!win || win.isDestroyed()) return;
+    const cursor = screen.getCursorScreenPoint();
+    const b = win.getContentBounds();
+    const x = cursor.x - b.x, y = cursor.y - b.y;
+    const hit = uiRects.some((r) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h);
+    if (hit !== cursorHoverInteractive) {
+      cursorHoverInteractive = hit;
+      win.setIgnoreMouseEvents(!hit);
+    }
+  }, 30);
+}
 // #resume-text / #job-description textareas so settings keep a single source of truth.
 async function pickAndParseDocument() {
   const res = await dialog.showOpenDialog(win, {
@@ -777,7 +816,7 @@ function launchApp() {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
       if (!sources.length) return callback();
       const request = { video: sources[0] };
-      if (isWindows) request.audio = true;
+      if (isWindows || isLinux) request.audio = true;
       else request.audio = 'loopback';
       callback(request);
     }).catch(() => callback());
@@ -844,3 +883,4 @@ app.on('window-all-closed', (e) => {
   if (permWin) { e.preventDefault(); return; }
   app.quit();
 });
+  if (isLinux) unloadLoopbackSource();
