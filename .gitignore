@@ -27,5 +27,10 @@ test-resume.js
 # Kiro IDE internals — hide spec/steering from public repo
 .kiro/
 
+# Editor/agent config
+.claude/
+.github/
+.vscode/
+
 # Electron dist cache
 node_modules/electron/dist/electron.exe.bak
