@@ -3,6 +3,7 @@ const path = require('path');
 const os = require('os');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
+const { DEFAULTS: SHORTCUT_DEFAULTS, formatAccelerator } = require('./src/shortcuts');
 const { createSTT } = require('./src/stt');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM } = require('./src/llm');
@@ -615,6 +616,7 @@ ipcMain.handle('whisper:model-import', async (_event, modelId) => {
 });
 ipcMain.handle('platform:info', () => ({
   platform: process.platform,
+  quitAccelerator: formatAccelerator(SHORTCUT_DEFAULTS.quit, process.platform),
   winBuild: WIN_BUILD,
   winSupportsContentProtection: WIN_SUPPORTS_CONTENT_PROTECTION
 }));
@@ -652,7 +654,6 @@ ipcMain.handle('profile:pickDocument', async () => {
     return { canceled: false, error: (e && e.message) || String(e) };
   }
 });
-ipcMain.on('app:quit', () => app.quit());
 ipcMain.handle('applink:state', () => appLinkConsentState());
 ipcMain.handle('applink:revoke', (_e, callerId) => revokeAppLinkCaller(callerId));
 

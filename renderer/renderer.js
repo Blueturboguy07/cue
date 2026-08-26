@@ -1709,11 +1709,13 @@
   $('#ob-back').addEventListener('click', () => { if (obIndex > 0) { obIndex--; renderOnboard(); } });
   $('#ob-skip').addEventListener('click', finishOnboard);
   $('#logo-btn').addEventListener('click', showOnboard);
+  $('#quit-btn').addEventListener('click', () => cue.quit());
 
   // ---- boot --------------------------------------------------------------
   (async function boot() {
     settings = await cue.settingsGet();
     const platformInfo = await cue.platformInfo();
+    if (platformInfo.quitAccelerator) $('#quit-btn').title = 'Quit cue (' + platformInfo.quitAccelerator + ')';
 
     // R4: shortcut hints
     const sayHintEl = document.getElementById('say-shortcut-hint');

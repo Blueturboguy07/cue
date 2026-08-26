@@ -45,4 +45,16 @@ function isValid(accel) {
   return keys.length >= 1;
 }
 
-module.exports = { DEFAULTS, resolveShortcuts, findConflicts, isValid };
+// Render an accelerator the way the host platform writes it. macOS stacks bare
+// glyphs, everything else joins named keys with '+'.
+const MAC_GLYPHS = { CommandOrControl: '⌘', CmdOrCtrl: '⌘', Command: '⌘', Cmd: '⌘', Control: '⌃', Ctrl: '⌃', Shift: '⇧', Alt: '⌥', Option: '⌥' };
+const NAMED_KEYS = { CommandOrControl: 'Ctrl', CmdOrCtrl: 'Ctrl', Command: 'Ctrl', Cmd: 'Ctrl', Control: 'Ctrl', Option: 'Alt' };
+
+function formatAccelerator(accel, platform) {
+  if (!isValid(accel)) return '';
+  const parts = accel.split('+').map((p) => p.trim());
+  if (platform === 'darwin') return parts.map((p) => MAC_GLYPHS[p] || p).join('');
+  return parts.map((p) => NAMED_KEYS[p] || p).join('+');
+}
+
+module.exports = { DEFAULTS, resolveShortcuts, findConflicts, isValid, formatAccelerator };
