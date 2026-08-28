@@ -1222,16 +1222,25 @@
 
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
-  function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
-  async function closeSettings() {
-    if (await saveSettings()) scrim.classList.add('hidden');
-  }
   function openSettings() {
     fillSettings();
     scrim.classList.remove('hidden');
     refreshWhisperModels();
   }
-  function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
+  // Only hide after a successful save. A second closeSettings used to shadow
+  // this one and always dismiss the modal, so validation errors (and any
+  // settings:set throw) vanished with the panel — keys, models, and résumé
+  // looked saved and then came back empty on the next launch.
+  let closingSettings = false;
+  async function closeSettings() {
+    if (closingSettings) return;
+    closingSettings = true;
+    try {
+      if (await saveSettings()) scrim.classList.add('hidden');
+    } finally {
+      closingSettings = false;
+    }
+  }
   $('#more-btn').addEventListener('click', openSettings);
   $('#s-close').addEventListener('click', () => { void closeSettings(); });
   scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
@@ -1589,7 +1598,7 @@
 
   // ---- global keys -------------------------------------------------------
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !scrim.classList.contains('hidden')) closeSettings();
+    if (e.key === 'Escape' && !scrim.classList.contains('hidden')) void closeSettings();
     if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); }
   });
 
