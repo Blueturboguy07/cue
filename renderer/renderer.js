@@ -11,6 +11,7 @@
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
   $('#quit-btn').innerHTML = icon('x', { size: 14 });
+  $('#quit-btn').addEventListener('click', () => cue.quit());
   document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
   document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
   document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
