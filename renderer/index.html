@@ -124,6 +124,7 @@
           <button data-provider="ollama">Ollama</button>
           <button data-provider="groq">Groq</button>
           <button data-provider="minimax">MiniMax</button>
+          <button data-provider="qwen">Qwen</button>
           <button data-provider="azure">Azure AI</button>
         </div>
 
@@ -134,11 +135,18 @@
         <div class="s-field"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
         <div class="s-field"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
         <div class="s-field"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
+        <div class="s-field"><span>Qwen</span><input id="key-qwen" type="password" placeholder="sk-... (Alibaba Model Studio key)" autocomplete="off" /></div>
 
         <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
         <div class="s-seg" id="minimax-region-seg">
           <button data-region="global_en">Global</button>
           <button data-region="cn_zh">China</button>
+        </div>
+
+        <label class="s-label">Qwen region <span class="s-hint">Alibaba Model Studio keys are region-bound — an International key will 401 against China, and vice versa</span></label>
+        <div class="s-seg" id="qwen-region-seg">
+          <button data-qwen-region="intl">International</button>
+          <button data-qwen-region="cn">China</button>
         </div>
 
         <div id="custom-endpoint-settings" class="hidden">

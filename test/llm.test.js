@@ -153,6 +153,51 @@ test('falls back to the global endpoint for an unknown region', async () => {
   assert.equal(capturedClientOptions.baseURL, 'https://api.minimax.io/v1');
 });
 
+// ---- Qwen (Alibaba Cloud Model Studio / DashScope) ------------------------
+// Qwen is OpenAI-compatible and region-split like MiniMax, so these assert the
+// regional compatible-mode gateway rather than any new transport.
+
+function qwenSettings(overrides) {
+  return Object.assign({
+    provider: 'qwen',
+    smart: true,
+    apiKeys: { qwen: 'test-key' },
+    models: { qwen: { fast: 'qwen-vl-plus', smart: 'qwen-vl-max' } }
+  }, overrides || {});
+}
+
+test('selects the Qwen model for the active tier and reports readiness', () => {
+  const smart = createLLM(qwenSettings({ smart: true }));
+  assert.equal(smart.provider, 'qwen');
+  assert.equal(smart.model, 'qwen-vl-max');
+  assert.equal(smart.ready, true);
+
+  const fast = createLLM(qwenSettings({ smart: false }));
+  assert.equal(fast.model, 'qwen-vl-plus');
+});
+
+test('routes Qwen to the International compatible-mode endpoint by default', async () => {
+  capturedClientOptions = null;
+  const llm = createLLM(qwenSettings());
+  await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
+  assert.equal(capturedClientOptions.baseURL, 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1');
+  assert.equal(capturedClientOptions.apiKey, 'test-key');
+});
+
+test('routes Qwen to the China compatible-mode endpoint when that region is selected', async () => {
+  capturedClientOptions = null;
+  const llm = createLLM(qwenSettings({ qwenRegion: 'cn' }));
+  await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
+  assert.equal(capturedClientOptions.baseURL, 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+});
+
+test('falls back to the Qwen International endpoint for an unknown region', async () => {
+  capturedClientOptions = null;
+  const llm = createLLM(qwenSettings({ qwenRegion: 'unknown' }));
+  await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
+  assert.equal(capturedClientOptions.baseURL, 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1');
+});
+
 // ---- Gemini 404/429 error mapping ------------------------------------------
 // Reproduces the exact bug-report clusters: "Error: got status: 404 Not Found.
 // {"error":{"message":"exception parsing response","code":404,"status":"Not

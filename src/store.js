@@ -21,7 +21,8 @@ const DEFAULTS = {
   smart: false,
   baseUrl: '',
   minimaxRegion: 'global_en',
-  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '' , azure: '' },
+  qwenRegion: 'intl',
+  apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '' , qwen: '', azure: '' },
   azureEndpoint: '',
   // Tab 2: Profile
   resumeText: '',
@@ -53,6 +54,10 @@ const DEFAULTS = {
     ollama: { fast: 'llama3.2', smart: 'llama3.3' },
     groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' },
     minimax: { fast: 'MiniMax-M2.7', smart: 'MiniMax-M3' },
+    // Qwen vision models handle both text and screenshots, so they work for
+    // every cue mode out of the box. Swap in qwen-max / qwen-plus (text-only)
+    // for the strongest coding answers when the screen isn't needed.
+    qwen: { fast: 'qwen-vl-plus', smart: 'qwen-vl-max' },
     azure: { fast: 'gpt-4o-mini', smart: 'gpt-4o' }
   }
 };

@@ -121,6 +121,7 @@ cue uses **your own** API key, so it's free to run (you only pay your AI provide
 | **Anthropic (Claude)** | [console.anthropic.com](https://console.anthropic.com) | Great for screen & coding help. Claude has no speech-to-text, so add an OpenAI or Gemini key too if you want the listening features. |
 | **Google Gemini** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | One key does chat + transcription. |
 | **Azure AI Foundry** | [ai.azure.com](https://ai.azure.com) | Paste your **endpoint** plus your key in Settings. **Azure OpenAI:** `https://&lt;resource&gt;.openai.azure.com/openai` — **AI Foundry:** `https://&lt;host&gt;.cognitiveservices.azure.com` (cue appends `/openai/v1` itself). The **model** fields are your deployment names. No speech-to-text — add an OpenAI or Gemini key for listening. |
+| **Qwen (Alibaba)** | [bailian.console.aliyun.com](https://bailian.console.aliyun.com) | Alibaba Cloud Model Studio. Pick your **region** in Settings — **International** or **China** — as keys are region-bound (a key from one 401s against the other). Defaults to the vision models (`qwen-vl-plus` / `qwen-vl-max`) so the screen features work; switch the model fields to `qwen-max` / `qwen-plus` for text-only coding help. No speech-to-text — add an OpenAI or Gemini key for listening. |
 | **Custom** | Your endpoint or gateway | Any OpenAI-compatible Chat Completions endpoint. The API key is optional for unauthenticated local servers. |
 
 To use an OpenAI-compatible endpoint, select **Custom** and configure its Base URL, API key, and Fast/Smart model IDs. Custom endpoints handle LLM requests only; listening continues to use Deepgram, OpenAI, or Gemini credentials.
@@ -129,6 +130,8 @@ To use an OpenAI-compatible endpoint, select **Custom** and configure its Base U
 |---|---|---|
 | OpenClaw local gateway | `http://127.0.0.1:18789/v1` | `openclaw/default` |
 | Ollama | `http://127.0.0.1:11434/v1` | An installed Ollama model ID |
+| Qwen (International) | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | `qwen-vl-max`, `qwen-max`, … |
+| Qwen (China) | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-vl-max`, `qwen-max`, … |
 
 Your key is stored **only on your computer** (in `cue-data.json`) and is sent **only** to that provider. cue has no server and collects nothing.
 

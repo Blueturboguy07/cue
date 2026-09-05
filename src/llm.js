@@ -17,6 +17,7 @@ const DEFAULT_MODELS = {
   ollama: 'llama3.2',
   groq: 'llama-3.1-8b-instant',
   minimax: 'MiniMax-M2.7',
+  qwen: 'qwen-vl-plus',
   azure: 'gpt-4o-mini'
 };
 
@@ -98,6 +99,17 @@ function sanitizeTurns(turns) {
 const MINIMAX_BASE_URLS = {
   global_en: 'https://api.minimax.io/v1',
   cn_zh: 'https://api.minimaxi.com/v1'
+};
+
+// Qwen (Alibaba Cloud Model Studio / DashScope) is OpenAI-compatible through its
+// "compatible-mode" gateway, which is region-split just like MiniMax: keys and
+// endpoints are bound to either the International (Singapore) or China (Beijing)
+// account, and a key from one region 401s against the other. The default vision
+// models (qwen-vl-*) accept image_url input, so the screenshot path reuses the
+// OpenAI branch via baseURL, same as MiniMax-M3.
+const QWEN_BASE_URLS = {
+  intl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+  cn: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 };
 
 function stripDataUrl(dataUrl) {
@@ -306,6 +318,7 @@ function createLLM(settings) {
   }
   if (!model) model = DEFAULT_MODELS[provider] || '';
   const minimaxRegion = settings.minimaxRegion || 'global_en';
+  const qwenRegion = settings.qwenRegion || 'intl';
   const endpoint = settings.azureEndpoint || '';
 
   if (provider === CUSTOM_PROVIDER) {
@@ -345,6 +358,7 @@ function createLLM(settings) {
         if (provider === 'ollama') return await streamOllama(args);
         if (provider === 'groq') return await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
         if (provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
+        if (provider === 'qwen') return await streamOpenAI({ ...args, baseURL: QWEN_BASE_URLS[qwenRegion] || QWEN_BASE_URLS.intl });
         if (provider === 'anthropic') return await streamAnthropic(args);
         if (provider === 'gemini') return await streamGemini(args);
         if (provider === 'azure') return await streamAzure(args);
