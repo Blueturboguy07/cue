@@ -28,14 +28,14 @@ const canNotarize =
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
   appId: "com.cue.overlay",
-  productName: "cue",
+  productName: "Anker Call Intelligence",
   asar: false,
   publish: null,
   artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
   // An allowlist, so anything new has to be added here or it simply is not in
   // the shipped app — and the only symptom is a require() that throws at
   // launch, in a build that ran fine from source.
-  files: ["main.js", "preload.js", "src/**/*", "renderer/**/*", "vendor/**/*"],
+  files: ["main.js", "preload.js", "src/**/*", "renderer/**/*", "vendor/**/*", "LICENSE", "README.md", "docs/anker-sync.md"],
   directories: { buildResources: "build-resources" },
   afterPack: "scripts/after-pack.js",
   mac: {
@@ -71,7 +71,7 @@ module.exports = {
     oneClick: false,
     perMachine: false,
     allowToChangeInstallationDirectory: true,
-    shortcutName: "cue",
+    shortcutName: "Anker Call Intelligence",
   },
   linux: {
     target: [{ target: "AppImage", arch: ["x64", "arm64"] }],

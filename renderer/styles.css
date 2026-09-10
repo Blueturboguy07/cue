@@ -489,6 +489,17 @@ button:focus { outline: none; }
 .s-tab-pane { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; min-height: 0; }
 .s-tab-pane.hidden { display: none; }
 
+/* Anker sync uses the same deep-blue working surfaces, with explicit focus. */
+[data-pane="anker"] { background: #071e30; border: 1px solid #365267; border-radius: 8px; padding: 14px; color: #e5edf3; }
+[data-pane="anker"] h2 { font-family: Georgia, serif; font-size: 22px; margin: 0 0 8px; }
+[data-pane="anker"] .s-help { margin-left: 0; color: #bacbd8; font-size: 12px; line-height: 1.6; }
+[data-pane="anker"] input.s-input { width: 100%; min-height: 44px; padding: 10px; color: #eef4f8; background: #102d43; border: 1px solid #587286; border-radius: 5px; user-select: text; }
+[data-pane="anker"] button { min-height: 44px; padding: 8px 12px; border: 1px solid #587286; border-radius: 5px; color: #eef4f8; background: #173c56; cursor: pointer; }
+[data-pane="anker"] button:disabled { opacity: .5; cursor: wait; }
+[data-pane="anker"] :focus-visible { outline: 2px solid #8cc9ff; outline-offset: 3px; }
+[data-pane="anker"] #anker-transcript { user-select: text; color: #d4e1eb; }
+[data-pane="anker"] #anker-status { font-size: 12px; line-height: 1.6; }
+
 .s-body { display: flex; flex-direction: column; gap: 8px; }
 .s-label { color: var(--tx-2); font-size: 13px; font-weight: 600; margin-top: 6px; flex-shrink: 0; }
 .s-hint { color: var(--tx-mut); font-weight: 400; font-size: 11px; margin-left: 6px; }

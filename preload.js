@@ -3,6 +3,13 @@ const platform = process.platform;
 
 contextBridge.exposeInMainWorld('cue', {
   platform,
+  ankerStatus: () => ipcRenderer.invoke('anker:status'),
+  ankerConnect: token => ipcRenderer.invoke('anker:connect', token),
+  ankerDisconnect: () => ipcRenderer.invoke('anker:disconnect'),
+  ankerPreview: () => ipcRenderer.invoke('anker:preview'),
+  ankerQueue: input => ipcRenderer.invoke('anker:queue', input),
+  ankerUpload: () => ipcRenderer.invoke('anker:upload'),
+  ankerRemove: id => ipcRenderer.invoke('anker:remove', id),
   settingsGet: () => ipcRenderer.invoke('settings:get'),
   settingsSet: (patch) => ipcRenderer.invoke('settings:set', patch),
   whisperModels: () => ipcRenderer.invoke('whisper:models'),

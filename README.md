@@ -1,3 +1,5 @@
+> **Anker integration branch:** This fork now includes optional per-user/workspace transcript sync. See [Anker setup, privacy and private delivery](docs/anker-sync.md). Sync changes the upstream “no accounts/server” description below: only explicitly queued transcripts are uploaded to your connected Anker workspace. The original provider/profile settings storage is unchanged. Signed Anker installers are not yet published.
+
 <div align="center">
 
 # cue

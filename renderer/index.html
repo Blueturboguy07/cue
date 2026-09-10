@@ -107,6 +107,7 @@
       <div class="s-tabs">
         <button class="s-tab on" data-tab="keys">🔑 Keys</button>
         <button class="s-tab" data-tab="transcription">Audio</button>
+        <button class="s-tab" data-tab="anker">Anker sync</button>
         <button class="s-tab" data-tab="profile">📄 Profile</button>
         <button class="s-tab" data-tab="prep">🎯 Interview Prep</button>
         <button class="s-tab" data-tab="style">✨ Style</button>
@@ -114,6 +115,23 @@
       </div>
 
       <!-- Tab: Keys -->
+      <div class="s-body s-tab-pane hidden" data-pane="anker">
+        <h2>Anker Call Intelligence</h2>
+        <p class="s-help">Connect your personal Anker workspace. Capturing and local assistance work offline. Only reviewed text you queue and upload is sent to Anker; audio, screenshots and provider keys stay outside this sync.</p>
+        <p id="anker-connection" role="status">Not connected</p>
+        <label class="s-label" for="anker-key">Connection key from Anker → Call Intelligence</label>
+        <input class="s-input" id="anker-key" type="password" autocomplete="off" placeholder="anker_call_…" />
+        <div class="s-seg"><button id="anker-connect">Connect</button><button id="anker-disconnect">Disconnect</button><button id="anker-refresh">Refresh status</button></div>
+        <label class="s-label" for="anker-title">Call title</label>
+        <input class="s-input" id="anker-title" maxlength="200" placeholder="Company · conversation topic" />
+        <button id="anker-preview">Preview current transcript</button>
+        <pre id="anker-transcript" tabindex="0" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto"></pre>
+        <label class="s-help"><input id="anker-consent" type="checkbox" /> I reviewed this capture and have permission to upload it to the connected Anker workspace.</label>
+        <div class="s-seg"><button id="anker-queue">Queue this capture</button><button id="anker-upload">Upload queued calls</button></div>
+        <p class="s-help">Stop listening before queueing. The queue is encrypted using your OS credential store and survives restarts. Upload is manual. Clear the transcript before beginning the next conversation.</p>
+        <div id="anker-queue-list"></div>
+        <p id="anker-status" role="status" aria-live="polite"></p>
+      </div>
       <div class="s-body s-tab-pane" data-pane="keys">
         <label class="s-label">Provider</label>
         <div class="s-seg" id="provider-seg">
@@ -302,5 +320,6 @@
 
   <script src="icons.js"></script>
   <script src="renderer.js"></script>
+  <script src="anker-sync.js"></script>
 </body>
 </html>

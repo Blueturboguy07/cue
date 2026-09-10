@@ -1,4 +1,6 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences, safeStorage } = require('electron');
+const { randomUUID } = require('node:crypto');
+const { createAnkerSync, MAX_TRANSCRIPT } = require('./src/anker-sync');
 const path = require('path');
 const os = require('os');
 const store = require('./src/store');
@@ -53,6 +55,10 @@ const state = { capturing: false, busy: false, transcribing: { you: false, them:
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
 const buffers = { you: [], them: [] };
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
+let ankerSync = null;
+let ankerCaptureId = randomUUID();
+let ankerTranscript = '';
+let ankerOverflow = false;
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
 const FLUSH_MS = 900;
 const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy can't wedge forever
@@ -91,6 +97,9 @@ const ringBuffers = {
 };
 
 function pushTranscript(turn) {
+  const line = `${turn.channel === 'you' ? 'You' : 'Other participant'}: ${turn.text}\n`;
+  if (ankerTranscript.length + line.length > MAX_TRANSCRIPT) ankerOverflow = true;
+  else if (!ankerOverflow) ankerTranscript += line;
   transcript.push(turn);
   if (transcript.length > MAX_TRANSCRIPT_TURNS) transcript.splice(0, transcript.length - MAX_TRANSCRIPT_TURNS);
 }
@@ -620,8 +629,28 @@ ipcMain.handle('platform:info', () => ({
 }));
 ipcMain.handle('transcript:clear', () => {
   transcript.splice(0, transcript.length);
+  ankerTranscript = ''; ankerOverflow = false; ankerCaptureId = randomUUID();
   return { ok: true };
 });
+// Only the local overlay may invoke the upload bridge. Never accept a renderer URL/token destination.
+function requireAnkerSender(event) {
+  if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame) throw new Error('Anker sync is only available in the local app.');
+  if (!ankerSync) throw new Error('Anker sync is not ready.');
+}
+for (const [channel, handler] of Object.entries({
+  'anker:status': () => ankerSync.status(),
+  'anker:connect': token => ankerSync.connect(token),
+  'anker:disconnect': () => ankerSync.disconnect(),
+  'anker:preview': () => ({ transcript: ankerTranscript, overflow: ankerOverflow }),
+  'anker:queue': async input => {
+    await captureTransition;
+    if (state.capturing || state.transcribing.you || state.transcribing.them) throw new Error('Stop listening and wait for transcription before queueing this capture.');
+    if (ankerOverflow) throw new Error('This capture exceeds 60,000 characters. Export smaller reviewed sections through Anker; no partial transcript was uploaded.');
+    return ankerSync.enqueue({ title: input?.title, consent: input?.consent, transcript: ankerTranscript, externalId: ankerCaptureId });
+  },
+  'anker:upload': () => ankerSync.upload(),
+  'anker:remove': id => ankerSync.remove(id),
+})) ipcMain.handle(channel, (event, input) => { requireAnkerSender(event); return handler(input); });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
@@ -763,6 +792,7 @@ function createPermissionsWindow() {
 
 // -------- launch (called after permissions are confirmed) --------
 function launchApp() {
+  ankerSync = createAnkerSync({ file: path.join(app.getPath('userData'), 'anker-sync.enc'), safeStorage });
   if (isMac && app.dock) app.dock.hide();
 
   whisperModelManager = new WhisperModelManager({ userDataPath: app.getPath('userData') });
@@ -805,9 +835,9 @@ function launchApp() {
 
 // -------- lifecycle --------
 app.whenReady().then(async () => {
-  app.setName('MicrosoftEdgeUpdate');
+  app.setName('Anker Call Intelligence');
   if (isWindows) {
-    process.title = 'MicrosoftEdgeUpdate';
+    process.title = 'Anker Call Intelligence';
   }
 
   if (isMac) {
