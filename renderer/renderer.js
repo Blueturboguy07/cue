@@ -1232,6 +1232,22 @@
     refreshWhisperModels();
   }
   function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
+
+  // Open Settings on the Keys tab with a specific provider pre-selected and its
+  // key field focused. Used by the onboarding provider picker so a new user goes
+  // straight from "pick a provider" to "paste your key" in one click.
+  function focusProviderInSettings(provider) {
+    openSettings();
+    const keysTab = document.querySelector('.s-tab[data-tab="keys"]');
+    if (keysTab && !keysTab.classList.contains('on')) keysTab.click();
+    const provBtn = document.querySelector(`#provider-seg button[data-provider="${provider}"]`);
+    if (provBtn && !provBtn.classList.contains('on')) provBtn.click();
+    const keyInput = document.getElementById('key-' + provider);
+    if (keyInput) {
+      try { keyInput.scrollIntoView({ block: 'center' }); } catch { /* jsdom-less */ }
+      keyInput.focus();
+    }
+  }
   $('#more-btn').addEventListener('click', openSettings);
   $('#s-close').addEventListener('click', () => { void closeSettings(); });
   scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
@@ -1680,8 +1696,38 @@
     {
       icon: '🔑',
       title: 'Connect an AI provider',
-      body: 'cue uses <strong>your own</strong> API key — pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, <span class="hl">Google Gemini</span>, or <span class="hl">Azure AI Foundry</span>. Get a key from your provider, then paste it into cue\'s Settings.<br><br><strong>Tip:</strong> For the <em>best</em> real-time listening, add a <span class="hl">Deepgram</span> key (lowest latency streaming transcription). Otherwise, an OpenAI key enables streaming via the Realtime API, and Gemini/Whisper work as batch fallbacks.',
-      buttons: [{ label: 'Open cue Settings', action: () => { finishOnboard(); openSettings(); } }]
+      body: 'cue uses <strong>your own</strong> API key. Pick a provider to jump straight to Settings with its key field ready.<br><br><strong>Tip:</strong> for the <em>best</em> real-time listening, also add a <span class="hl">Deepgram</span> key (lowest-latency streaming). An OpenAI or Gemini key covers transcription too.',
+      render: (bodyEl) => {
+        // Interactive provider picker. Each card selects that provider and opens
+        // Settings focused on its key field, so onboarding leads straight into
+        // pasting a key. Qwen (Alibaba Model Studio) is surfaced as recommended.
+        const providers = [
+          { id: 'qwen', name: 'Qwen', note: 'Alibaba Model Studio · vision + text', rec: true },
+          { id: 'openai', name: 'OpenAI', note: 'Chat + transcription, one key' },
+          { id: 'anthropic', name: 'Anthropic', note: 'Great for screen & coding' },
+          { id: 'gemini', name: 'Google Gemini', note: 'Chat + transcription' },
+          { id: 'groq', name: 'Groq', note: 'Fast open models' },
+          { id: 'minimax', name: 'MiniMax', note: 'Vision + text' },
+          { id: 'azure', name: 'Azure AI', note: 'Your Azure deployment' },
+          { id: 'ollama', name: 'Ollama', note: 'Local · no key needed' },
+          { id: 'custom', name: 'Custom', note: 'Any OpenAI-compatible URL' }
+        ];
+        const grid = document.createElement('div');
+        grid.className = 'ob-providers';
+        providers.forEach((p) => {
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.className = 'ob-prov' + (p.rec ? ' rec' : '');
+          card.innerHTML =
+            (p.rec ? '<span class="ob-badge">Recommended</span>' : '') +
+            `<span class="ob-prov-name">${p.name}</span>` +
+            `<span class="ob-prov-note">${p.note}</span>`;
+          card.addEventListener('click', () => { finishOnboard(); focusProviderInSettings(p.id); });
+          grid.appendChild(card);
+        });
+        bodyEl.appendChild(grid);
+      },
+      buttons: [{ label: 'Open Settings instead', action: () => { finishOnboard(); openSettings(); } }]
     },
     {
       icon: '🫥',
@@ -1700,6 +1746,7 @@
     $('#ob-icon').textContent = step.icon;
     $('#ob-title').textContent = step.title;
     $('#ob-body').innerHTML = step.body;
+    if (typeof step.render === 'function') step.render($('#ob-body'));
     const btns = $('#ob-buttons'); btns.innerHTML = '';
     (step.buttons || []).forEach((b) => { const el = document.createElement('button'); el.textContent = b.label; el.addEventListener('click', b.action); btns.appendChild(el); });
     const dots = $('#ob-dots'); dots.innerHTML = '';

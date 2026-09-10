@@ -587,6 +587,14 @@ button:focus { outline: none; }
 .ob-buttons:empty { display: none; }
 .ob-buttons button { flex: 1; min-width: 150px; padding: 10px; border-radius: 10px; border: 1px solid rgba(60,131,245,0.40); background: rgba(60,131,245,0.14); color: #cfe0ff; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 140ms ease; }
 .ob-buttons button:hover { background: rgba(60,131,245,0.24); }
+.ob-providers { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+.ob-prov { position: relative; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.05); cursor: pointer; transition: all 140ms ease; -webkit-app-region: no-drag; }
+.ob-prov:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.22); transform: translateY(-1px); }
+.ob-prov-name { display: block; font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 2px; }
+.ob-prov-note { display: block; font-size: 11.5px; line-height: 1.35; color: var(--tx-mut); }
+.ob-prov.rec { border-color: rgba(60,131,245,0.55); background: rgba(60,131,245,0.14); }
+.ob-prov.rec:hover { background: rgba(60,131,245,0.22); }
+.ob-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #cfe0ff; background: rgba(60,131,245,0.32); border-radius: 999px; padding: 2px 7px; }
 .ob-actions { display: flex; align-items: center; margin-top: 22px; }
 .ob-ghost { border: none; background: transparent; color: var(--tx-mut); font-size: 13px; font-weight: 500; cursor: pointer; padding: 8px 10px; border-radius: 8px; }
 .ob-ghost:hover { color: #fff; background: rgba(255,255,255,0.06); }
