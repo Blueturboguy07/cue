@@ -28,10 +28,18 @@ const canNotarize =
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
   appId: "com.cue.overlay",
+  // Display name: Finder, the menu bar, the installer shortcut. It contains
+  // spaces deliberately and must NOT reach a filename.
   productName: "Anker Call Intelligence",
   asar: false,
   publish: null,
-  artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
+  // Interpolating ${productName} here produced
+  // "Anker Call Intelligence-0.2.2-mac-arm64.zip". Anker's release manifest
+  // validates filenames against /^[A-Za-z0-9_.-]+\.(exe|zip|AppImage)$/ in
+  // lib/calls/releases.ts, which rejects spaces — so no built artifact could
+  // ever be registered for download. A URL-safe slug keeps the two in step;
+  // see the manifest-compatibility test in test/build-config.test.js.
+  artifactName: "anker-call-intelligence-${version}-${os}-${arch}.${ext}",
   // An allowlist, so anything new has to be added here or it simply is not in
   // the shipped app — and the only symptom is a require() that throws at
   // launch, in a build that ran fine from source.
@@ -63,7 +71,9 @@ module.exports = {
   },
   win: {
     target: [{ target: "nsis", arch: ["x64"] }],
-    artifactName: "${productName}-win-${arch}.${ext}",
+    // No override: the top-level pattern already resolves ${os} to "win", and
+    // this one also dropped ${version}, so Windows releases were unversioned
+    // as well as unusable.
   },
   // A per-user install with a visible directory step: cue is a personal overlay,
   // not a machine-wide service, so it should never need an elevation prompt.

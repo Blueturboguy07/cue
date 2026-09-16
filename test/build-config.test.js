@@ -73,3 +73,46 @@ test('mac config ships the zip target with entitlements files that exist on disk
   const entitlementsXml = fs.readFileSync(path.join(root, builder.mac.entitlements), 'utf8');
   assert.match(entitlementsXml, /com\.apple\.security\.device\.audio-input/);
 });
+
+// The builder used to interpolate ${productName} ("Anker Call Intelligence")
+// into artifact filenames, producing names with spaces. Anker's release
+// manifest validates filenames with
+//   /^[A-Za-z0-9_.-]+\.(exe|zip|AppImage)$/     (lib/calls/releases.ts)
+// which rejects spaces outright, so no build could ever be registered for
+// download. This resolves the configured pattern the way electron-builder does
+// and checks the result against that exact expression.
+const ANKER_FILENAME_RE = /^[A-Za-z0-9_.-]+\.(exe|zip|AppImage)$/;
+
+function resolveArtifactName(pattern, { version, os, arch, ext, productName }) {
+  return pattern
+    .replace(/\$\{productName\}/g, productName)
+    .replace(/\$\{version\}/g, version)
+    .replace(/\$\{os\}/g, os)
+    .replace(/\$\{arch\}/g, arch)
+    .replace(/\$\{ext\}/g, ext);
+}
+
+test('every built artifact name is accepted by Anker\'s release manifest', () => {
+  const config = require('../electron-builder.cjs');
+  const version = pkg.version;
+  const targets = [
+    { os: 'mac', arch: 'arm64', ext: 'zip', pattern: config.mac?.artifactName ?? config.artifactName },
+    { os: 'mac', arch: 'x64', ext: 'zip', pattern: config.mac?.artifactName ?? config.artifactName },
+    { os: 'win', arch: 'x64', ext: 'exe', pattern: config.win?.artifactName ?? config.artifactName },
+    { os: 'linux', arch: 'x64', ext: 'AppImage', pattern: config.linux?.artifactName ?? config.artifactName },
+    { os: 'linux', arch: 'arm64', ext: 'AppImage', pattern: config.linux?.artifactName ?? config.artifactName },
+  ];
+  for (const t of targets) {
+    const name = resolveArtifactName(t.pattern, { ...t, version, productName: config.productName });
+    assert.ok(!/\s/.test(name), `${t.os}-${t.arch} artifact name contains whitespace: "${name}"`);
+    assert.match(name, ANKER_FILENAME_RE, `${t.os}-${t.arch} artifact name rejected by the manifest: "${name}"`);
+    assert.ok(name.includes(version), `${t.os}-${t.arch} artifact name is unversioned: "${name}"`);
+  }
+});
+
+test('productName keeps its spaces — it is the display name, not a filename', () => {
+  const config = require('../electron-builder.cjs');
+  assert.equal(config.productName, 'Anker Call Intelligence');
+  assert.ok(!/\$\{productName\}/.test(config.artifactName),
+    'artifactName must not interpolate productName; use the URL-safe slug');
+});
