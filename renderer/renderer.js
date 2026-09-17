@@ -6,6 +6,11 @@
   const isWindows = cue.platform === 'win32';
   const isMac = cue.platform === 'darwin';
 
+  // Exiting must work before settings or provider setup has completed.
+  const quitButton = $('#quit-btn');
+  quitButton.addEventListener('click', () => cue.quit());
+  quitButton.title = isMac ? 'Quit cue (⌘⇧X)' : 'Quit cue (Ctrl+Shift+X)';
+
   // ---- paint icons -------------------------------------------------------
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
