@@ -1,0 +1,112 @@
+name: bugfix-lab
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "baseline = the guide text reporters actually ran (pre publik@c9510c2); current = today's publik main guide text"
+        required: false
+        default: "baseline"
+  push:
+    branches: [fix/publik-guide-npm-ps1-execution-policy-windows]
+jobs:
+  cue:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout cue at the guide-pinned commit for this mode
+        uses: actions/checkout@v4
+        with:
+          repository: Blueturboguy07/cue
+          ref: ${{ github.event.inputs.mode == 'current' && '90aa366ce27e8ae9f5b86f8cffa791338abdd9a2' || '36fa2b41e1c20ea5d4e47bde26e39fcd43db3872' }}
+      - name: Run the guide's Windows "Install dependencies" step
+        shell: powershell
+        env:
+          MODE: ${{ github.event.inputs.mode == 'current' && 'current' || 'baseline' }}
+        run: |
+          Write-Host "=== mode: $env:MODE ==="
+          Write-Host "=== emulate a real Windows CLIENT machine's default execution policy ==="
+          Write-Host "(this runner's own LocalMachine default is NOT the OS default a fresh"
+          Write-Host " Windows client ships with -- verified separately; Process scope below"
+          Write-Host " is set to Restricted, the actual client default, and nothing broader"
+          Write-Host " is touched. This is test-environment setup, not a guide command.)"
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Restricted -Force
+          Get-ExecutionPolicy -List | Format-Table -AutoSize | Out-String | Write-Host
+          if ($env:MODE -eq "current") {
+            Write-Host "=== running (from current publik main): npm.cmd ci ==="
+            npm.cmd ci
+          } else {
+            Write-Host "=== running (from the guide text reporters ran): npm ci ==="
+            npm ci
+          }
+          $code = $LASTEXITCODE
+          Write-Host "npm exit code: $code"
+          if ($code -ne 0) {
+            Write-Host "BUGFIX_LAB_PRESENT"
+            exit 1
+          } else {
+            Write-Host "BUGFIX_LAB_ABSENT"
+            exit 0
+          }
+  nitroai:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout NitroAI at the guide-pinned commit for this mode
+        uses: actions/checkout@v4
+        with:
+          repository: Blueturboguy07/NitroAI
+          ref: ${{ github.event.inputs.mode == 'current' && '4df4aaee787ee09b9b5062119e37b4a9816fa808' || 'a52eb93417ab8e88d85d8165d36abb0dc93aea93' }}
+      - name: Run the guide's Windows "Install dependencies" step
+        shell: powershell
+        env:
+          MODE: ${{ github.event.inputs.mode == 'current' && 'current' || 'baseline' }}
+        run: |
+          Write-Host "=== mode: $env:MODE ==="
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Restricted -Force
+          Get-ExecutionPolicy -List | Format-Table -AutoSize | Out-String | Write-Host
+          if ($env:MODE -eq "current") {
+            Write-Host "=== running (from current publik main): npm.cmd ci ==="
+            npm.cmd ci
+          } else {
+            Write-Host "=== running (from the guide text reporters ran): npm ci ==="
+            npm ci
+          }
+          $code = $LASTEXITCODE
+          Write-Host "npm exit code: $code"
+          if ($code -ne 0) {
+            Write-Host "BUGFIX_LAB_PRESENT"
+            exit 1
+          } else {
+            Write-Host "BUGFIX_LAB_ABSENT"
+            exit 0
+          }
+  noscroll:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout noscroll's default branch (pnpm bootstrap step runs before clone/checkout)
+        uses: actions/checkout@v4
+        with:
+          repository: Blueturboguy07/noscroll
+          ref: ${{ github.event.inputs.mode == 'current' && '7d1c27ae8e11c551c1c11f82125a29b3f9bbf505' || '6e033662b03ed0b8adb7fba5d2dac2f23cf06468' }}
+      - name: Run the guide's Windows "Install pnpm" step
+        shell: powershell
+        env:
+          MODE: ${{ github.event.inputs.mode == 'current' && 'current' || 'baseline' }}
+        run: |
+          Write-Host "=== mode: $env:MODE ==="
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Restricted -Force
+          Get-ExecutionPolicy -List | Format-Table -AutoSize | Out-String | Write-Host
+          if ($env:MODE -eq "current") {
+            Write-Host "=== running (from current publik main): npm.cmd install -g pnpm ==="
+            npm.cmd install -g pnpm
+          } else {
+            Write-Host "=== running (from the guide text reporters ran): npm install -g pnpm ==="
+            npm install -g pnpm
+          }
+          $code = $LASTEXITCODE
+          Write-Host "npm exit code: $code"
+          if ($code -ne 0) {
+            Write-Host "BUGFIX_LAB_PRESENT"
+            exit 1
+          } else {
+            Write-Host "BUGFIX_LAB_ABSENT"
+            exit 0
+          }
