@@ -6,6 +6,8 @@ name: bugfix-lab-minimize-probe
 # smallest possible bare npm invocation (`npm --version`, no subcommand args).
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/publik-guide-npm-ps1-execution-policy-windows]
 jobs:
   probe:
     runs-on: windows-latest
