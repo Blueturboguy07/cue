@@ -1545,6 +1545,17 @@
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
+    // If the active provider still has no key, but the user just filled in a
+    // key for a different provider (without touching the Provider selector —
+    // the flow both bug reports describe), switch to that provider. Without
+    // this, `settings.provider` stays on its default ('openai') forever and
+    // cue keeps reporting itself unconfigured even though a valid key was
+    // saved for the provider the user actually meant to use.
+    if (!settings.apiKeys[settings.provider]) {
+      const keyedProviders = ['openai', 'anthropic', 'gemini', 'groq', 'minimax', 'azure'];
+      const justFilled = keyedProviders.find((p) => settings.apiKeys[p]);
+      if (justFilled) settings.provider = justFilled;
+    }
     // Transcription
     if (!settings.localWhisper) settings.localWhisper = {};
     settings.localWhisper.modelId = $('#whisper-model').value || settings.localWhisper.modelId || 'base.en';
