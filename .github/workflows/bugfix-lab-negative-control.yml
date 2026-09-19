@@ -1,0 +1,18 @@
+name: bugfix-lab-negative-control
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/cue-clone-step-posix-if-windows-parsererror]
+    paths:
+      - "scripts/bugfix-lab/negative-control-plantgpt-pre-sep18.ps1"
+      - ".github/workflows/bugfix-lab-negative-control.yml"
+
+jobs:
+  negative-control:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run negative control probe
+        shell: pwsh
+        run: .\scripts\bugfix-lab\negative-control-plantgpt-pre-sep18.ps1
