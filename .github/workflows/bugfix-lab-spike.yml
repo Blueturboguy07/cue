@@ -8,15 +8,20 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect execution policy and attempt bare npm
-        shell: pwsh
+      - name: LocalMachine default (unmodified) - Windows PowerShell 5.1
+        shell: powershell
         run: |
-          Write-Host "=== Get-ExecutionPolicy -List ==="
+          Write-Host "=== powershell.exe (5.1) Get-ExecutionPolicy -List, untouched ==="
           Get-ExecutionPolicy -List | Format-Table -AutoSize | Out-String | Write-Host
-          Write-Host "=== node/npm locations ==="
-          Get-Command node -ErrorAction SilentlyContinue | Out-String | Write-Host
-          Get-Command npm -ErrorAction SilentlyContinue | Out-String | Write-Host
-          node --version
-          Write-Host "=== npm --version (bare) ==="
+          Write-Host "=== bare npm --version under untouched policy ==="
           npm --version
+          Write-Host "exit code: $LASTEXITCODE"
+      - name: Process-scope Restricted (emulating Windows client default) - Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          Write-Host "=== forcing Process scope to Restricted to match a real Windows client machine's LocalMachine default (this runner's OS is Server-based and ships RemoteSigned) ==="
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Restricted -Force
+          Get-ExecutionPolicy -List | Format-Table -AutoSize | Out-String | Write-Host
+          Write-Host "=== bare npm ci under Process-Restricted ==="
+          npm ci
           Write-Host "exit code: $LASTEXITCODE"
