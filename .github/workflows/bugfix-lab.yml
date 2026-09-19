@@ -1,0 +1,53 @@
+name: bugfix-lab
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    name: cue-windows-app-will-not-quit
+    runs-on: windows-latest
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Run the oracle script
+        id: oracle
+        shell: pwsh
+        run: |
+          .\scripts\bugfix-lab\cue-windows-app-will-not-quit.ps1
+          $code = $LASTEXITCODE
+          "exit_code=$code" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          exit $code
+        continue-on-error: true
+
+      - name: Report the oracle's verdict
+        shell: pwsh
+        run: |
+          Write-Host "Oracle exit code: ${{ steps.oracle.outputs.exit_code }}"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bugfix-lab-evidence
+          path: |
+            cdp-quit-result.json
+            cue-screenshot.png
+            cue-main-process.log
+            cue-main-process.log.err
+          if-no-files-found: warn
+
+      - name: Fail the job when the oracle could not run
+        if: always() && steps.oracle.outputs.exit_code == '2'
+        shell: pwsh
+        run: exit 1
