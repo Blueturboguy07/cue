@@ -7,12 +7,12 @@ $ProgressPreference = 'SilentlyContinue'
 
 
 Write-Host ""
-Write-Host "=== cue (guide v12, step 'Copy cue to this PC') ==="
+Write-Host "=== cue (guide v13, step 'Copy cue to this PC') ==="
 $cmdText = @'
 cd ~
-if [ ! -d cue/.git ]; then
+if (-not (Test-Path cue/.git)) {
 git clone https://github.com/Blueturboguy07/cue.git
-fi
+}
 '@
 Write-Host "--- command text served to the reader ---"
 Write-Host $cmdText
@@ -47,12 +47,12 @@ if (Test-Path $folderPath) { Remove-Item -Recurse -Force $folderPath -ErrorActio
 
 
 Write-Host ""
-Write-Host "=== nitroai (guide v11, step 'Copy NitroAI to this PC') ==="
+Write-Host "=== nitroai (guide v12, step 'Copy NitroAI to this PC') ==="
 $cmdText = @'
 cd ~
-if [ ! -d NitroAI/.git ]; then
+if (-not (Test-Path NitroAI/.git)) {
 git clone https://github.com/Blueturboguy07/NitroAI.git
-fi
+}
 '@
 Write-Host "--- command text served to the reader ---"
 Write-Host $cmdText
