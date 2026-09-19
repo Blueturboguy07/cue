@@ -1,0 +1,19 @@
+name: bugfix-lab
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  oracle:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run oracle (cue-dist-win-build-fails)
+        shell: pwsh
+        run: |
+          .\scripts\bugfix-lab\cue-dist-win-build-fails.ps1
