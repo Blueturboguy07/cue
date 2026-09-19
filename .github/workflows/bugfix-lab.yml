@@ -1,0 +1,13 @@
+name: bugfix-lab
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cue-clone-step-posix-if-windows-parsererror:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run oracle probe
+        shell: pwsh
+        run: .\scripts\bugfix-lab\cue-clone-step-posix-if-windows-parsererror.ps1
