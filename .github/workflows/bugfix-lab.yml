@@ -2,6 +2,8 @@ name: bugfix-lab
 
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/cue-clone-step-posix-if-windows-parsererror]
 
 jobs:
   cue-clone-step-posix-if-windows-parsererror:
