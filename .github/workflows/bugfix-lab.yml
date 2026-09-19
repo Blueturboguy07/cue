@@ -4,9 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "oracle (primary, default) or negative-control (pre-fix commit + bare npm, evidence only)"
+        description: "stockwin (default, oracle v2) | oracle (v1, runner-policy shell) | negative-control (v1)"
         required: false
-        default: "oracle"
+        default: "stockwin"
+      app_ref:
+        description: "app commit the guide pins (sourceCommit) for stockwin mode"
+        required: false
+        default: "90aa366ce27e8ae9f5b86f8cffa791338abdd9a2"
+      dist_cmd:
+        description: "the guide's 'Build the installer' command, verbatim"
+        required: false
+        default: "npm.cmd run dist:win"
 
 jobs:
   oracle:
@@ -18,13 +26,19 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Run oracle (cue-dist-win-build-fails)
-        if: ${{ github.event.inputs.mode != 'negative-control' }}
+      - name: Run oracle v2 (stock Windows execution policy)
+        if: ${{ github.event.inputs.mode == '' || github.event.inputs.mode == 'stockwin' }}
+        shell: pwsh
+        run: |
+          .\scripts\bugfix-lab\cue-dist-win-stockwin.ps1 -AppRef '${{ github.event.inputs.app_ref }}' -DistCmd '${{ github.event.inputs.dist_cmd }}'
+
+      - name: Run oracle v1 (cue-dist-win-build-fails)
+        if: ${{ github.event.inputs.mode == 'oracle' }}
         shell: pwsh
         run: |
           .\scripts\bugfix-lab\cue-dist-win-build-fails.ps1
 
-      - name: Run negative control (cue-dist-win-build-fails)
+      - name: Run negative control v1 (cue-dist-win-build-fails)
         if: ${{ github.event.inputs.mode == 'negative-control' }}
         shell: pwsh
         run: |
