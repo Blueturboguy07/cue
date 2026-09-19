@@ -1,0 +1,19 @@
+name: bugfix-lab-spike
+on: workflow_dispatch
+jobs:
+  spike:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect execution policy and attempt bare npm
+        shell: pwsh
+        run: |
+          Write-Host "=== Get-ExecutionPolicy -List ==="
+          Get-ExecutionPolicy -List | Format-Table -AutoSize | Out-String | Write-Host
+          Write-Host "=== node/npm locations ==="
+          Get-Command node -ErrorAction SilentlyContinue | Out-String | Write-Host
+          Get-Command npm -ErrorAction SilentlyContinue | Out-String | Write-Host
+          node --version
+          Write-Host "=== npm --version (bare) ==="
+          npm --version
+          Write-Host "exit code: $LASTEXITCODE"
