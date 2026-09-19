@@ -1,5 +1,8 @@
 name: bugfix-lab-spike
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/publik-guide-npm-ps1-execution-policy-windows]
 jobs:
   spike:
     runs-on: windows-latest
