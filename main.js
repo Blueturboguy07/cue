@@ -773,14 +773,26 @@ function launchApp() {
 
   // System-audio loopback for getDisplayMedia: hand back a screen source with 'loopback'
   // audio so the renderer can capture what's playing (Zoom/Meet) using cue's own grant.
+  //
+  // `audio` must be the string 'loopback' or 'loopbackWithMute' (or a WebFrameMain) --
+  // Electron's native binding for this callback rejects anything else, including a
+  // plain boolean. Windows used to get `true` here, which threw synchronously inside
+  // the .then() below; that throw is what getDisplayMedia() surfaced to the renderer
+  // as AbortError "Error starting capture" (shown to users as "Meeting audio could not
+  // be started"), and it also made the old .catch() invoke this already-used one-time
+  // `callback` a SECOND time (Electron's "One-time callback was called more than once"
+  // warning). 'loopback' (not 'loopbackWithMute') matches the value already used here
+  // and keeps the user's own system audio audible during the meeting. `callback` is
+  // now invoked from exactly one place below so a future failure in this chain can't
+  // reintroduce the double-invoke.
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-    desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
-      if (!sources.length) return callback();
-      const request = { video: sources[0] };
-      if (isWindows) request.audio = true;
-      else request.audio = 'loopback';
-      callback(request);
-    }).catch(() => callback());
+    desktopCapturer.getSources({ types: ['screen'] })
+      .then((sources) => (sources.length ? { video: sources[0], audio: 'loopback' } : undefined))
+      .catch((err) => {
+        console.error('[main] system audio: desktopCapturer.getSources failed:', err);
+        return undefined;
+      })
+      .then((request) => callback(request));
   }, { useSystemPicker: false });
 
   // Started before the shortcuts so their registration failures are recorded.
