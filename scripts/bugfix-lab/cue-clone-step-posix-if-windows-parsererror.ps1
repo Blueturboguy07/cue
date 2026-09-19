@@ -16,8 +16,8 @@ fi
 '@
 Write-Host "--- command text served to the reader ---"
 Write-Host $cmdText
-Write-Host "--- piping it into pwsh -NoProfile -Command - (the scripted equivalent of pasting it) ---"
-$cmdText | & pwsh -NoProfile -NoLogo -Command - 1> stdout-cue.txt 2> stderr-cue.txt
+Write-Host "--- running it as: pwsh -NoProfile -Command <that exact text> (LAB.md's own confirmation recipe; the whole block is parsed as one script, same as pasting it) ---"
+& pwsh -NoProfile -NoLogo -Command $cmdText 1> stdout-cue.txt 2> stderr-cue.txt
 $exitCode = $LASTEXITCODE
 $stdoutText = Get-Content -Raw -Path stdout-cue.txt -ErrorAction SilentlyContinue
 $stderrText = Get-Content -Raw -Path stderr-cue.txt -ErrorAction SilentlyContinue
@@ -29,16 +29,19 @@ Write-Host $stderrText
 $folderPath = Join-Path $HOME "cue"
 $cloned = Test-Path (Join-Path $folderPath ".git")
 Write-Host "repo present at $folderPath with a .git : $cloned"
-$parserErrorSeen = ($stderrText -match "MissingOpenParenthesisInIfStatement") -or ($stdoutText -match "MissingOpenParenthesisInIfStatement") -or ($stderrText -match "ParserError")
-if ($parserErrorSeen -and -not $cloned) {
-  Write-Host "BUGFIX_LAB_PRESENT_CUE"
+# The signature is the reported error_text itself, verbatim: the message
+# "Missing '(' after 'if' in if statement." and/or the structured
+# FullyQualifiedErrorId "MissingOpenParenthesisInIfStatement". Either alone is
+# conclusive; whether the underlying `git clone` line also happened to run as
+# a side effect does not change whether the reader was handed this parser
+# failure, so it is recorded as supplementary evidence, not a gate.
+$parserErrorSeen = ($stderrText -match [regex]::Escape("Missing '(' after 'if' in if statement")) -or ($stderrText -match "MissingOpenParenthesisInIfStatement") -or ($stdoutText -match "MissingOpenParenthesisInIfStatement")
+if ($parserErrorSeen) {
+  Write-Host "BUGFIX_LAB_PRESENT_CUE (cloned as a side effect anyway: $cloned)"
   $present_cue = $true
-} elseif ($cloned -and -not $parserErrorSeen) {
-  Write-Host "BUGFIX_LAB_ABSENT_CUE"
-  $present_cue = $false
 } else {
-  Write-Host "BUGFIX_LAB_AMBIGUOUS_CUE (parserErrorSeen=$parserErrorSeen cloned=$cloned)"
-  $present_cue = $parserErrorSeen
+  Write-Host "BUGFIX_LAB_ABSENT_CUE (cloned: $cloned)"
+  $present_cue = $false
 }
 if (Test-Path $folderPath) { Remove-Item -Recurse -Force $folderPath -ErrorAction SilentlyContinue }
 
@@ -53,8 +56,8 @@ fi
 '@
 Write-Host "--- command text served to the reader ---"
 Write-Host $cmdText
-Write-Host "--- piping it into pwsh -NoProfile -Command - (the scripted equivalent of pasting it) ---"
-$cmdText | & pwsh -NoProfile -NoLogo -Command - 1> stdout-nitroai.txt 2> stderr-nitroai.txt
+Write-Host "--- running it as: pwsh -NoProfile -Command <that exact text> (LAB.md's own confirmation recipe; the whole block is parsed as one script, same as pasting it) ---"
+& pwsh -NoProfile -NoLogo -Command $cmdText 1> stdout-nitroai.txt 2> stderr-nitroai.txt
 $exitCode = $LASTEXITCODE
 $stdoutText = Get-Content -Raw -Path stdout-nitroai.txt -ErrorAction SilentlyContinue
 $stderrText = Get-Content -Raw -Path stderr-nitroai.txt -ErrorAction SilentlyContinue
@@ -66,16 +69,19 @@ Write-Host $stderrText
 $folderPath = Join-Path $HOME "NitroAI"
 $cloned = Test-Path (Join-Path $folderPath ".git")
 Write-Host "repo present at $folderPath with a .git : $cloned"
-$parserErrorSeen = ($stderrText -match "MissingOpenParenthesisInIfStatement") -or ($stdoutText -match "MissingOpenParenthesisInIfStatement") -or ($stderrText -match "ParserError")
-if ($parserErrorSeen -and -not $cloned) {
-  Write-Host "BUGFIX_LAB_PRESENT_NITROAI"
+# The signature is the reported error_text itself, verbatim: the message
+# "Missing '(' after 'if' in if statement." and/or the structured
+# FullyQualifiedErrorId "MissingOpenParenthesisInIfStatement". Either alone is
+# conclusive; whether the underlying `git clone` line also happened to run as
+# a side effect does not change whether the reader was handed this parser
+# failure, so it is recorded as supplementary evidence, not a gate.
+$parserErrorSeen = ($stderrText -match [regex]::Escape("Missing '(' after 'if' in if statement")) -or ($stderrText -match "MissingOpenParenthesisInIfStatement") -or ($stdoutText -match "MissingOpenParenthesisInIfStatement")
+if ($parserErrorSeen) {
+  Write-Host "BUGFIX_LAB_PRESENT_NITROAI (cloned as a side effect anyway: $cloned)"
   $present_nitroai = $true
-} elseif ($cloned -and -not $parserErrorSeen) {
-  Write-Host "BUGFIX_LAB_ABSENT_NITROAI"
-  $present_nitroai = $false
 } else {
-  Write-Host "BUGFIX_LAB_AMBIGUOUS_NITROAI (parserErrorSeen=$parserErrorSeen cloned=$cloned)"
-  $present_nitroai = $parserErrorSeen
+  Write-Host "BUGFIX_LAB_ABSENT_NITROAI (cloned: $cloned)"
+  $present_nitroai = $false
 }
 if (Test-Path $folderPath) { Remove-Item -Recurse -Force $folderPath -ErrorAction SilentlyContinue }
 
@@ -99,8 +105,8 @@ git checkout 0e2cf7ae118beee65d9a07c1659de2b2ab4b85cd
 '@
 Write-Host "--- command text served to the reader ---"
 Write-Host $cmdText
-Write-Host "--- piping it into pwsh -NoProfile -Command - (the scripted equivalent of pasting it) ---"
-$cmdText | & pwsh -NoProfile -NoLogo -Command - 1> stdout-plantgpt.txt 2> stderr-plantgpt.txt
+Write-Host "--- running it as: pwsh -NoProfile -Command <that exact text> (LAB.md's own confirmation recipe; the whole block is parsed as one script, same as pasting it) ---"
+& pwsh -NoProfile -NoLogo -Command $cmdText 1> stdout-plantgpt.txt 2> stderr-plantgpt.txt
 $exitCode = $LASTEXITCODE
 $stdoutText = Get-Content -Raw -Path stdout-plantgpt.txt -ErrorAction SilentlyContinue
 $stderrText = Get-Content -Raw -Path stderr-plantgpt.txt -ErrorAction SilentlyContinue
@@ -112,16 +118,19 @@ Write-Host $stderrText
 $folderPath = Join-Path $HOME "plantgpt"
 $cloned = Test-Path (Join-Path $folderPath ".git")
 Write-Host "repo present at $folderPath with a .git : $cloned"
-$parserErrorSeen = ($stderrText -match "MissingOpenParenthesisInIfStatement") -or ($stdoutText -match "MissingOpenParenthesisInIfStatement") -or ($stderrText -match "ParserError")
-if ($parserErrorSeen -and -not $cloned) {
-  Write-Host "BUGFIX_LAB_PRESENT_PLANTGPT"
+# The signature is the reported error_text itself, verbatim: the message
+# "Missing '(' after 'if' in if statement." and/or the structured
+# FullyQualifiedErrorId "MissingOpenParenthesisInIfStatement". Either alone is
+# conclusive; whether the underlying `git clone` line also happened to run as
+# a side effect does not change whether the reader was handed this parser
+# failure, so it is recorded as supplementary evidence, not a gate.
+$parserErrorSeen = ($stderrText -match [regex]::Escape("Missing '(' after 'if' in if statement")) -or ($stderrText -match "MissingOpenParenthesisInIfStatement") -or ($stdoutText -match "MissingOpenParenthesisInIfStatement")
+if ($parserErrorSeen) {
+  Write-Host "BUGFIX_LAB_PRESENT_PLANTGPT (cloned as a side effect anyway: $cloned)"
   $present_plantgpt = $true
-} elseif ($cloned -and -not $parserErrorSeen) {
-  Write-Host "BUGFIX_LAB_ABSENT_PLANTGPT"
-  $present_plantgpt = $false
 } else {
-  Write-Host "BUGFIX_LAB_AMBIGUOUS_PLANTGPT (parserErrorSeen=$parserErrorSeen cloned=$cloned)"
-  $present_plantgpt = $parserErrorSeen
+  Write-Host "BUGFIX_LAB_ABSENT_PLANTGPT (cloned: $cloned)"
+  $present_plantgpt = $false
 }
 if (Test-Path $folderPath) { Remove-Item -Recurse -Force $folderPath -ErrorAction SilentlyContinue }
 
