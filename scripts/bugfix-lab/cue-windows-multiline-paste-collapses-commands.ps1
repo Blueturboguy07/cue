@@ -46,38 +46,47 @@ function Clone-Cue([string]$homeDir) {
   return $cuePath
 }
 
-# Runs a payload script AS IF it were pasted into a fresh PowerShell console
-# whose $HOME/`~` is $homeDir, and returns [pscustomobject]@{ExitCode; Output}.
+# Runs a payload AS IF it were pasted into a fresh PowerShell console whose
+# $HOME/`~` is $homeDir, and returns [pscustomobject]@{ExitCode; Output}.
+#
+# A paste and a script FILE hit the exact same statement-boundary rule this
+# bug is about — a newline is what separates one statement from the next,
+# whether it arrived by Enter or by being the Nth line of a file — so running
+# the payload as a temp .ps1 is a faithful, and far more reliable, stand-in
+# for "pasted into the console" than piping raw bytes over stdin. What is
+# under test is entirely in the TEXT (did the two copy actions leave a
+# newline between "cd cue" and "cd ~/cue", or not), never in how it's fed in.
 function Invoke-PastedPayload([string]$payloadPath, [string]$homeDir) {
+  $scriptCopy = Join-Path $homeDir "_pasted-payload.ps1"
+  Copy-Item -Path $payloadPath -Destination $scriptCopy -Force
+  # A visible sentinel after the payload, on its own line, so a run that
+  # exits early (guard clause, uncaught error) is obviously distinguishable
+  # from one that ran to the end — never part of what's under test.
+  Add-Content -Path $scriptCopy -Value "`nWrite-Output ('SENTINEL_REACHED_END cwd=' + (Get-Location).Path)"
+
   $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
-  if (-not $psi.FileName) { $psi.FileName = (Get-Command pwsh -ErrorAction SilentlyContinue).Source }
-  if (-not $psi.FileName) { throw "neither powershell.exe nor pwsh found" }
-  # -Command - reads the script from stdin, exactly as a pasted multi-line
-  # block is fed to the console's input stream: newlines in the text are the
-  # ONLY thing separating statements, precisely what this bug is about.
-  $psi.Arguments = "-NoLogo -NoProfile -NonInteractive -Command -"
-  $psi.RedirectStandardInput = $true
+  $psi.FileName = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+  if (-not $psi.FileName) { $psi.FileName = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source }
+  if (-not $psi.FileName) { throw "neither pwsh nor powershell.exe found" }
+  $psi.Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$scriptCopy`""
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $psi.UseShellExecute = $false
-  # The payload's own first line is literally "cd ~" / "cd $HOME-relative" —
-  # `~` resolves off these two environment variables in the FileSystem
-  # provider (USERPROFILE on Windows PowerShell 5.1, HOME on pwsh 7).
+  # The payload's own first line is literally "cd ~" — `~` resolves off these
+  # two environment variables in the FileSystem provider (USERPROFILE on
+  # Windows PowerShell 5.1, HOME on pwsh 7); set both so either shell lands
+  # in OUR scratch directory rather than the runner's real profile.
   $psi.EnvironmentVariables["USERPROFILE"] = $homeDir
   $psi.EnvironmentVariables["HOME"] = $homeDir
+  # -File runs with its own starting location; without this the process
+  # inherits our orchestrator's cwd, which is harmless (payload's own "cd ~"
+  # moves it) but pinning it to $homeDir removes one more variable.
+  $psi.WorkingDirectory = $homeDir
 
+  Write-Host "invoking: $($psi.FileName) $($psi.Arguments)"
   $proc = New-Object System.Diagnostics.Process
   $proc.StartInfo = $psi
   [void]$proc.Start()
-  $stdin = $proc.StandardInput
-  $payloadText = Get-Content -Path $payloadPath -Raw
-  $stdin.Write($payloadText)
-  # A trailer, clearly separated by its own newline so it can never merge with
-  # (or change the parsing of) the last line of the tested payload above —
-  # diagnostics only, read by THIS harness, never part of what's being tested.
-  $stdin.Write("`nWrite-Host ('TRAILER cwd=' + (Get-Location).Path + ' home=' + `$HOME)`n")
-  $stdin.Close()
   $stdout = $proc.StandardOutput.ReadToEnd()
   $stderr = $proc.StandardError.ReadToEnd()
   $proc.WaitForExit()
