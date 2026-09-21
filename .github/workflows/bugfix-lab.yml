@@ -1,0 +1,23 @@
+name: bugfix-lab
+
+on:
+  workflow_dispatch:
+
+jobs:
+  reproduce:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - name: Run oracle
+        run: pwsh -File scripts/bugfix-lab/cue-windows-drag-permission-latency-bundle.ps1
+      - name: Upload desktop screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bugfix-lab-desktop-screenshot
+          path: bugfix-lab-desktop.png
+          if-no-files-found: ignore
