@@ -437,10 +437,13 @@ function createStreamingSTT(settings, channel, callbacks) {
     return { type: 'streaming', provider: 'openai-realtime', instance: stt };
   }
 
-  // Priority 3: Batch fallback (Gemini or Whisper via old system)
+  // Priority 3: Batch fallback (Gemini or Whisper via old system). Custom has
+  // no streaming protocol of its own (an arbitrary OpenAI-compatible endpoint
+  // isn't assumed to speak Realtime), so an explicit 'custom' choice lands
+  // here too and is served by createSTT()'s batch chain — same as local/gemini.
   return {
     type: 'batch',
-    provider: selectedProvider === 'auto' && keys.gemini ? 'gemini' : 'none',
+    provider: selectedProvider === 'custom' ? 'custom' : (selectedProvider === 'auto' && keys.gemini ? 'gemini' : 'none'),
     instance: null
   };
 }

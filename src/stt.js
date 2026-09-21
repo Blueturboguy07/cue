@@ -72,6 +72,14 @@ function createSTT(settings) {
   if ((selectedProvider === 'auto' || selectedProvider === 'gemini') && keys.gemini) {
     chain.push({ p: 'gemini', fn: (wav) => transcribeGemini(keys.gemini, wav) });
   }
+  // Custom (OpenAI-compatible) endpoint: same shape as the Groq branch above,
+  // just pointed at the user's own Base URL. Deliberately NOT part of 'auto' —
+  // unlike a named provider, an arbitrary custom endpoint isn't known to speak
+  // the audio-transcription API at all, so this only fires on an explicit
+  // choice, and only once both the URL and the key it needs are actually set.
+  if (selectedProvider === 'custom' && keys.custom && settings.baseUrl) {
+    chain.push({ p: 'custom', fn: (wav) => transcribeOpenAI(keys.custom, wav, settings.sttModel, settings.baseUrl, vocabPrompt) });
+  }
   if (keys.openai && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'openai'), 1)[0]);
 
   let disabledUntil = 0;
