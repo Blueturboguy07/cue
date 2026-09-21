@@ -1,6 +1,5 @@
 cd ~
-cd cue
-cd ~/cue
+cd cuecd ~/cue
 $origin = git config --get remote.origin.url 2>$null
 if ($origin) { $origin = $origin -replace '^git@github\.com:', 'https://github.com/' -replace '\.git$', '' }
 $dirty = git status --porcelain 2>$null
