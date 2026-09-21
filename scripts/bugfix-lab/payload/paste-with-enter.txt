@@ -1,0 +1,11 @@
+cd ~
+cd cue
+cd ~/cue
+$origin = git config --get remote.origin.url 2>$null
+if ($origin) { $origin = $origin -replace '^git@github\.com:', 'https://github.com/' -replace '\.git$', '' }
+$dirty = git status --porcelain 2>$null
+if ($origin -ne "https://github.com/Blueturboguy07/cue" -or $dirty) {
+  Write-Host "~/cue already exists and is not a clean copy of this app's source. Move or rename that folder, then press Try again."
+  exit 1
+}
+git checkout 90aa366ce27e8ae9f5b86f8cffa791338abdd9a2
