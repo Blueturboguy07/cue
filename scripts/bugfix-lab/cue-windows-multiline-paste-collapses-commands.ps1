@@ -73,6 +73,10 @@ function Invoke-PastedPayload([string]$payloadPath, [string]$homeDir) {
   $stdin = $proc.StandardInput
   $payloadText = Get-Content -Path $payloadPath -Raw
   $stdin.Write($payloadText)
+  # A trailer, clearly separated by its own newline so it can never merge with
+  # (or change the parsing of) the last line of the tested payload above —
+  # diagnostics only, read by THIS harness, never part of what's being tested.
+  $stdin.Write("`nWrite-Host ('TRAILER cwd=' + (Get-Location).Path + ' home=' + `$HOME)`n")
   $stdin.Close()
   $stdout = $proc.StandardOutput.ReadToEnd()
   $stderr = $proc.StandardError.ReadToEnd()
