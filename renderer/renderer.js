@@ -21,7 +21,6 @@
   document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
   document.querySelector('.act[data-mode="recap"] .ic').innerHTML = icon('refresh-cw', { size: 16 });
   $('#smart-toggle .ic').innerHTML = icon('zap', { size: 14 });
-  $('#more-btn').innerHTML = icon('more-horizontal', { size: 18 });
   $('#send-btn').innerHTML = icon('play', { size: 15 });
   const clearIC = document.querySelector('#clear-transcript-btn .ic');
   if (clearIC) clearIC.innerHTML = icon('trash-2', { size: 15 });
@@ -38,6 +37,7 @@
     const title = active ? 'End session' : 'Start session';
     btn.title = title;
     btn.setAttribute('aria-label', title);
+    refreshEmptyState(!!active);
   }
   setSessionButton(false);
 
@@ -81,9 +81,47 @@
     return html;
   }
 
-  function clearMessages() { messages.innerHTML = ''; aiEl = null; caretEl = null; }
+  function clearMessages() { messages.innerHTML = ''; aiEl = null; caretEl = null; refreshEmptyState(); }
+
+  function dismissEmptyState() {
+    const host = document.getElementById('messages');
+    const empty = host && host.querySelector('.empty-state');
+    if (empty) empty.remove();
+  }
+
+  function refreshEmptyState(listening) {
+    const host = document.getElementById('messages');
+    if (!host) return;
+    if (host.querySelector('.user-bubble, .ai-text, .response-group')) return;
+    const active = listening != null ? !!listening : $('#stop-btn')?.classList.contains('active');
+    const chip = (name, label) =>
+      '<span class="empty-chip"><span class="ic">' + icon(name, { size: 13 }) + '</span>' + label + '</span>';
+    const idle = ''
+      + '<div class="empty-mark">' + icon('circle-play', { size: 18 }) + '</div>'
+      + '<div class="empty-copy">'
+      + '<p class="empty-title">Click <strong>Start session</strong> to ask questions about a live conversation</p>'
+      + '</div>';
+    const live = ''
+      + '<div class="empty-mark">' + icon('audio-lines', { size: 18 }) + '</div>'
+      + '<div class="empty-copy">'
+      + '<p class="empty-title">Listening in to the conversation</p>'
+      + '<p class="empty-body">Ask ' + chip('wand-sparkles', 'What should I say?')
+      + ' for quick clues on how to carry on the conversation, or '
+      + chip('monitor', 'Smart assist')
+      + ' to ask about something on the screen.</p>'
+      + '</div>';
+    let empty = host.querySelector('.empty-state');
+    if (!empty) {
+      empty = document.createElement('div');
+      empty.className = 'empty-state';
+      host.appendChild(empty);
+    }
+    empty.classList.toggle('empty-listening', active);
+    empty.innerHTML = active ? live : idle;
+  }
 
   function addUserBubble(text) {
+    dismissEmptyState();
     const b = document.createElement('div');
     b.className = 'user-bubble';
     b.textContent = text;
@@ -91,6 +129,7 @@
   }
 
   function startAi(small) {
+    dismissEmptyState();
     aiEl = document.createElement('div');
     aiEl.className = 'ai-text' + (small ? ' small' : '');
     aiEl.dataset.raw = '';
@@ -897,22 +936,31 @@
     sidebar.classList.remove('ts-instant');
   }
 
+  function setHistoryButton(open) {
+    const historyBtn = document.getElementById('history-btn');
+    if (!historyBtn) return;
+    historyBtn.classList.toggle('active', open);
+    const label = open ? 'Hide conversation history' : 'Show conversation history';
+    const text = historyBtn.querySelector('.history-label');
+    if (text) text.textContent = label;
+    historyBtn.title = label;
+    historyBtn.setAttribute('aria-label', label);
+  }
+
   function showSidebar() {
     const sidebar = document.getElementById('transcript-sidebar');
-    const historyBtn = document.getElementById('history-btn');
     if (sidebar) {
       placeSidebar(sidebar);
       sidebar.classList.add('open');
     }
-    if (historyBtn) historyBtn.classList.add('active');
+    setHistoryButton(true);
     sidebarOpen = true;
   }
 
   function hideSidebar() {
     const sidebar = document.getElementById('transcript-sidebar');
-    const historyBtn = document.getElementById('history-btn');
     if (sidebar) sidebar.classList.remove('open');
-    if (historyBtn) historyBtn.classList.remove('active');
+    setHistoryButton(false);
     sidebarOpen = false;
   }
 
@@ -934,7 +982,8 @@
   // History button toggle
   const historyBtn = document.getElementById('history-btn');
   if (historyBtn) {
-    historyBtn.querySelector('.ic').innerHTML = icon('message-square-text', { size: 14 });
+    const ic = historyBtn.querySelector('.ic');
+    if (ic) ic.innerHTML = icon('message-square-text', { size: 15 });
     historyBtn.addEventListener('click', toggleSidebar);
   }
 
@@ -1130,6 +1179,7 @@
     setLiveDotState(speaking ? 'speaking' : 'idle');
   });
   cue.on('llm:start', ({ userBubble, small, category }) => {
+    dismissEmptyState();
     responseCount++;
     if (responseCount > MAX_RESPONSES) {
       const oldest = messages.querySelector('.response-group');
@@ -1292,7 +1342,6 @@
     refreshWhisperModels();
   }
   function closeSettings() { saveSettings(); scrim.classList.add('hidden'); }
-  $('#more-btn').addEventListener('click', openSettings);
   $('#tb-settings-btn').addEventListener('click', openSettings);
   $('#s-close').addEventListener('click', () => { void closeSettings(); });
   scrim.addEventListener('click', (e) => { if (e.target === scrim) void closeSettings(); });
@@ -1707,15 +1756,7 @@
     }
   }
 
-  // ---- example conversation (matches the reference screenshot) ------------
-  function showExample() {
-    clearMessages();
-    addUserBubble('What should I say?');
-    const ai = document.createElement('div');
-    ai.className = 'ai-text';
-    ai.textContent = '“A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.”';
-    messages.appendChild(ai);
-  }
+  function showExample() { refreshEmptyState(); }
 
   // ---- global keys -------------------------------------------------------
   document.addEventListener('keydown', (e) => {
@@ -1965,11 +2006,6 @@
     showExample();
     syncPlaceholder();
     updateSendButtonState(); // Initialize send button state
-
-    // Fix placeholder shortcut hint to match platform
-    if (isWindows) {
-      placeholder.innerHTML = 'Ask about your screen or conversation, or <span class="keycap">Ctrl</span><span class="keycap">⇧</span><span class="keycap">⏎</span> for Smart assist';
-    }
 
     applyOpacity(settings.opacity, false);
 

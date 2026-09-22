@@ -70,16 +70,20 @@
 
             <div id="composer">
               <div id="input-area">
-                <div id="placeholder">Ask about your screen or conversation, or <span class="keycap">⌘</span><span class="keycap">⇧</span><span class="keycap">⏎</span> for Smart assist</div>
+                <div id="placeholder">Ask about your conversation or something on your screen</div>
                 <textarea id="input" rows="1" spellcheck="false"></textarea>
               </div>
               <div id="composer-bottom">
                 <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
-                <button id="history-btn" class="history-btn" title="Show everything said this session"><span class="ic"></span><span>Transcription history</span></button>
-                <button id="more-btn" class="more-btn" title="Settings"></button>
                 <div class="spacer"></div>
                 <button id="send-btn" title="Send"></button>
               </div>
+            </div>
+            <div id="composer-extras">
+              <button id="history-btn" class="history-btn" title="Show conversation history" aria-label="Show conversation history">
+                <span class="ic"></span>
+                <span class="history-label">Show conversation history</span>
+              </button>
             </div>
           </div>
 
