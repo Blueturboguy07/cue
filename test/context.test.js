@@ -23,15 +23,13 @@ test('getRecent returns newest N turns oldest-first', () => {
   assert.strictEqual(recent[1].text, 'question?');
 });
 
-test('buildSystem weaves profile into assist/say/ask but not leetcode', () => {
+test('buildSystem weaves profile into assist/say/ask', () => {
   const ctx = { profile: 'ZZ_PROFILE_SENTINEL_ZZ' };
   for (const key of ['assist', 'say', 'ask']) {
     const def = { ...MODES[key], key };
     const sys = buildSystem(def, ctx);
     assert.ok(sys.includes('ZZ_PROFILE_SENTINEL_ZZ'), key + ' should inject profile');
   }
-  const leet = buildSystem({ ...MODES.leetcode, key: 'leetcode' }, ctx);
-  assert.ok(!leet.includes('ZZ_PROFILE_SENTINEL_ZZ'));
 });
 
 test('buildUserTurn passes only the rolling window, not the full transcript', () => {

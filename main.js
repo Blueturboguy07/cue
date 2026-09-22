@@ -36,7 +36,7 @@ let win = null;
 // false when another application already owns the combination, and nothing used
 // to look at that — so the only symptom was a key that did nothing. Iris reads
 // this and can say which key is taken instead of guessing from a screenshot.
-const shortcutState = { assist: false, say: false, leetcode: false, quit: false };
+const shortcutState = { assist: false, say: false, quit: false };
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
 
@@ -548,7 +548,7 @@ async function runFeature(mode, userText) {
     const userBubble = def.userBubble !== null
       ? def.userBubble
       : (mode === 'ask' ? userText : mode === 'answerThis' ? `"${(userText || '').slice(0, 60)}${userText && userText.length > 60 ? '…' : ''}"` : null);
-    const category = mode !== 'leetcode' ? detectCallCategory(transcript) : null;
+    const category = detectCallCategory(transcript);
     send('llm:start', { userBubble, small: !!def.small, category });
 
     if (!llm.ready) {
@@ -598,9 +598,9 @@ async function runFeature(mode, userText) {
     // relevant to what was just said / asked and hand them to the model as part
     // of the system prompt. The detected call moment adds hint terms so the
     // matching Slite playbook (kickoff, references, discovery…) ranks first, and
-    // Smart mode buys a wider retrieval budget. Coding problems never need it.
+    // Smart mode buys a wider retrieval budget.
     let kbBlock = null;
-    if (mode !== 'leetcode' && settingsForPrompt.knowledgeBase !== false && knowledgeBase.isReady()) {
+    if (settingsForPrompt.knowledgeBase !== false && knowledgeBase.isReady()) {
       const kbQuery = [knowledgeBase.queryFromState({ transcript, userText: userText || '' }), retrievalHints(category)].filter(Boolean).join('\n');
       const budget = settingsForPrompt.smart ? { limit: 10, budgetChars: 12000 } : { limit: 6, budgetChars: 7000 };
       kbBlock = knowledgeBase.buildKnowledgeBlock(kbQuery, budget);
@@ -935,7 +935,6 @@ ipcMain.on('permissions:continue', async () => {
 function registerShortcuts() {
   shortcutState.say = globalShortcut.register('CommandOrControl+Return', () => runFeature('say', ''));
   shortcutState.assist = globalShortcut.register('CommandOrControl+Shift+Return', () => runFeature('assist', ''));
-  shortcutState.leetcode = globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
   shortcutState.hide = globalShortcut.register('CommandOrControl+Shift+/', () => send('hide:toggle', {}));
   shortcutState.quit = globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
   for (const [name, wasRegistered] of Object.entries(shortcutState)) {

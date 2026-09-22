@@ -39,7 +39,7 @@ function buildUserTurn(def, ctx) {
 }
 
 // How much of the conversation to include per mode (turns).
-const MODE_WINDOW = { assist: 12, say: 14, recap: 0, ask: 12, leetcode: 0 };
+const MODE_WINDOW = { assist: 12, say: 14, recap: 0, ask: 12 };
 
 function windowFor(mode) {
   const n = MODE_WINDOW[mode];

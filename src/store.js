@@ -64,7 +64,7 @@ const DEFAULTS = {
   questionsToAsk: '',    // Questions to ask the interviewer
   // Tab 5: Style — custom response rules
   // The user writes how the AI should write: e.g. "no em-dashes", "use bullet
-  // points", "casual tone". Applied to every LLM mode EXCEPT LeetCode (kept
+  // points", "casual tone". Applied to every LLM mode (
   // strict for coding problems).
   aiRules: '',
   // Overlay opacity (1 = fully opaque). Clamped so the window never vanishes.

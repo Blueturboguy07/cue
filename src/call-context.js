@@ -130,10 +130,8 @@ function playbookFor(category) {
   return PLAYBOOK[category] || PLAYBOOK.general;
 }
 
-// The block main.js prepends to the system prompt. null for modes that never
-// want call context (coding problems).
+// The block main.js prepends to the system prompt.
 function buildCallContext(settings, mode, transcript) {
-  if (mode === 'leetcode') return null;
   const category = detectCallCategory(transcript || []);
   const pb = playbookFor(category);
   const lines = [

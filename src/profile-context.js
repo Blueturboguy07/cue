@@ -40,8 +40,7 @@ function appendResumeContext(systemPrompt, resumeContext) {
  *   - "Use a casual, first-person tone."
  *   - "Avoid jargon; explain technical terms."
  *
- * Applied to every mode EXCEPT LeetCode (kept strict for coding problems) —
- * the caller decides whether to skip it.
+ * Applied to every mode.
  *
  * @param {string} systemPrompt The mode-specific prompt cue would otherwise send.
  * @param {unknown} aiRules The user's locally-saved rules text.

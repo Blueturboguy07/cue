@@ -17,11 +17,8 @@ function buildSystem(base, contextBlock) {
   return contextBlock + '\n\n' + base;
 }
 
-// Apply AI rules to a system prompt if the mode wants them. LeetCode returns
-// the prompt unchanged — code answers should stay strict regardless of how the
-// user wants the AI to chat.
-function applyRules(prompt, aiRules, mode) {
-  if (mode === 'leetcode') return prompt;
+// Append the user's AI rules to a mode's system prompt.
+function applyRules(prompt, aiRules) {
   return appendAiRules(prompt, aiRules);
 }
 
@@ -63,7 +60,7 @@ const MODES = {
         MOMENT_RULES + '\n' +
         'Write in first person as the rep speaking, 2–5 sentences, ready to say out loud. No preamble, no "Here\'s what you could say". Just the words.',
         contextBlock
-      ), aiRules, 'assist');
+      ), aiRules);
     },
     build(ctx) {
       const t = formatTranscript(ctx.transcript, 14);
@@ -84,7 +81,7 @@ const MODES = {
         MOMENT_RULES + '\n' +
         'No quotes, no preamble. Write the actual words to say. 2–5 sentences. End with a question or a clear next step when it fits.',
         contextBlock
-      ), aiRules, 'say');
+      ), aiRules);
     },
     build(ctx) {
       const t = formatTranscript(ctx.transcript, 16);
@@ -111,7 +108,7 @@ const MODES = {
         '• Open discovery questions still to ask\n' +
         'Use short bullets under bold headers. Be concise. Skip any header with nothing to report.',
         contextBlock
-      ), aiRules, 'recap');
+      ), aiRules);
     },
     build(ctx) {
       const t = formatTranscript(ctx.transcript, 0);
@@ -132,7 +129,7 @@ const MODES = {
         'When it is about Miter\'s product or process, answer from the excerpts and name the source. ' +
         'When it is about the prospect, use the conversation. No preamble.',
         contextBlock
-      ), aiRules, 'ask');
+      ), aiRules);
     },
     build(ctx) {
       const t = formatTranscript(ctx.transcript, 12);
@@ -153,28 +150,12 @@ const MODES = {
         MOMENT_RULES + '\n' +
         'Write in first person, as the rep speaking. No preamble. 2–5 sentences.',
         contextBlock
-      ), aiRules, 'answerThis');
+      ), aiRules);
     },
     build(ctx) {
       // Only pass the specific question — not the full transcript history
       return 'Answer this specific question from the prospect:\n\n"' + (ctx.userText || '(no question provided)') + '"\n\nGive the full answer I should say out loud.';
     }
-  },
-
-  // ── LeetCode: pure coding solver — no personal context, no AI rules ─────
-  leetcode: {
-    needsScreen: true,
-    userBubble: 'Solve what\'s on screen',
-    small: false,
-    resumeMode: 'leetcode',
-    buildSystem(_contextBlock, _aiRules) {
-      // Context block AND aiRules intentionally ignored — code answers must
-      // stay strict regardless of personal style or context.
-      return 'You are an expert competitive programmer. The screenshot contains a coding problem. ' +
-        'Respond with: (1) a one-line restatement, (2) a short approach, (3) a clean, correct, idiomatic solution in a fenced code block ' +
-        '(use the language shown on screen, else Python), (4) time and space complexity. Keep prose tight.';
-    },
-    build() { return 'Solve the coding problem shown in the screenshot.'; }
   }
 };
 
