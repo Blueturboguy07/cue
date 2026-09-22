@@ -1,0 +1,10 @@
+{
+  "_comment": "Root Slite notes to mirror. Each entry is walked recursively (note + all children). All five live under GTM > Sales (collection ag961lq6w5Fus9). label becomes the subdirectory under knowledge-base/slite/.",
+  "roots": [
+    { "label": "assets",                "id": "PJJiyRqM5d7idI", "title": "Assets" },
+    { "label": "discovery-questions",   "id": "PBy_ukZqnMZd8A", "title": "Discovery Questions" },
+    { "label": "customer-references",   "id": "WMw2b1XRrftrhb", "title": "Customer References" },
+    { "label": "kickoff-process",       "id": "GD2pETuv4o5TjV", "title": "Kickoff Process" },
+    { "label": "competitive-discovery", "id": "2VZ6IMrKvQligK", "title": "Competitor Discovery" }
+  ]
+}
