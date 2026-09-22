@@ -1,7 +1,9 @@
-// prompts.js — Feature definitions with interview-category-aware system prompts.
+// prompts.js — Feature definitions with call-aware system prompts for a Miter
+// sales / customer-success rep on a live call.
 // ctx = { transcript, userText }
-// System prompt receives the interview context block prepended by main.js,
-// then optionally the user's AI rules appended at the end.
+// System prompt receives the call-context block (playbook + retrieved
+// knowledge-base excerpts) prepended by main.js, then optionally the user's
+// AI rules appended at the end.
 
 const { appendAiRules } = require('./profile-context');
 
@@ -15,16 +17,33 @@ function buildSystem(base, contextBlock) {
   return contextBlock + '\n\n' + base;
 }
 
-// Apply AI rules to a system prompt if the mode wants them. LeetCode returns
-// the prompt unchanged — code answers should stay strict regardless of how the
-// user wants the AI to chat.
-function applyRules(prompt, aiRules, mode) {
-  if (mode === 'leetcode') return prompt;
+// Append the user's AI rules to a mode's system prompt.
+function applyRules(prompt, aiRules) {
   return appendAiRules(prompt, aiRules);
 }
 
 const BASE_RULES =
   'Always respond in clear, natural English. Never switch to Hindi or any other language unless the user explicitly asks for it. ';
+
+// Shared framing for every call mode. "You" is the Miter rep wearing cue;
+// "Them" is the prospect or customer on the other side of the call.
+const CALL_FRAME =
+  'You are cue, a discreet real-time copilot for a Miter sales or customer-success rep on a live call. ' +
+  'Miter is payroll, HR, time tracking and workforce management built for construction contractors: certified payroll and prevailing wage, union fringes, job costing, and syncs with ERPs like Sage, Acumatica, NetSuite and QuickBooks. ' +
+  '"You" in the transcript is the rep; "Them" is the prospect or customer. ' +
+  'Ground every claim in the retrieved knowledge-base excerpts and the call playbook above. Cite the doc name in a short parenthetical when you rely on one. ' +
+  'Never invent pricing, customer names, dates, integrations or capabilities that are not in the excerpts — if the material does not cover it, say so and suggest how to confirm. ' +
+  BASE_RULES;
+
+const MOMENT_RULES =
+  'Handle the moment by type:\n' +
+  '• DISCOVERY (they describe their setup): confirm what you heard in one line, then ask the single most useful next discovery question.\n' +
+  '• OBJECTION (a concern or hesitation): acknowledge in one sentence, answer with a specific fact or customer proof point, offer a next step.\n' +
+  '• PRICING: value first, then point to the investment summary / proposal as the source of numbers. Never quote a figure that is not in the excerpts.\n' +
+  '• COMPETITOR: no bashing. Ask what made them start looking and what matters most; state one concrete Miter strength for construction payroll where it fits.\n' +
+  '• REFERENCE: match on public work, union, multi-state, ERP and payroll; offer to arrange a call rather than naming a customer on the spot.\n' +
+  '• IMPLEMENTATION: describe the kickoff process and timeline concretely (Launch Manager, kickoff call, survey, Rocketlane, data collection).\n' +
+  '• PRODUCT: answer from the Miter Guides excerpts — feature, where it lives, any setup step.\n';
 
 const MODES = {
 
@@ -36,20 +55,12 @@ const MODES = {
     resumeMode: 'assist',
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
-        'You are cue, a discreet real-time copilot overlaid on the user\'s screen during an interview or coding session. ' +
-        BASE_RULES +
-        'Look at the screenshot and the recent conversation, decide what the user needs RIGHT NOW, and deliver it directly with no preamble.\n\n' +
-        'Detect the question type and respond accordingly:\n' +
-        '• BEHAVIORAL ("tell me about a time…"): Give a complete STAR answer (Situation, Task, Action, Result) using the candidate\'s real stories when available. Be specific, include metrics, 3–4 sentences.\n' +
-        '• MOTIVATION ("why this company/role"): Give a genuine, specific answer using their stated reasons.\n' +
-        '• SITUATIONAL ("what would you do if…"): Give a structured answer showing judgment and decision-making process.\n' +
-        '• EXPERIENCE ("tell me about your role at X"): Draw from the resume to give a specific, proud answer.\n' +
-        '• TECHNICAL/CONCEPTUAL: Explain clearly with examples. For LeetCode: short approach + solution + complexity.\n' +
-        '• COMPENSATION ("salary expectations"): Use their stated target, give a confident range.\n' +
-        '• "Any questions for us?": Offer 2–3 of their prepared questions.\n\n' +
-        'Write in first person as if the candidate is speaking. No preamble, no "Here\'s what you could say". Just the answer.',
+        CALL_FRAME +
+        'Look at the screenshot and the recent conversation, decide what the rep needs RIGHT NOW, and deliver it directly with no preamble.\n\n' +
+        MOMENT_RULES + '\n' +
+        'Write in first person as the rep speaking, 2–5 sentences, ready to say out loud. No preamble, no "Here\'s what you could say". Just the words.',
         contextBlock
-      ), aiRules, 'assist');
+      ), aiRules);
     },
     build(ctx) {
       const t = formatTranscript(ctx.transcript, 14);
@@ -65,24 +76,16 @@ const MODES = {
     resumeMode: 'say',
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
-        'You are cue, whispering the perfect reply to the candidate during a live interview. ' +
-        BASE_RULES +
-        '"Them" is the interviewer; "You" is the candidate.\n\n' +
-        'Draft ONE natural, confident reply the candidate can say out loud, in first person.\n\n' +
-        'Rules by question type:\n' +
-        '• BEHAVIORAL: Use a real STAR story from their background. Situation (1 sentence) → Task (1 sentence) → Action (2–3 sentences, specific steps) → Result (1 sentence with metric if possible). Never generic.\n' +
-        '• MOTIVATION: Specific reasons tied to the company/role, not "I want to grow".\n' +
-        '• SITUATIONAL: Show structured thinking — "I\'d first X, then Y, because Z".\n' +
-        '• EXPERIENCE: Reference the specific role/project from their resume.\n' +
-        '• COMPENSATION: State the target range confidently without over-explaining.\n' +
-        '• TECHNICAL: Give a clear, confident explanation. Use analogies for non-technical interviewers.\n\n' +
-        'No quotes, no preamble. Write the actual words to say. 2–5 sentences.',
+        CALL_FRAME +
+        'Draft ONE natural, confident reply the rep can say out loud, in first person.\n\n' +
+        MOMENT_RULES + '\n' +
+        'No quotes, no preamble. Write the actual words to say. 2–5 sentences. End with a question or a clear next step when it fits.',
         contextBlock
-      ), aiRules, 'say');
+      ), aiRules);
     },
     build(ctx) {
       const t = formatTranscript(ctx.transcript, 16);
-      return 'Interview conversation so far:\n' + (t || '(listening not started yet)') +
+      return 'Call so far:\n' + (t || '(listening not started yet)') +
         '\n\nWhat should I say next?';
     }
   },
@@ -95,15 +98,21 @@ const MODES = {
     resumeMode: 'recap',
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
-        'You are cue. Summarize the interview so far:\n' +
-        '• Topics covered\n• Questions asked\n• Key answers given\n• Any red flags or areas to strengthen\n' +
-        'Use short bullets under bold headers. Be concise.',
+        CALL_FRAME +
+        'Summarize the call so far for the rep\'s notes:\n' +
+        '• Their setup (headcount, payroll, time tracking, ERP, unions / prevailing wage)\n' +
+        '• Pain points and what they want\n' +
+        '• Objections or risks raised\n' +
+        '• Competitors or alternatives mentioned\n' +
+        '• Commitments and next steps (who, what, when)\n' +
+        '• Open discovery questions still to ask\n' +
+        'Use short bullets under bold headers. Be concise. Skip any header with nothing to report.',
         contextBlock
-      ), aiRules, 'recap');
+      ), aiRules);
     },
     build(ctx) {
       const t = formatTranscript(ctx.transcript, 0);
-      return 'Full interview transcript:\n' + (t || '(nothing captured yet)') + '\n\nRecap this interview.';
+      return 'Full call transcript:\n' + (t || '(nothing captured yet)') + '\n\nRecap this call.';
     }
   },
 
@@ -115,13 +124,12 @@ const MODES = {
     resumeMode: 'ask',
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
-        'You are cue, a real-time copilot with access to the candidate\'s screen and live interview. ' +
-        BASE_RULES +
-        'Answer the question directly and concisely. ' +
-        'When the question is about the candidate\'s background, use their actual experience. ' +
-        'When the question is conceptual, explain clearly with examples. No preamble.',
+        CALL_FRAME +
+        'The rep typed a question. Answer it directly and concisely for the rep (not as words to say aloud unless asked). ' +
+        'When it is about Miter\'s product or process, answer from the excerpts and name the source. ' +
+        'When it is about the prospect, use the conversation. No preamble.',
         contextBlock
-      ), aiRules, 'ask');
+      ), aiRules);
     },
     build(ctx) {
       const t = formatTranscript(ctx.transcript, 12);
@@ -137,40 +145,17 @@ const MODES = {
     resumeMode: 'say',  // same context budget as 'say'
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
-        'You are cue, whispering a direct answer to the candidate for ONE specific question. ' +
-        BASE_RULES +
-        'The interviewer\'s exact question is provided below. Focus ONLY on answering that question — ignore any other conversation context.\n\n' +
-        'Rules:\n' +
-        '• BEHAVIORAL ("tell me about a time…"): STAR format using real stories from the candidate\'s background. Situation → Task → Action → Result. Include metrics if available.\n' +
-        '• MOTIVATION ("why this company/role"): Specific, genuine reasons from their stated preferences.\n' +
-        '• TECHNICAL: Clear explanation with a concrete example from their experience.\n' +
-        '• EXPERIENCE: Reference specific roles/projects from their resume.\n' +
-        '• COMPENSATION: State the salary target confidently in one sentence.\n' +
-        '• SITUATIONAL: Structured thinking — "First I would X, then Y, because Z."\n\n' +
-        'Write in first person, as the candidate speaking. No preamble. 2–5 sentences.',
+        CALL_FRAME +
+        'The prospect asked ONE specific question, provided below. Focus ONLY on answering that question — ignore any other conversation context.\n\n' +
+        MOMENT_RULES + '\n' +
+        'Write in first person, as the rep speaking. No preamble. 2–5 sentences.',
         contextBlock
-      ), aiRules, 'answerThis');
+      ), aiRules);
     },
     build(ctx) {
       // Only pass the specific question — not the full transcript history
-      return 'Answer this specific interview question:\n\n"' + (ctx.userText || '(no question provided)') + '"\n\nGive the full answer the candidate should say out loud.';
+      return 'Answer this specific question from the prospect:\n\n"' + (ctx.userText || '(no question provided)') + '"\n\nGive the full answer I should say out loud.';
     }
-  },
-
-  // ── LeetCode: pure coding solver — no personal context, no AI rules ─────
-  leetcode: {
-    needsScreen: true,
-    userBubble: 'Solve what\'s on screen',
-    small: false,
-    resumeMode: 'leetcode',
-    buildSystem(_contextBlock, _aiRules) {
-      // Context block AND aiRules intentionally ignored — code answers must
-      // stay strict regardless of personal style or context.
-      return 'You are an expert competitive programmer. The screenshot contains a coding problem. ' +
-        'Respond with: (1) a one-line restatement, (2) a short approach, (3) a clean, correct, idiomatic solution in a fenced code block ' +
-        '(use the language shown on screen, else Python), (4) time and space complexity. Keep prose tight.';
-    },
-    build() { return 'Solve the coding problem shown in the screenshot.'; }
   }
 };
 

@@ -10,7 +10,8 @@ const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 const { createStreamingSTT } = require('./src/stt-streaming');
 const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
-const { buildInterviewContext, detectCategory } = require('./src/interview-context');
+const { buildCallContext, detectCallCategory, retrievalHints } = require('./src/call-context');
+const knowledgeBase = require('./src/knowledge-base');
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 const publik = require('./src/publik');
 // The app token release.yml baked into src/publik-build.json (empty in a dev
@@ -35,7 +36,7 @@ let win = null;
 // false when another application already owns the combination, and nothing used
 // to look at that — so the only symptom was a key that did nothing. Iris reads
 // this and can say which key is taken instead of guessing from a screenshot.
-const shortcutState = { assist: false, say: false, leetcode: false, quit: false };
+const shortcutState = { assist: false, say: false, quit: false };
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
 
@@ -553,7 +554,7 @@ async function runFeature(mode, userText) {
     const userBubble = def.userBubble !== null
       ? def.userBubble
       : (mode === 'ask' ? userText : mode === 'answerThis' ? `"${(userText || '').slice(0, 60)}${userText && userText.length > 60 ? '…' : ''}"` : null);
-    const category = mode !== 'leetcode' ? detectCategory(transcript) : null;
+    const category = detectCallCategory(transcript);
     send('llm:start', { userBubble, small: !!def.small, category });
 
     if (!llm.ready) {
@@ -599,7 +600,18 @@ async function runFeature(mode, userText) {
     }
 
     const settingsForPrompt = store.getSettings();
-    const contextBlock = buildInterviewContext(settingsForPrompt, mode, transcript);
+    // Local knowledge base (knowledge-base/**/*.md): retrieve the chunks most
+    // relevant to what was just said / asked and hand them to the model as part
+    // of the system prompt. The detected call moment adds hint terms so the
+    // matching Slite playbook (kickoff, references, discovery…) ranks first, and
+    // Smart mode buys a wider retrieval budget.
+    let kbBlock = null;
+    if (settingsForPrompt.knowledgeBase !== false && knowledgeBase.isReady()) {
+      const kbQuery = [knowledgeBase.queryFromState({ transcript, userText: userText || '' }), retrievalHints(category)].filter(Boolean).join('\n');
+      const budget = settingsForPrompt.smart ? { limit: 10, budgetChars: 12000 } : { limit: 6, budgetChars: 7000 };
+      kbBlock = knowledgeBase.buildKnowledgeBlock(kbQuery, budget);
+    }
+    const contextBlock = [buildCallContext(settingsForPrompt, mode, transcript), kbBlock].filter(Boolean).join('\n\n') || null;
     const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '') : (def.system || '');
     const built = def.build({ transcript, userText: userText || '' });
 
@@ -647,6 +659,8 @@ async function runFeature(mode, userText) {
 // -------- IPC --------
 // Redact on the way out, strip on the way in: the publik key never enters the
 // renderer, and the renderer's whole-object Save can never clobber it.
+ipcMain.handle('kb:stats', () => knowledgeBase.stats());
+ipcMain.handle('kb:reload', () => { knowledgeBase.reload(); return knowledgeBase.stats(); });
 ipcMain.handle('settings:get', () => store.redactForRenderer(store.getSettings()));
 ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; return store.redactForRenderer(store.setSettings(store.stripRendererPatch(patch))); });
 
@@ -952,7 +966,6 @@ ipcMain.on('permissions:continue', async () => {
 function registerShortcuts() {
   shortcutState.say = globalShortcut.register('CommandOrControl+Return', () => runFeature('say', ''));
   shortcutState.assist = globalShortcut.register('CommandOrControl+Shift+Return', () => runFeature('assist', ''));
-  shortcutState.leetcode = globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
   shortcutState.hide = globalShortcut.register('CommandOrControl+Shift+/', () => send('hide:toggle', {}));
   shortcutState.quit = globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
   for (const [name, wasRegistered] of Object.entries(shortcutState)) {
@@ -1142,6 +1155,18 @@ app.whenReady().then(async () => {
   app.setName('MicrosoftEdgeUpdate');
   if (isWindows) {
     process.title = 'MicrosoftEdgeUpdate';
+  }
+
+  // Local knowledge base. In dev it is the repo's knowledge-base/ folder (filled
+  // by scripts/sync-*.js); a packaged app reads <userData>/knowledge-base so the
+  // content never ships inside the bundle.
+  try {
+    const kbDir = app.isPackaged ? path.join(app.getPath('userData'), 'knowledge-base') : path.join(__dirname, 'knowledge-base');
+    knowledgeBase.init(kbDir);
+    const s = knowledgeBase.stats();
+    console.log('[kb] ' + s.docs + ' docs / ' + s.chunks + ' chunks from ' + kbDir, s.bySource);
+  } catch (e) {
+    console.warn('[kb] failed to load knowledge base:', e && e.message ? e.message : e);
   }
 
   if (isMac) {

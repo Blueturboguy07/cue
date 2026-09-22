@@ -27,10 +27,9 @@ cue floats a small glass panel on top of everything. It takes **three separate i
 | **What should I say?** | `⌘` `↵` (macOS) or `Ctrl` `Enter` (Windows) | meeting audio + your mic |
 | **Recap** | button | the whole conversation |
 | **Ask anything** | type + `↵` | your screen + conversation |
-| **Solve a coding problem** | `⌘` `H` (macOS) or `Ctrl` `H` (Windows) | your screen only |
 | **Smart** toggle | pill in the box | switches to a smarter (slower) model |
 
-It's a copilot for **live meetings** ("what do I say to that?") and **coding problems** (screenshot → full solution), and it's designed to be **invisible in screen shares** so it stays your private assistant.
+It's a copilot for **live meetings** ("what do I say to that?"), and it's designed to be **invisible in screen shares** so it stays your private assistant.
 
 ### Platform support
 
@@ -132,7 +131,7 @@ the gateway attribute installs to cue — it holds no balance and is not a key).
 
 ### Step 2 (alternative) — Add your AI key (bring your own)
 
-cue uses **your own** API key, so it's free to run (you only pay your AI provider for what you use). Click the **`...`** button in the input box (or press `⌘` `,` on macOS / `Ctrl` `,` on Windows) to open **Settings**, pick a provider, and paste your key:
+cue uses **your own** API key, so it's free to run (you only pay your AI provider for what you use). Click the **settings** icon in the top bar (or press `⌘` `,` on macOS / `Ctrl` `,` on Windows) to open **Settings**, pick a provider, and paste your key:
 
 | Provider | Get a key | Notes |
 |---|---|---|
@@ -183,8 +182,7 @@ cue is hidden from most screen-share tools automatically — **Google Meet, Micr
 > On Windows, press **`Ctrl`** wherever **`⌘`** appears below. cue's own UI relabels the keys to match your OS.
 
 - **`⌘` `↵` — What should I say?** Suggests what to say next from the conversation. Works from anywhere.
-- **`⌘` `⇧` `↵` — Smart assist.** The do-the-smart-thing key. On a coding problem it solves it; in a conversation it tells you what to say. Works from anywhere.
-- **`⌘` `H` — Solve what's on screen.** Screenshots a coding problem and returns the approach, code, and time/space complexity.
+- **`⌘` `⇧` `↵` — Smart assist.** The do-the-smart-thing key. Looks at the screen and the conversation and tells you what to say. Works from anywhere.
 - **Start session / End session** (top bar) — start or stop **listening** to a meeting. The green dot means it's live.
 - **Type a question** in the box and press `↵` to ask about your screen or conversation.
 - **Smart** — flip it on for a smarter, more thorough model; off for fast and cheap.

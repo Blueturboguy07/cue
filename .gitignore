@@ -29,3 +29,9 @@ test-resume.js
 
 # Electron dist cache
 node_modules/electron/dist/electron.exe.bak
+
+# Knowledge base — internal Miter/Slite content, never commit. Keep the
+# sources config and README so a fresh clone knows how to rebuild it.
+knowledge-base/*
+!knowledge-base/README.md
+!knowledge-base/slite-sources.json

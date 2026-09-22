@@ -5,20 +5,19 @@ const { DEFAULTS, resolveShortcuts, findConflicts, isValid } = require('../src/s
 test('defaults cover the core actions', () => {
   assert.strictEqual(DEFAULTS.say, 'CommandOrControl+Return');
   assert.strictEqual(DEFAULTS.assist, 'CommandOrControl+Shift+Return');
-  assert.ok(DEFAULTS.leetcode);
   assert.ok(DEFAULTS.quit);
 });
 
 test('resolveShortcuts merges overrides', () => {
-  const map = resolveShortcuts({ leetcode: 'CommandOrControl+L' });
-  assert.strictEqual(map.leetcode, 'CommandOrControl+L');
+  const map = resolveShortcuts({ quit: 'CommandOrControl+L' });
+  assert.strictEqual(map.quit, 'CommandOrControl+L');
   assert.strictEqual(map.assist, DEFAULTS.assist);
 });
 
 test('findConflicts detects duplicate accelerators', () => {
-  const map = resolveShortcuts({ leetcode: 'CommandOrControl+Shift+Return' });
+  const map = resolveShortcuts({ quit: 'CommandOrControl+Shift+Return' });
   const conflicts = findConflicts(map);
-  assert.ok(conflicts.some(([a, b]) => (a === 'assist' && b === 'leetcode') || (a === 'leetcode' && b === 'assist')));
+  assert.ok(conflicts.some(([a, b]) => (a === 'assist' && b === 'quit') || (a === 'quit' && b === 'assist')));
 });
 
 test('no conflicts in the default set', () => {
