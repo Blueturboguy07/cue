@@ -26,7 +26,7 @@ function snapshot(overrides = {}) {
     transcript: TRANSCRIPT,
     settings: SETTINGS,
     sttDisabled: false,
-    shortcuts: { assist: 'CommandOrControl+Return', leetcode: true, quit: true },
+    shortcuts: { assist: 'CommandOrControl+Return', quit: true },
     windowAlive: true,
     ...overrides,
   };
@@ -40,7 +40,7 @@ test('reports what cue is doing', () => {
   assert.equal(state.lastTurnAt, new Date(1754300005000).toISOString());
   assert.equal(state.provider, 'openai');
   assert.deepEqual(state.models, { fast: 'gpt-4o-mini', smart: 'gpt-4o' });
-  assert.deepEqual(state.shortcuts, { assist: 'CommandOrControl+Return', leetcode: true, quit: true });
+  assert.deepEqual(state.shortcuts, { assist: 'CommandOrControl+Return', quit: true });
 });
 
 /**
