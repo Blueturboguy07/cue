@@ -42,7 +42,7 @@
     <!-- Main assistant panel -->
     <div id="panel-wrap">
       <span id="live-dot" class="off"></span>
-      <div id="stt-status" class="stt-status stt-disconnected" title="STT connection status">off</div>
+      <div id="stt-status" class="stt-status stt-disconnected">Transcription off</div>
       <div id="panel" class="glass no-drag">
 
         <!-- Two-column layout: responses (left) + live transcript sidebar (right) -->
@@ -75,7 +75,7 @@
               </div>
               <div id="composer-bottom">
                 <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
-                <button id="history-btn" class="history-btn" title="View conversation history"><span class="ic"></span></button>
+                <button id="history-btn" class="history-btn" title="Show everything said this session"><span class="ic"></span><span>Transcription history</span></button>
                 <button id="more-btn" class="more-btn" title="Settings"></button>
                 <div class="spacer"></div>
                 <button id="send-btn" title="Send"></button>
@@ -85,19 +85,19 @@
 
         </div><!-- /panel-columns -->
       </div>
-    </div>
 
-    <!-- Transcript history sidebar — floats OUTSIDE main panel, toggled by history button -->
-    <div id="transcript-sidebar" class="transcript-sidebar hidden">
-      <div class="ts-header">
-        <span class="ts-title">Conversation History</span>
-        <button class="ts-close-btn" id="close-sidebar-btn" title="Close history">✕</button>
-      </div>
-      <div id="ts-list" class="ts-list">
-        <div class="ts-placeholder">Conversation history will appear here when listening.</div>
-      </div>
-      <div class="ts-footer">
-        <button class="ts-clear-btn" id="clear-transcript-btn" title="Clear all history">Clear History</button>
+      <!-- Transcript history sidebar — slides out from behind the panel's right edge -->
+      <div id="transcript-sidebar" class="transcript-sidebar">
+        <div class="ts-header">
+          <span class="ts-title">Transcription history</span>
+          <button class="ts-close-btn" id="close-sidebar-btn" title="Close history">✕</button>
+        </div>
+        <div id="ts-list" class="ts-list">
+          <div class="ts-placeholder">Conversation history will appear here when listening.</div>
+        </div>
+        <div class="ts-footer">
+          <button class="ts-clear-btn" id="clear-transcript-btn" title="Clear all history">Clear History</button>
+        </div>
       </div>
     </div>
   </div>

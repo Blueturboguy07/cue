@@ -155,7 +155,7 @@
     if (!el) {
       el = document.createElement('div');
       el.id = 'toast';
-      document.getElementById('app').appendChild(el);
+      document.getElementById('panel-wrap').appendChild(el);
     }
     // Clear any pending timers to prevent overlap
     clearTimeout(toastTimer);
@@ -298,30 +298,6 @@
     while (questionHistory.length > MAX_QUESTION_HISTORY) {
       questionHistory.shift();
     }
-    
-    updateHistoryBadge(); // FIX #14: Update badge when history changes
-  }
-  
-  // FIX #14: History button badge showing count
-  function updateHistoryBadge() {
-    const historyBtn = document.getElementById('history-btn');
-    if (!historyBtn) return;
-    
-    // Remove existing badge if any
-    let badge = historyBtn.querySelector('.history-badge');
-    
-    const count = questionHistory.length;
-    if (count > 0) {
-      if (!badge) {
-        badge = document.createElement('span');
-        badge.className = 'history-badge';
-        historyBtn.appendChild(badge);
-      }
-      badge.textContent = count > 9 ? '9+' : count;
-      badge.style.display = '';
-    } else if (badge) {
-      badge.style.display = 'none';
-    }
   }
 
   // ---- Restore last question from history (Ctrl+Z) ----
@@ -334,7 +310,6 @@
       composer.classList.add('stt-filling');
       updateQuestionReadyState();
       syncPlaceholder();
-      updateHistoryBadge(); // Update badge after removing from history
       showToast('Question restored', 1500);
       return true;
     }
@@ -440,7 +415,6 @@
     clearInputInterim(); // FIX #5: Clear interim when clearing input
     syncPlaceholder();
     updateSendButtonState(); // FIX #9
-    updateHistoryBadge(); // FIX #14
     
     // FIX #10: Show undo hint when explicitly cleared
     if (showUndoHint && hadContent) {
@@ -577,8 +551,9 @@
   });
 
   // Hide / collapse
+  let reopenSidebarOnExpand = false;
   function toggleHide() {
-    const collapsed = $('#panel').classList.toggle('collapsed');
+    const collapsed = $('#panel-wrap').classList.toggle('collapsed');
     const btn = $('#hide-btn');
     btn.classList.toggle('collapsed', collapsed);
     const label = btn.querySelector('.tb-hide-label');
@@ -586,7 +561,12 @@
     if (label) label.textContent = text;
     btn.title = text;
     btn.setAttribute('aria-label', text);
-    $('#live-dot').style.display = collapsed ? 'none' : '';
+    if (collapsed) {
+      reopenSidebarOnExpand = sidebarOpen;
+      if (sidebarOpen) hideSidebar();
+    } else if (reopenSidebarOnExpand) {
+      showSidebar();
+    }
   }
   $('#hide-btn').addEventListener('click', toggleHide);
   cue.on('hide:toggle', toggleHide);
@@ -664,22 +644,14 @@
   const clearTranscriptBtn = document.getElementById('clear-transcript-btn');
   if (clearTranscriptBtn) {
     clearTranscriptBtn.addEventListener('click', async () => {
-      // Save current input to history before clearing (for undo)
-      saveToQuestionHistory(input.value);
-      
       await cue.clearTranscript();
-      clearMessages();
       // Also clear the floating interim bar
       if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
-      // FIX #1: Use ts-list instead of non-existent transcript-list
-      const list = document.getElementById('ts-list');
-      if (list) list.innerHTML = '<div class="ts-placeholder">Conversation history will appear here when listening.</div>';
       transcriptInterimEl = null;
-      clearTranscriptSidebar(); // clear the history sidebar too
-      hardClearSTTFill(); // clear the input box too
-      
-      const undoHint = isWindows ? 'Ctrl+Z to undo' : '⌘Z to undo';
-      showToast(`Transcript cleared · ${undoHint}`, 3500);
+      clearTranscriptSidebar();
+      // Only a question auto-filled from the transcript goes; anything the user typed stays.
+      if (inputFromSTT) hardClearSTTFill();
+      showToast('Transcript cleared.', 2500);
     });
   }
 
@@ -875,17 +847,28 @@
 
   let sttState = 'disconnected';
 
-  function updateSttStatus({ active, streaming } = {}) {
+  const STT_LABELS = {
+    disconnected: 'Transcription off',
+    connecting: 'Starting transcription…',
+    loading: 'Starting transcription…',
+    streaming: 'Transcription running',
+    batch: 'Transcription running',
+    local: 'Transcription running',
+    stopping: 'Stopping transcription…',
+    error: 'Transcription error'
+  };
+
+  function setSttState(state) {
+    sttState = state;
     const label = document.getElementById('stt-status');
     if (!label) return;
-    if (active === false) {
-      sttState = 'disconnected';
-      label.textContent = 'off';
-    } else if (active === true) {
-      sttState = streaming ? 'connecting' : 'batch';
-      label.textContent = sttState;
-    }
-    label.className = 'stt-status stt-' + sttState;
+    label.textContent = STT_LABELS[state];
+    label.className = 'stt-status stt-' + state;
+  }
+
+  function updateSttStatus({ active, streaming } = {}) {
+    if (active === false) setSttState('disconnected');
+    else if (active === true) setSttState(streaming ? 'connecting' : 'batch');
   }
 
   // ---- transcript history sidebar (hidden by default, manual toggle) ----
@@ -896,23 +879,40 @@
   const tsRowTimer = { you: null, them: null };
   const TS_SENTENCE_GAP_MS = 10000; // 10s silence = new row
 
+  const SIDEBAR_GAP = 12; // matches the 12px offset in .transcript-sidebar
+
+  function placeSidebar(sidebar) {
+    const panel = $('#panel').getBoundingClientRect();
+    const needed = sidebar.offsetWidth + SIDEBAR_GAP;
+    const areaLeft = screen.availLeft;
+    const areaRight = screen.availLeft + screen.availWidth;
+    const fitsRight = window.screenX + panel.right + needed <= areaRight;
+    const fitsLeft = window.screenX + panel.left - needed >= areaLeft;
+    const onLeft = !fitsRight && fitsLeft;
+    if (sidebar.classList.contains('left') === onLeft) return;
+    // Switch sides without animating, so the open transition starts from the new side's tucked position.
+    sidebar.classList.add('ts-instant');
+    sidebar.classList.toggle('left', onLeft);
+    void sidebar.offsetWidth;
+    sidebar.classList.remove('ts-instant');
+  }
+
   function showSidebar() {
     const sidebar = document.getElementById('transcript-sidebar');
     const historyBtn = document.getElementById('history-btn');
-    if (sidebar) sidebar.classList.remove('hidden');
+    if (sidebar) {
+      placeSidebar(sidebar);
+      sidebar.classList.add('open');
+    }
     if (historyBtn) historyBtn.classList.add('active');
-    const panelWrap = document.getElementById('panel-wrap');
-    if (panelWrap) panelWrap.classList.add('sidebar-open');
     sidebarOpen = true;
   }
 
   function hideSidebar() {
     const sidebar = document.getElementById('transcript-sidebar');
     const historyBtn = document.getElementById('history-btn');
-    if (sidebar) sidebar.classList.add('hidden');
+    if (sidebar) sidebar.classList.remove('open');
     if (historyBtn) historyBtn.classList.remove('active');
-    const panelWrap = document.getElementById('panel-wrap');
-    if (panelWrap) panelWrap.classList.remove('sidebar-open');
     sidebarOpen = false;
   }
 
@@ -934,7 +934,7 @@
   // History button toggle
   const historyBtn = document.getElementById('history-btn');
   if (historyBtn) {
-    historyBtn.innerHTML = icon('message-square-text', { size: 15 });
+    historyBtn.querySelector('.ic').innerHTML = icon('message-square-text', { size: 14 });
     historyBtn.addEventListener('click', toggleSidebar);
   }
 
@@ -1026,11 +1026,6 @@
     setSessionButton(active);
     // FIX #4: Add .listening class to composer when capture is active
     composer.classList.toggle('listening', active);
-    // Update history button to show active state when listening
-    const historyBtn = document.getElementById('history-btn');
-    if (historyBtn) {
-      historyBtn.classList.toggle('listening', active);
-    }
     // startSystemAudio() is called directly from the stop-button click handler
     // so that the getDisplayMedia request has a fresh user gesture.
     // Here we only start the mic (no gesture required) and stop everything on deactivate.
@@ -1047,14 +1042,8 @@
       }
       // Don't auto-close sidebar — let user keep it open if they want
     }
-    updateSttStatus({ active, streaming });
-    if (active && mode === 'local') {
-      sttState = 'local';
-      const label = document.getElementById('stt-status');
-      if (label) { label.textContent = 'local'; label.className = 'stt-status stt-local'; }
-    } else {
-      updateSttStatus({ active, streaming });
-    }
+    if (active && mode === 'local') setSttState('local');
+    else updateSttStatus({ active, streaming });
   });
 
   // ---- real-time transcript display (interim + final) ----
@@ -1119,20 +1108,15 @@
   cue.on('stt:status', ({ channel, status, provider }) => {
     cue.log(`[stt] ${provider || channel || 'unknown'} ${status}`);
     if (provider === 'local') {
-      const label = document.getElementById('stt-status');
-      const localLabels = {
-        loading: 'loading local',
+      const localStates = {
+        loading: 'loading',
         ready: 'local',
         transcribing: 'local',
         stopping: 'stopping',
-        off: 'off',
+        off: 'disconnected',
         error: 'error'
       };
-      sttState = status === 'ready' || status === 'transcribing' ? 'local' : status;
-      if (label) {
-        label.textContent = localLabels[status] || status;
-        label.className = 'stt-status stt-' + sttState;
-      }
+      if (localStates[status]) setSttState(localStates[status]);
       if (status === 'loading') setSessionButton(true);
       if (status === 'off' || status === 'error') setSessionButton(false);
       if (status === 'loading' || status === 'transcribing' || status === 'stopping') setLiveDotState('transcribing');
@@ -1140,11 +1124,7 @@
       if (status === 'off') setLiveDotState('off');
       return;
     }
-    if (status === 'connected') {
-      sttState = 'streaming';
-      const label = document.getElementById('stt-status');
-      if (label) { label.textContent = sttState; label.className = 'stt-status stt-streaming'; }
-    }
+    if (status === 'connected') setSttState('streaming');
   });
   cue.on('vad:state', ({ channel, speaking }) => {
     setLiveDotState(speaking ? 'speaking' : 'idle');
@@ -1238,11 +1218,7 @@
     showStatus(message);
     if (sttState !== 'disconnected') {
       const lower = message.toLowerCase();
-      if (lower.includes('error') || lower.includes(' off')) {
-        sttState = 'error';
-        const label = document.getElementById('stt-status');
-        if (label) { label.textContent = sttState; label.className = 'stt-status stt-error'; }
-      }
+      if (lower.includes('error') || lower.includes(' off')) setSttState('error');
     }
   });
 
@@ -1988,7 +1964,6 @@
     smartBtn.classList.toggle('on', !!settings.smart);
     showExample();
     syncPlaceholder();
-    updateHistoryBadge(); // FIX #3: Initialize badge on boot
     updateSendButtonState(); // Initialize send button state
 
     // Fix placeholder shortcut hint to match platform
