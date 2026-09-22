@@ -1725,13 +1725,35 @@
 
   // ---- click-through: only the UI blocks the mouse; empty gaps pass to your screen ----
   let ignoring = null;
+  let draggingWindow = false;
   function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
   document.addEventListener('mousemove', (e) => {
+    // The window trails the cursor while dragging; going click-through then would drop the release.
+    if (draggingWindow) return;
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
+
+  // ---- window drag: press anywhere on the toolbar that isn't a control ----
+  const toolbar = $('#toolbar');
+  toolbar.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('button, input, .tb-opacity-wrap')) return;
+    e.preventDefault();
+    toolbar.setPointerCapture(e.pointerId);
+    draggingWindow = true;
+    setIgnore(false);
+    toolbar.classList.add('dragging');
+    cue.windowDragStart();
+  });
+  // Fires on release, cancel, or anything else that ends the press.
+  toolbar.addEventListener('lostpointercapture', () => {
+    if (!draggingWindow) return;
+    draggingWindow = false;
+    toolbar.classList.remove('dragging');
+    cue.windowDragEnd();
+  });
 
   // ---- assistant access request ------------------------------------------
   // Shown here rather than as a native dialog because cue hides its dock icon:

@@ -64,8 +64,6 @@ html, body {
 }
 #app.opacity-open { padding-top: 82px; }
 #toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
-#toolbar { -webkit-app-region: drag; }   /* drag the top pill to move the window */
-#panel-wrap, #panel, #messages, #action-row, #composer, #input, textarea, button, .act, .smart-pill, .more-btn, #send-btn, .s-close, .s-seg button, .ob-buttons button, .ob-ghost, .ob-primary, .tb-opacity-wrap, .opacity-popover { -webkit-app-region: no-drag; }
 
 /* ============================ Toolbar pill ============================ */
 #toolbar {
@@ -82,7 +80,8 @@ html, body {
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
 }
-.drag-handle { -webkit-app-region: drag; }
+#toolbar { cursor: grab; }              /* the renderer moves the window on a press here */
+#toolbar.dragging, #toolbar.dragging * { cursor: grabbing; }
 .drag-pill {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 8px; border-radius: var(--r-pill);
@@ -90,7 +89,6 @@ html, body {
   color: rgba(255,255,255,0.8);
   font-size: 12px; font-weight: 600; letter-spacing: 0.01em;
   cursor: grab;
-  -webkit-app-region: drag;
 }
 .drag-pill:hover { background: rgba(255,255,255,0.10); }
 .drag-dots {
@@ -110,7 +108,7 @@ html, body {
 .tb-hide:hover { background: rgba(255,255,255,0.08); }
 .tb-hide .chev { width: 14px; height: 14px; display: inline-flex; color: rgba(255,255,255,0.9); }
 .tb-hide.collapsed .chev { transform: rotate(180deg); }
-.tb-opacity-wrap { position: relative; display: inline-flex; -webkit-app-region: no-drag; }
+.tb-opacity-wrap { position: relative; display: inline-flex; }
 .tb-opacity { width: 28px; height: 28px; padding: 0; border-radius: var(--r-pill); }
 .tb-opacity .ic { width: 14px; height: 14px; display: inline-flex; }
 .tb-opacity:hover { background: rgba(255,255,255,0.08); }
@@ -123,7 +121,6 @@ html, body {
   border: 1px solid rgba(255,255,255,0.14);
   border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.40);
-  -webkit-app-region: no-drag;
 }
 .opacity-popover.hidden { display: none; }
 .opacity-label { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.88); }
@@ -489,7 +486,7 @@ button:focus { outline: none; }
   background: rgba(0,0,0,0.35); backdrop-filter: blur(4px);
 }
 #settings-scrim.hidden { display: none; }
-#settings { width: min(480px, 94vw); padding: 18px 20px 20px; -webkit-app-region: no-drag; max-height: 88vh; display: flex; flex-direction: column; }
+#settings { width: min(480px, 94vw); padding: 18px 20px 20px; max-height: 88vh; display: flex; flex-direction: column; }
 .s-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-shrink: 0; }
 .s-title { font-size: 17px; font-weight: 600; color: var(--tx-1); }
 .s-close { border: none; background: var(--accent); color: #fff; font-weight: 600; font-size: 13px; padding: 6px 14px; border-radius: var(--r-pill); cursor: pointer; }
@@ -615,7 +612,7 @@ button:focus { outline: none; }
 /* ============================ Onboarding / tutorial ============================ */
 #onboard-scrim { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(0,0,0,0.45); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 #onboard-scrim.hidden { display: none; }
-#onboard { width: min(470px, 93vw); padding: 26px 28px 18px; text-align: center; -webkit-app-region: no-drag; animation: overlayIn 240ms cubic-bezier(0.22,1,0.36,1); }
+#onboard { width: min(470px, 93vw); padding: 26px 28px 18px; text-align: center; animation: overlayIn 240ms cubic-bezier(0.22,1,0.36,1); }
 .ob-dots { display: flex; gap: 6px; justify-content: center; margin-bottom: 20px; }
 .ob-dots span { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.20); transition: all 220ms ease; }
 .ob-dots span.on { background: var(--accent); width: 20px; border-radius: 4px; }
@@ -883,7 +880,7 @@ button:focus { outline: none; }
    each overlay's `inset: 0` so it wins. */
 #settings-scrim, #onboard-scrim, #consent-scrim { left: var(--side-w); right: auto; width: var(--main-w); }
 #consent-scrim.hidden { display: none; }
-#consent { width: min(430px, 92vw); padding: 24px 26px 16px; text-align: center; -webkit-app-region: no-drag; animation: overlayIn 240ms cubic-bezier(0.22,1,0.36,1); }
+#consent { width: min(430px, 92vw); padding: 24px 26px 16px; text-align: center; animation: overlayIn 240ms cubic-bezier(0.22,1,0.36,1); }
 .cs-title { font-size: 15px; font-weight: 620; color: var(--tx-1); line-height: 1.35; }
 .cs-body { margin-top: 10px; color: var(--tx-mut); font-size: 12.5px; line-height: 1.5; white-space: pre-line; }
 .cs-actions { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }

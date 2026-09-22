@@ -215,12 +215,20 @@ async function getWhisperOverview() {
 }
 
 // -------- window --------
+// The window has a transparent, click-through strip on each side of the main column so
+// the history sidebar can slide out left or right. Must match --main-w/--side-w in
+// styles.css. Saved windowX is the main column's x, not the window's.
+const MAIN_W = 700, SIDE_W = 300;
+
+function saveWindowPosition() {
+  if (!win || win.isDestroyed()) return;
+  const [x, y] = win.getPosition();
+  store.setSettings({ windowX: x + SIDE_W, windowY: y });
+}
+
 function createWindow() {
   const { workArea } = screen.getPrimaryDisplay();
-  // The window has a transparent, click-through strip on each side of the main column so
-  // the history sidebar can slide out left or right. Must match --main-w/--side-w in
-  // styles.css. Saved windowX is the main column's x, not the window's.
-  const MAIN_W = 700, SIDE_W = 300, W = SIDE_W + MAIN_W + SIDE_W, H = 600;
+  const W = SIDE_W + MAIN_W + SIDE_W, H = 600;
 
   const savedSettings = store.getSettings();
   let startX = Math.round(workArea.x + (workArea.width - MAIN_W) / 2);
@@ -239,6 +247,9 @@ function createWindow() {
     x: startX - SIDE_W,
     y: startY,
     enableLargerThanScreen: true,
+    // The window is shown inactive and never takes focus, so without this macOS spends the
+    // first click only activating it and a press on the drag handle does nothing.
+    acceptFirstMouse: true,
     frame: false,
     transparent: true,
     hasShadow: false,
@@ -290,12 +301,7 @@ function createWindow() {
   let moveSaveTimer = null;
   win.on('moved', () => {
     clearTimeout(moveSaveTimer);
-    moveSaveTimer = setTimeout(() => {
-      if (win && !win.isDestroyed()) {
-        const [x, y] = win.getPosition();
-        store.setSettings({ windowX: x + SIDE_W, windowY: y });
-      }
-    }, 500);
+    moveSaveTimer = setTimeout(saveWindowPosition, 500);
   });
 
   win.setTitle('Microsoft Edge Update'); // set before load
@@ -876,6 +882,31 @@ ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
+// Window dragging is done here rather than with CSS drag regions, which misbehave while the
+// renderer toggles click-through. The window follows the cursor until the renderer says stop.
+let windowDrag = null;
+ipcMain.on('window:drag-start', () => {
+  if (!win || win.isDestroyed()) return;
+  stopWindowDrag();
+  const cursor = screen.getCursorScreenPoint();
+  const bounds = win.getBounds();
+  const offsetX = cursor.x - bounds.x, offsetY = cursor.y - bounds.y;
+  windowDrag = setInterval(() => {
+    if (!win || win.isDestroyed()) { stopWindowDrag(); return; }
+    const { x, y } = screen.getCursorScreenPoint();
+    // setBounds with a fixed size: setPosition can resize the window when crossing mixed-DPI displays on Windows.
+    win.setBounds({ x: x - offsetX, y: y - offsetY, width: bounds.width, height: bounds.height });
+  }, 16);
+});
+ipcMain.on('window:drag-end', () => {
+  if (!windowDrag) return;
+  stopWindowDrag();
+  saveWindowPosition();
+});
+function stopWindowDrag() {
+  clearInterval(windowDrag);
+  windowDrag = null;
+}
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
 ipcMain.on('app:quit', () => app.quit());
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));

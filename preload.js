@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('cue', {
   micPcm: (arrayBuffer) => ipcRenderer.send('mic:pcm', arrayBuffer),
   systemPcm: (arrayBuffer) => ipcRenderer.send('system:pcm', arrayBuffer),
   setIgnoreMouse: (v) => ipcRenderer.send('mouse:ignore', v),
+  windowDragStart: () => ipcRenderer.send('window:drag-start'),
+  windowDragEnd: () => ipcRenderer.send('window:drag-end'),
   clearTranscript: () => ipcRenderer.invoke('transcript:clear'),
   openPane: (url) => ipcRenderer.send('open-pane', url),
   publikState: () => ipcRenderer.invoke('publik:state'),
