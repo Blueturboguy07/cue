@@ -132,7 +132,7 @@ the gateway attribute installs to cue — it holds no balance and is not a key).
 
 ### Step 2 (alternative) — Add your AI key (bring your own)
 
-cue uses **your own** API key, so it's free to run (you only pay your AI provider for what you use). Click the **`...`** button in the input box (or press `⌘` `,` on macOS / `Ctrl` `,` on Windows) to open **Settings**, pick a provider, and paste your key:
+cue uses **your own** API key, so it's free to run (you only pay your AI provider for what you use). Click the **settings** icon in the top bar (or press `⌘` `,` on macOS / `Ctrl` `,` on Windows) to open **Settings**, pick a provider, and paste your key:
 
 | Provider | Get a key | Notes |
 |---|---|---|
