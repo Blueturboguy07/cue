@@ -31,9 +31,20 @@ const wsPath = require.resolve('ws');
 require.cache[wsPath] = { id: wsPath, filename: wsPath, loaded: true, exports: FakeWebSocket };
 const { DeepgramStreamingSTT, OpenAIRealtimeSTT } = require('../src/stt-streaming');
 
+// node:test's mock timers took an array before Node 20.4 and take { apis } after it.
+// CI still runs Node 18, so accept both forms.
+function enableMockTimeout(t) {
+  try {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+  } catch (err) {
+    if (err.code !== 'ERR_INVALID_ARG_TYPE') throw err;
+    t.mock.timers.enable(['setTimeout']);
+  }
+}
+
 for (const [name, Ctor] of [['Deepgram', DeepgramStreamingSTT], ['OpenAI Realtime', OpenAIRealtimeSTT]]) {
   test(`${name}: disconnect() during the handshake is not reported as a provider error and does not reconnect`, async (t) => {
-    t.mock.timers.enable({ apis: ['setTimeout'] });
+    enableMockTimeout(t);
     sockets.length = 0;
     const errors = [];
     const statuses = [];
@@ -63,7 +74,7 @@ for (const [name, Ctor] of [['Deepgram', DeepgramStreamingSTT], ['OpenAI Realtim
 }
 
 test('Deepgram: an unexpected close while connected still reconnects', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  enableMockTimeout(t);
   sockets.length = 0;
   const stt = new DeepgramStreamingSTT('key', {});
   await stt.connect();

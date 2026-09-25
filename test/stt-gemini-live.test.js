@@ -3,6 +3,17 @@ const test = require('node:test');
 const { GeminiLiveSTT, createStreamingSTT } = require('../src/stt-streaming');
 const { GEMINI_TRANSCRIBE_LIVE_MODEL } = require('../src/llm');
 
+// node:test's mock timers took an array before Node 20.4 and take { apis } after it.
+// CI still runs Node 18, so accept both forms.
+function enableMockTimeout(t) {
+  try {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+  } catch (err) {
+    if (err.code !== 'ERR_INVALID_ARG_TYPE') throw err;
+    t.mock.timers.enable(['setTimeout']);
+  }
+}
+
 // Fake @google/genai live client. `script` decides what a connect attempt does:
 //   'ok'            -> resolves a session (after callbacks.onopen semantics)
 //   'closed:<why>'  -> never resolves; fires onclose with that reason (how the SDK reports rejection)
@@ -114,7 +125,7 @@ test('an unknown-model close is mapped to a 404 so the shared error wording appl
 });
 
 test('a server-initiated close keeps the cut-off hypothesis, reports disconnected, and reconnects with audio buffered meanwhile', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  enableMockTimeout(t);
   const { stt, genai, events } = make('ok');
   await stt.connect();
   const first = genai.sessions[0];
@@ -134,7 +145,7 @@ test('a server-initiated close keeps the cut-off hypothesis, reports disconnecte
 });
 
 test('disconnect() ends the stream cleanly and does not reconnect', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  enableMockTimeout(t);
   const { stt, genai, events } = make('ok');
   await stt.connect();
   const s = genai.sessions[0];
@@ -149,7 +160,7 @@ test('disconnect() ends the stream cleanly and does not reconnect', async (t) =>
 });
 
 test('a connect that never completes times out with an error rather than wedging the channel', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  enableMockTimeout(t);
   const { stt, events } = make('hang');
   const p = stt.connect();
   t.mock.timers.tick(15000);
