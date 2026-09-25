@@ -64,6 +64,10 @@ html, body {
 }
 #app.opacity-open { padding-top: 82px; }
 #toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #consent-scrim { pointer-events: auto; }
+/* #app is a flex column: without this the toolbar is a shrinkable flex item, so
+   a tall panel (long transcript, long response) squeezes the Stop/Hide/Quit
+   controls down to nothing and leaves no way to stop listening. */
+#toolbar { flex-shrink: 0; }
 
 /* ============================ Toolbar pill ============================ */
 #toolbar {
