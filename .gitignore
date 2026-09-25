@@ -16,7 +16,8 @@ native/systemaudio
 .DS_Store
 
 # User data / secrets — NEVER commit these
-cue-data.json        # contains API keys + personal interview prep
+# Contains API keys and personal interview prep.
+cue-data.json
 *.env
 .env*
 
