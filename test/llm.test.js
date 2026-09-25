@@ -610,3 +610,35 @@ test('geminiGenerationConfig: smart tier keeps the model default reasoning with 
   assert.equal(cfg.thinkingConfig, undefined);
   assert.ok(cfg.maxOutputTokens >= 1400 + 4096);
 });
+
+// Issue #63: OpenAI's reasoning models (GPT-5, o-series) reject max_tokens on
+// Chat Completions with "Unsupported parameter: 'max_tokens'".
+function openAISettings(model, overrides = {}) {
+  return { provider: 'openai', smart: false, apiKeys: { openai: 'sk-test' }, models: { openai: { fast: model, smart: model } }, ...overrides };
+}
+
+test('OpenAI requests send max_completion_tokens, never max_tokens', async () => {
+  await createLLM(openAISettings('gpt-4o-mini')).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} });
+  assert.equal(capturedCompletionRequest.max_tokens, undefined);
+  assert.ok(capturedCompletionRequest.max_completion_tokens > 0);
+  assert.equal(capturedCompletionRequest.reasoning_effort, undefined, 'non-reasoning models get no effort parameter');
+});
+
+test('GPT-5 and o-series get room to reason and an effort level (Smart raises it)', async () => {
+  for (const model of ['gpt-5', 'gpt-5-mini', 'o4-mini']) {
+    await createLLM(openAISettings(model)).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], maxTokens: 700, onToken() {} });
+    assert.equal(capturedCompletionRequest.max_tokens, undefined, model);
+    assert.ok(capturedCompletionRequest.max_completion_tokens > 700, model + ' needs headroom for reasoning tokens');
+    assert.equal(capturedCompletionRequest.reasoning_effort, 'low', model);
+  }
+  await createLLM(openAISettings('gpt-5', { smart: true })).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} });
+  assert.equal(capturedCompletionRequest.reasoning_effort, 'medium');
+  await createLLM(openAISettings('gpt-5-chat-latest')).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} });
+  assert.equal(capturedCompletionRequest.reasoning_effort, undefined, 'gpt-5-chat is not a reasoning model');
+});
+
+test('OpenAI-compatible providers keep max_tokens', async () => {
+  await createLLM(createCustomSettings()).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} });
+  assert.ok(capturedCompletionRequest.max_tokens > 0);
+  assert.equal(capturedCompletionRequest.max_completion_tokens, undefined);
+});

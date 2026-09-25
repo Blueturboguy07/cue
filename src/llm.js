@@ -236,7 +236,26 @@ function stripDataUrl(dataUrl) {
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onResponse }) {
+// OpenAI's reasoning models (GPT-5 except the -chat variants, and the
+// o-series) reject max_tokens on Chat Completions ("Unsupported parameter:
+// 'max_tokens'", issue #63), and their hidden reasoning tokens count against
+// the output limit. OpenAI itself gets max_completion_tokens, which every
+// current OpenAI chat model accepts; reasoning models also get room to reason
+// and an effort level ("low" is accepted by every reasoning model; Smart asks
+// for "medium"). OpenAI-compatible servers (Custom, Groq, publik, MiniMax,
+// DeepSeek, Cerebras) keep max_tokens, which is what they support.
+const OPENAI_REASONING_RE = /^(o\d|gpt-5)(?!.*-chat)/i;
+const OPENAI_REASONING_HEADROOM = { fast: 2048, smart: 8192 };
+function openAITokenParams({ model, maxTokens, thinking, nativeOpenAI }) {
+  if (!nativeOpenAI) return { max_tokens: maxTokens };
+  if (!OPENAI_REASONING_RE.test(model || '')) return { max_completion_tokens: maxTokens };
+  return {
+    max_completion_tokens: maxTokens + (thinking ? OPENAI_REASONING_HEADROOM.smart : OPENAI_REASONING_HEADROOM.fast),
+    reasoning_effort: thinking ? 'medium' : 'low'
+  };
+}
+
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, thinking, nativeOpenAI = false, onToken, onResponse }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
@@ -253,7 +272,7 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
       messages.push({ role: t.role, content: t.text });
     }
   });
-  const pending = client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens });
+  const pending = client.chat.completions.create({ model, messages, stream: true, ...openAITokenParams({ model, maxTokens, thinking, nativeOpenAI }) });
   let stream;
   if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
     // The gateway stamps x-publik-* headers at admission; hand the raw
@@ -265,9 +284,16 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
     stream = await pending;
   }
   let full = '';
+  let finishReason = null;
   for await (const part of stream) {
-    const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
+    const choice = part.choices && part.choices[0];
+    const d = choice && choice.delta && choice.delta.content;
     if (d) { full += d; onToken(d); }
+    if (choice && choice.finish_reason) finishReason = choice.finish_reason;
+  }
+  // A reasoning model can spend the whole budget thinking: say so instead of showing nothing.
+  if (finishReason === 'length' && !full.trim()) {
+    throw new Error('The model used its whole output budget before answering. Try again with Smart off, or pick another model in Settings.');
   }
   return full;
 }
@@ -315,9 +341,16 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
   }
   const stream = await client.chat.completions.create({ model, messages, stream: true, max_completion_tokens: maxTokens });
   let full = '';
+  let finishReason = null;
   for await (const part of stream) {
-    const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
+    const choice = part.choices && part.choices[0];
+    const d = choice && choice.delta && choice.delta.content;
     if (d) { full += d; onToken(d); }
+    if (choice && choice.finish_reason) finishReason = choice.finish_reason;
+  }
+  // A reasoning model can spend the whole budget thinking: say so instead of showing nothing.
+  if (finishReason === 'length' && !full.trim()) {
+    throw new Error('The model used its whole output budget before answering. Try again with Smart off, or pick another model in Settings.');
   }
   return full;
 }
@@ -526,7 +559,7 @@ function createLLM(settings) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
       const args = { apiKey, baseURL, endpoint, model, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
       try {
-        if (provider === 'openai') return await streamOpenAI(args);
+        if (provider === 'openai') return await streamOpenAI({ ...args, nativeOpenAI: true });
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
         if (provider === PUBLIK_PROVIDER) return await streamOpenAI(args);
         if (provider === 'ollama') return await streamOllama(args);
