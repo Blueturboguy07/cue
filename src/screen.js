@@ -1,6 +1,10 @@
-// Screenshot via desktopCapturer (main process).
+// Screenshot via native screencapture on macOS, falling back to desktopCapturer (main process).
 // The first call can trigger the system permission prompt for the app.
-const { desktopCapturer, screen } = require('electron');
+const { desktopCapturer, screen, nativeImage } = require('electron');
+const { execFile } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 // Vision models downscale anything larger than ~1568 px on the long edge
 // anyway, and a gateway sitting on Vercel refuses request bodies over 4.5 MB
@@ -28,7 +32,35 @@ function encodeScreenshot(img, { maxLongEdge = MAX_LONG_EDGE_PX, quality = JPEG_
   return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
 }
 
+/**
+ * Capture full-resolution screen on macOS using /usr/sbin/screencapture.
+ * Bypasses ScreenCaptureKit/desktopCapturer empty thumbnail issues on macOS
+ * and returns a NativeImage, or null if capture failed.
+ */
+function captureMacNative() {
+  return new Promise((resolve) => {
+    const tmpPath = path.join(os.tmpdir(), `cue_capture_${Date.now()}_${Math.random().toString(36).slice(2)}.png`);
+    execFile('/usr/sbin/screencapture', ['-x', '-t', 'png', tmpPath], (err) => {
+      if (err) return resolve(null);
+      try {
+        if (!fs.existsSync(tmpPath)) return resolve(null);
+        const img = nativeImage && nativeImage.createFromPath ? nativeImage.createFromPath(tmpPath) : null;
+        fs.unlink(tmpPath, () => {});
+        if (!img || img.isEmpty()) return resolve(null);
+        resolve(img);
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  });
+}
+
 async function captureScreenshot() {
+  if (process.platform === 'darwin') {
+    const macImg = await captureMacNative();
+    if (macImg) return encodeScreenshot(macImg);
+  }
+
   const primary = screen.getPrimaryDisplay();
   const { width, height } = primary.size;
   const scale = primary.scaleFactor || 1;
@@ -44,4 +76,4 @@ async function captureScreenshot() {
   return encodeScreenshot(img); // data:image/jpeg;base64,...
 }
 
-module.exports = { captureScreenshot, encodeScreenshot, MAX_LONG_EDGE_PX, JPEG_QUALITY, MAX_DATA_URL_BYTES };
+module.exports = { captureScreenshot, encodeScreenshot, captureMacNative, MAX_LONG_EDGE_PX, JPEG_QUALITY, MAX_DATA_URL_BYTES };
