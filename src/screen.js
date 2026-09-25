@@ -45,11 +45,13 @@ function captureMacNative() {
       try {
         if (!fs.existsSync(tmpPath)) return resolve(null);
         const img = nativeImage && nativeImage.createFromPath ? nativeImage.createFromPath(tmpPath) : null;
-        fs.unlink(tmpPath, () => {});
         if (!img || img.isEmpty()) return resolve(null);
         resolve(img);
       } catch (_) {
         resolve(null);
+      } finally {
+        // The PNG is a full-resolution picture of the user's screen: never leave it behind.
+        fs.unlink(tmpPath, () => {});
       }
     });
   });
