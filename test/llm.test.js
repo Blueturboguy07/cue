@@ -34,7 +34,7 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
   return originalModuleLoad.call(this, request, parent, isMain);
 };
 
-const { createLLM, formatProviderErrorMessage, isQuotaError, geminiGenerationConfig, CURRENT_GEMINI_DEFAULT, PUBLIK_PROVIDER, isRateLimitError } = require('../src/llm');
+const { createLLM, groqAcceptsImages, formatProviderErrorMessage, isQuotaError, geminiGenerationConfig, CURRENT_GEMINI_DEFAULT, PUBLIK_PROVIDER, isRateLimitError } = require('../src/llm');
 
 test.after(() => {
   Module._load = originalModuleLoad;
@@ -609,4 +609,51 @@ test('geminiGenerationConfig: smart tier keeps the model default reasoning with 
   const cfg = geminiGenerationConfig({ system: 'sys', maxTokens: 1400, thinking: true });
   assert.equal(cfg.thinkingConfig, undefined);
   assert.ok(cfg.maxOutputTokens >= 1400 + 4096);
+});
+
+
+function createGroqSettings(fastModel) {
+  return {
+    provider: 'groq',
+    smart: false,
+    apiKeys: { groq: 'groq-test-key' },
+    models: { groq: { fast: fastModel, smart: 'llama-3.3-70b-versatile' } }
+  };
+}
+
+async function streamGroqWithScreenshot(fastModel) {
+  const llm = createLLM(createGroqSettings(fastModel));
+  await llm.stream({
+    system: 'sys',
+    turns: [{ role: 'user', text: 'what is on my screen' }],
+    imageDataUrl: 'data:image/png;base64,AAAA',
+    maxTokens: 64,
+    onToken: () => {}
+  });
+  return capturedCompletionRequest.messages[1];
+}
+
+test('groq: a text-only model gets the turn as a plain string, never the screenshot array', async () => {
+  // The field failure (2026-09-29, Windows): every question with a screenshot
+  // came back `400 messages[1].content must be a string` from Groq's default
+  // llama-3.1-8b-instant, because the screenshot path sends OpenAI's
+  // multipart array and Groq only accepts that on its vision models.
+  const userTurn = await streamGroqWithScreenshot('llama-3.1-8b-instant');
+  assert.equal(capturedClientOptions.baseURL, 'https://api.groq.com/openai/v1');
+  assert.equal(typeof userTurn.content, 'string');
+  assert.equal(userTurn.content, 'what is on my screen');
+});
+
+test('groq: a Llama 4 vision model still receives the screenshot', async () => {
+  const userTurn = await streamGroqWithScreenshot('meta-llama/llama-4-scout-17b-16e-instruct');
+  assert.ok(Array.isArray(userTurn.content));
+  assert.equal(userTurn.content[1].type, 'image_url');
+});
+
+test('groqAcceptsImages knows the Llama 4 family and nothing else', () => {
+  assert.equal(groqAcceptsImages('meta-llama/llama-4-scout-17b-16e-instruct'), true);
+  assert.equal(groqAcceptsImages('meta-llama/llama-4-maverick-17b-128e-instruct'), true);
+  assert.equal(groqAcceptsImages('llama-3.1-8b-instant'), false);
+  assert.equal(groqAcceptsImages('llama-3.3-70b-versatile'), false);
+  assert.equal(groqAcceptsImages(''), false);
 });
