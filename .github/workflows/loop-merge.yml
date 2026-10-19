@@ -1,0 +1,474 @@
+# loop-merge.yml  (installed by the founder, once per repo; rendered from publik-loop/policies/loop-merge.yml.tmpl)
+#
+# What it does: merges a pull request that the unattended publik loop opened, but only when every
+# check below passes.  The loop agent NEVER runs `gh pr merge`.  This workflow does.
+#
+# Rendered variable: the default branch is main.
+#
+# WHY pull_request_target (and not pull_request)
+#   A `pull_request` run reads the workflow file from the PR branch.  The loop writes that branch,
+#   so the loop could rewrite the rules that judge it.  `pull_request_target` always reads this file,
+#   and the checkout default, from the BASE branch.  The limits in `.loop/policy.json` and the
+#   scripts in `.loop/policy/` are read from the base branch too (the `trusted/` checkout below).
+#   A PR cannot raise its own limits.
+#
+# WHY no secrets in the jobs that run PR code
+#   `pull_request_target` runs with a write-capable token and with repo secrets.  That is safe only if
+#   code from the PR never runs next to them.  So:
+#     - `gate`, `guardrails`: read the PR with git and `gh`.  They never execute PR code.
+#     - `tests`, `acceptance`: execute PR code (the repo's tests, accept.sh).  They have
+#       `permissions: contents: read`, no `secrets.*` anywhere, checkouts with
+#       `persist-credentials: false`, and nothing from them flows into a later privileged job except
+#       a pass/fail result.
+#     - `merge`: has the write token and the optional LOOP_TOKEN secret.  It checks out NOTHING from
+#       the PR and runs only `gh`.
+#
+# Fail closed: a missing policy file, an empty test_cmds list, an unreadable label history, a stale
+# head SHA or an unknown PR state all stop the merge.  `--match-head-commit` makes GitHub itself refuse
+# the merge if the branch moved after the checks ran.
+#
+# Human veto: label `loop:hold`, comment `/hold`, or remove `loop:verified`.  Any of them stops a
+# queued merge, because the `merge` job reads the labels again live just before it merges.
+
+name: loop-merge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  # A token made by GITHUB_TOKEN does not start `pull_request_target` runs (GitHub blocks this to
+  # prevent loops).  `workflow_dispatch` is the one event it may start, so the loop (and /unhold)
+  # can run `gh workflow run loop-merge.yml -f pr=<n>` as a nudge.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number"
+        required: true
+        type: string
+
+# One run per PR.  A new push, label change or /hold cancels the run in flight.
+concurrency:
+  group: loop-merge-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+# No default permissions.  Every job asks for exactly what it needs.
+permissions: {}
+
+jobs:
+  # ------------------------------------------------------------------------------------------------
+  # gate: decides whether this PR is a loop PR that may proceed, and turns the base-branch policy
+  # into job outputs.  Reads the PR through the API.  Does not check out or run PR code.
+  # ------------------------------------------------------------------------------------------------
+  gate:
+    name: gate
+    # Cheap pre-filter on the event payload.  The real checks run again live in the step below.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (startsWith(github.event.pull_request.head.ref, 'loop/') &&
+       contains(github.event.pull_request.labels.*.name, 'loop:verified') &&
+       !contains(github.event.pull_request.labels.*.name, 'loop:hold'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      go: ${{ steps.gate.outputs.go }}
+      pr: ${{ steps.gate.outputs.pr }}
+      head_sha: ${{ steps.gate.outputs.head_sha }}
+      ticket: ${{ steps.gate.outputs.ticket }}
+      acc_os: ${{ steps.gate.outputs.acc_os }}
+      acc_runs: ${{ steps.gate.outputs.acc_runs }}
+      acc_timeout_min: ${{ steps.gate.outputs.acc_timeout_min }}
+      acc_run_timeout_s: ${{ steps.gate.outputs.acc_run_timeout_s }}
+      test_os: ${{ steps.gate.outputs.test_os }}
+      test_b64: ${{ steps.gate.outputs.test_b64 }}
+      node_version: ${{ steps.gate.outputs.node_version }}
+      setup_uv: ${{ steps.gate.outputs.setup_uv }}
+      release_workflow: ${{ steps.gate.outputs.release_workflow }}
+    steps:
+      # The BASE branch, by name.  Only `.loop/` (policy + scripts) is needed.
+      - name: Check out the base branch policy
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: trusted
+          sparse-checkout: .loop
+          persist-credentials: false
+
+      - name: Gate and read policy
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: main
+          # Context values travel as env vars, never pasted into the script text (no injection).
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_PR: ${{ inputs.pr }}
+        run: |
+          python3 -I - <<'PY'
+          import base64, json, os, re, shlex, subprocess, sys
+
+          E = os.environ
+
+          def out(k, v):
+              with open(E["GITHUB_OUTPUT"], "a") as f:
+                  f.write("%s=%s\n" % (k, v))
+
+          def note(msg):
+              with open(E["GITHUB_STEP_SUMMARY"], "a") as f:
+                  f.write(msg + "\n")
+
+          def stop(reason):
+              out("go", "false")
+              note("### loop-merge: not proceeding\n\n" + reason)
+              print("not proceeding: " + reason)
+              sys.exit(0)
+
+          def gh(*a):
+              p = subprocess.run(["gh", *a], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+              if p.returncode != 0:
+                  raise RuntimeError(p.stderr.strip())
+              return p.stdout
+
+          def glob_re(g):
+              o, i = "", 0
+              while i < len(g):
+                  if g.startswith("**/", i): o += "(?:.*/)?"; i += 3; continue
+                  if g.startswith("**", i): o += ".*"; i += 2; continue
+                  c = g[i]
+                  o += "[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c)
+                  i += 1
+              return re.compile("^" + o + "$")
+
+          pr_no = E["EVENT_PR"] if E["EVENT_NAME"] == "pull_request_target" else E["INPUT_PR"]
+          if not re.fullmatch(r"[0-9]{1,9}", pr_no or ""):
+              stop("bad pull request number")
+          try:
+              pr = json.loads(gh("pr", "view", pr_no, "--json",
+                                 "number,state,isDraft,headRefName,headRefOid,baseRefName,labels,isCrossRepository,body"))
+          except Exception as e:
+              stop("cannot read PR %s: %s" % (pr_no, e))
+
+          labels = {l["name"] for l in pr["labels"]}
+          if pr["state"] != "OPEN": stop("PR is %s" % pr["state"])
+          if pr["isCrossRepository"]: stop("PR comes from a fork")
+          if pr["baseRefName"] != E["DEFAULT_BRANCH"]: stop("base branch is %s, not %s" % (pr["baseRefName"], E["DEFAULT_BRANCH"]))
+          if not pr["headRefName"].startswith("loop/"): stop("head ref %s does not start with loop/" % pr["headRefName"])
+          if "loop:verified" not in labels: stop("label loop:verified is absent")
+          if "loop:hold" in labels: stop("label loop:hold is present (human veto)")
+          if E["EVENT_NAME"] == "pull_request_target" and pr["headRefOid"] != E["EVENT_HEAD_SHA"]:
+              stop("head moved since this event; a newer run follows")
+
+          try:
+              pol = json.load(open("trusted/.loop/policy.json"))
+          except Exception as e:
+              stop("cannot read .loop/policy.json from %s (%s). Fail closed." % (E["DEFAULT_BRANCH"], e))
+
+          # Ticket, from the PR body trailer.  Only a strict key is accepted.
+          m = re.findall(r"(?m)^Loop-Ticket:[ \t]*(\S+)[ \t]*$", pr["body"] or "")
+          ticket = m[-1] if m else ""
+          ticket = ticket if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", ticket) else ""
+
+          # ticket.json is read through the API (no checkout).  It only picks one of three fixed
+          # runner images, so reading it from the PR is safe.  `guardrails` validates it fully.
+          acc_os, slug = "ubuntu-latest", ""
+          if ticket:
+              try:
+                  t = json.loads(gh("api", "-H", "Accept: application/vnd.github.raw",
+                                    "repos/%s/contents/.loop/%s/ticket.json?ref=%s" % (E["GH_REPO"], ticket, pr["headRefOid"])))
+                  acc_os = {"macos": "macos-latest", "windows": "windows-latest"}.get(t.get("platform"), "ubuntu-latest")
+                  s = str(t.get("app_slug", ""))
+                  slug = s if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", s) else ""
+              except Exception as e:
+                  print("ticket.json unreadable (%s); guardrails will fail the PR" % e)
+
+          # Which commands run.  Guide PRs (policy.guide_globs) use policy.guide_test_cmds, with {slug}.
+          cmds = pol.get("test_cmds") or []
+          globs = pol.get("guide_globs") or []
+          if globs and pol.get("guide_test_cmds"):
+              files = gh("pr", "diff", pr_no, "--name-only").split("\n")
+              rx = [glob_re(g) for g in globs]
+              if any(r.match(f) for f in files for r in rx):
+                  cmds = [c.replace("{slug}", slug) for c in pol["guide_test_cmds"]] if slug else []
+          ready = bool(cmds) and all(isinstance(c, str) and c.strip() for c in cmds)
+
+          script = ["set -euo pipefail"]
+          for c in list(pol.get("setup_cmds") or []) + list(cmds):
+              script.append("printf '::group::%%s\\n' %s" % shlex.quote(c))
+              script.append("bash -eo pipefail -c %s" % shlex.quote(c))
+              script.append("echo '::endgroup::'")
+          test_b64 = base64.b64encode(("\n".join(script) + "\n").encode()).decode() if ready else ""
+
+          os_ok = re.compile(r"^(ubuntu|macos|windows)-[a-z0-9.\-]+$")
+          test_os = [o for o in (pol.get("test_os") or ["ubuntu-latest"]) if isinstance(o, str) and os_ok.match(o)]
+          if not test_os: test_os = ["ubuntu-latest"]
+
+          acc = pol.get("acceptance") or {}
+          runs = max(1, min(5, int(acc.get("runs", 2))))
+          tmin = max(5, min(120, int(acc.get("timeout_min", 30))))
+
+          rel = (pol.get("release") or {}).get("dispatch_workflow") or ""
+          rel = rel if re.fullmatch(r"[A-Za-z0-9._-]+\.ya?ml", rel) else ""
+          node = str(pol.get("node_version", "22"))
+          node = node if re.fullmatch(r"[0-9]{1,2}(\.[0-9x]+)*", node) else "22"
+
+          for k, v in {
+              "go": "true", "pr": pr_no, "head_sha": pr["headRefOid"], "ticket": ticket, "acc_os": acc_os,
+              "acc_runs": runs, "acc_timeout_min": tmin, "acc_run_timeout_s": max(60, tmin * 60 // (2 * runs)),
+              "test_os": json.dumps(test_os, separators=(",", ":")), "test_b64": test_b64, "node_version": node,
+              "setup_uv": "true" if pol.get("setup_uv") is True else "false", "release_workflow": rel,
+          }.items():
+              out(k, v)
+          note("### loop-merge: gate passed\n\nPR #%s at `%s`, ticket `%s`, tests on %s, acceptance on %s%s" %
+               (pr_no, pr["headRefOid"][:10], ticket or "?", ", ".join(test_os), acc_os,
+                "" if ready else "\n\n**test_cmds is empty or unusable: the tests job will fail (fail closed).**"))
+          PY
+
+  # ------------------------------------------------------------------------------------------------
+  # guardrails: static checks on the diff.  Reads git objects only.  Runs scripts from the BASE branch.
+  # ------------------------------------------------------------------------------------------------
+  guardrails:
+    name: guardrails
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read          # label history (who applied loop:policy / loop:deps)
+    steps:
+      - name: Check out the base branch policy and scripts
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: trusted
+          sparse-checkout: .loop
+          persist-credentials: false
+
+      # PR code lands in ./head as inert files.  Nothing in ./head is ever executed in this job.
+      - name: Check out the PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run guardrails
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.gate.outputs.pr }}
+          HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+          # Only valid for a `labeled` event: the sender is the actor of THAT label.  In every other
+          # case guardrails.sh asks the issue events API who applied loop:policy / loop:deps.
+          LABELED_NAME: ${{ github.event.action == 'labeled' && github.event.label.name || '' }}
+          LABELED_ACTOR: ${{ github.event.action == 'labeled' && github.event.sender.login || '' }}
+        run: |
+          set -uo pipefail
+          MB=$(git -C head merge-base "origin/main" "$HEAD_SHA") || { echo "::error::no merge-base with main"; exit 1; }
+          gh pr view "$PR_NUMBER" --json number,body,headRefName,labels,isCrossRepository > "$RUNNER_TEMP/pr.json"
+          rc=0
+          REPO_DIR="$PWD/head" bash trusted/.loop/policy/guardrails.sh "$MB" "$HEAD_SHA" \
+            trusted/.loop/policy.json "$RUNNER_TEMP/pr.json" | tee "$RUNNER_TEMP/guardrails.txt" || rc=$?
+          { echo "### Guardrails (merge-base ${MB:0:10})"; echo; echo '```'; cat "$RUNNER_TEMP/guardrails.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+  # ------------------------------------------------------------------------------------------------
+  # tests: the repo's own tests, on the OS list in policy.test_os.  Runs PR code, so: no secrets,
+  # read-only token, no persisted credentials.  The commands come from the BASE policy, never from the PR.
+  # ------------------------------------------------------------------------------------------------
+  tests:
+    name: tests (${{ matrix.os }})
+    needs: [gate, guardrails]
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.gate.outputs.test_os) }}
+    steps:
+      - name: Refuse an empty test list
+        shell: bash
+        env:
+          TEST_B64: ${{ needs.gate.outputs.test_b64 }}
+        run: |
+          if [ -z "$TEST_B64" ]; then
+            echo "::error::policy.test_cmds is empty or unusable. The merge fails closed."
+            exit 1
+          fi
+
+      - name: Check out the PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
+          path: head
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ needs.gate.outputs.node_version }}
+
+      - uses: astral-sh/setup-uv@v5
+        if: needs.gate.outputs.setup_uv == 'true'
+
+      - name: Run policy.setup_cmds and policy.test_cmds
+        shell: bash
+        working-directory: head
+        env:
+          TEST_B64: ${{ needs.gate.outputs.test_b64 }}
+          CI: "true"
+        run: |
+          corepack enable || true
+          printf '%s' "$TEST_B64" | base64 --decode > "$RUNNER_TEMP/run-tests.sh"
+          echo "--- commands ---"; grep -E "^bash -eo" "$RUNNER_TEMP/run-tests.sh" | sed 's/^bash -eo pipefail -c //'; echo "----------------"
+          bash "$RUNNER_TEMP/run-tests.sh"
+
+  # ------------------------------------------------------------------------------------------------
+  # acceptance: the reporter's problem must be PRESENT before the fix and ABSENT after it.
+  #   accept.sh <dir>: 0 = problem absent, 1 = present, 2 = cannot run.
+  # Runs PR code (accept.sh): no secrets, read-only token, no persisted credentials.
+  # ------------------------------------------------------------------------------------------------
+  acceptance:
+    name: acceptance (${{ needs.gate.outputs.acc_os }})
+    needs: [gate, guardrails]
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ${{ needs.gate.outputs.acc_os }}   # macos -> macos-latest, windows -> windows-latest, else ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.gate.outputs.acc_timeout_min) }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the base branch scripts
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: trusted
+          sparse-checkout: .loop
+          persist-credentials: false
+
+      - name: Check out the PR head into ./head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ needs.gate.outputs.node_version }}
+
+      - uses: astral-sh/setup-uv@v5
+        if: needs.gate.outputs.setup_uv == 'true'
+
+      # ./base = the merge-base, as a worktree of the same repo, with the PR's evidence removed.
+      # accept.sh is copied to a neutral path so it cannot see (or edit) either checkout through its own location.
+      - name: Prepare ./base and the neutral script copy
+        shell: bash
+        env:
+          HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+          TICKET: ${{ needs.gate.outputs.ticket }}
+        run: |
+          set -euo pipefail
+          MB=$(git -C head merge-base "origin/main" "$HEAD_SHA")
+          echo "merge-base: $MB"
+          git -C head worktree add --detach "$PWD/base" "$MB"
+          rm -rf base/.loop
+          mkdir -p "$RUNNER_TEMP/accept"
+          cp "head/.loop/$TICKET/accept.sh" "$RUNNER_TEMP/accept/accept.sh"
+          if [ -f "head/.loop/$TICKET/accept.ps1" ]; then cp "head/.loop/$TICKET/accept.ps1" "$RUNNER_TEMP/accept/accept.ps1"; fi
+
+      - name: Run accept.sh at base (expect 1) and head (expect 0)
+        shell: bash
+        env:
+          RUNS: ${{ needs.gate.outputs.acc_runs }}
+          RUN_TIMEOUT: ${{ needs.gate.outputs.acc_run_timeout_s }}
+        run: |
+          set -uo pipefail
+          SCRIPT="$RUNNER_TEMP/accept/accept.sh"; INTERP="bash"
+          # Windows: PowerShell with accept.ps1 when the ticket ships one, else accept.sh under Git Bash.
+          if [ "$RUNNER_OS" = "Windows" ] && [ -f "$RUNNER_TEMP/accept/accept.ps1" ]; then
+            SCRIPT="$RUNNER_TEMP/accept/accept.ps1"; INTERP="pwsh -NoProfile -File"
+          fi
+          bash trusted/.loop/policy/accept_run.sh --script "$SCRIPT" --interp "$INTERP" \
+            --head "$PWD/head" --base "$PWD/base" --runs "$RUNS" --timeout "$RUN_TIMEOUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------------------------------------
+  # merge: the only job with a write token.  Checks out nothing from the PR.  Runs only `gh`.
+  # ------------------------------------------------------------------------------------------------
+  merge:
+    name: merge
+    needs: [gate, guardrails, tests, acceptance]
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write        # only to dispatch policy.release.dispatch_workflow after the merge
+    env:
+      # LOOP_TOKEN (optional): a GitHub App or fine-grained token.  A merge made with it starts the
+      # repo's push and tag workflows.  A merge made with GITHUB_TOKEN does not.
+      GH_TOKEN: ${{ secrets.LOOP_TOKEN || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ needs.gate.outputs.pr }}
+      HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      DEFAULT_BRANCH: main
+      RELEASE_WORKFLOW: ${{ needs.gate.outputs.release_workflow }}
+    steps:
+      # Labels are read again NOW.  A human may have added loop:hold or removed loop:verified while
+      # the checks ran.  The labels in the event payload are old.
+      - name: Re-read the PR live
+        shell: bash
+        run: |
+          set -euo pipefail
+          json=$(gh pr view "$PR" --json state,headRefOid,baseRefName,labels,isCrossRepository)
+          state=$(jq -r .state <<<"$json")
+          head=$(jq -r .headRefOid <<<"$json")
+          base=$(jq -r .baseRefName <<<"$json")
+          cross=$(jq -r .isCrossRepository <<<"$json")
+          has() { jq -e --arg l "$1" 'any(.labels[]; .name == $l)' <<<"$json" >/dev/null; }
+          if has "loop:hold"; then echo "::error::loop:hold is present. A human stopped this merge."; exit 1; fi
+          if ! has "loop:verified"; then echo "::error::loop:verified is missing. Not merging."; exit 1; fi
+          [ "$state" = "OPEN" ] || { echo "::error::PR is $state"; exit 1; }
+          [ "$cross" = "false" ] || { echo "::error::PR is from a fork"; exit 1; }
+          [ "$base" = "$DEFAULT_BRANCH" ] || { echo "::error::base is $base"; exit 1; }
+          [ "$head" = "$HEAD_SHA" ] || { echo "::error::head moved ($head, checked $HEAD_SHA). A newer run follows."; exit 1; }
+
+      - name: Squash-merge
+        shell: bash
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            if gh pr merge "$PR" --squash --delete-branch --match-head-commit "$HEAD_SHA"; then
+              echo "merged PR #$PR at $HEAD_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            m=$(gh pr view "$PR" --json mergeable -q .mergeable 2>/dev/null || echo UNKNOWN)
+            echo "merge attempt $attempt failed, mergeable=$m"
+            # GitHub computes mergeability lazily.  UNKNOWN means "ask again in a moment".
+            if [ "$m" = "UNKNOWN" ]; then sleep 15; continue; fi
+            echo "::error::merge refused (mergeable=$m)"
+            exit 1
+          done
+          echo "::error::mergeable stayed UNKNOWN after 3 attempts"
+          exit 1
+
+      - name: Dispatch the release workflow (only when policy sets one)
+        if: needs.gate.outputs.release_workflow != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run "$RELEASE_WORKFLOW" --ref "$DEFAULT_BRANCH" || {
+            echo "::error::PR #$PR merged, but dispatching $RELEASE_WORKFLOW failed"; exit 1; }
+          echo "dispatched $RELEASE_WORKFLOW on $DEFAULT_BRANCH" >> "$GITHUB_STEP_SUMMARY"

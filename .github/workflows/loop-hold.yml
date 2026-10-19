@@ -1,0 +1,75 @@
+# loop-hold.yml  (installed once per repo; rendered from publik-loop/policies/loop-hold.yml.tmpl)
+#
+# The human brake.  Comment `/hold` on a loop PR to add the label `loop:hold`; comment `/unhold` to
+# remove it.  loop-merge.yml refuses to merge while the label is present and re-reads it live
+# right before it merges.
+#
+# Who may use it: author_association OWNER or MEMBER, or a login in `humans` of .loop/policy.json.
+# Rendered variable: the default branch is main.
+#
+# `issue_comment` runs from the default branch, so a PR cannot change this file to open its own gate.
+# The job reads only the comment text (as an env var, never pasted into the script) and the base policy.
+# It checks out no PR code.
+
+name: loop-hold
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  hold:
+    # Only comments on pull requests, only the two commands.
+    if: >-
+      github.event.issue.pull_request &&
+      (startsWith(github.event.comment.body, '/hold') || startsWith(github.event.comment.body, '/unhold'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: write          # lets /unhold nudge loop-merge.yml (workflow_dispatch works with GITHUB_TOKEN)
+    steps:
+      - name: Check out the base branch policy
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          sparse-checkout: .loop/policy.json
+          persist-credentials: false
+
+      - name: Apply the command
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+          BODY: ${{ github.event.comment.body }}
+          LOGIN: ${{ github.event.comment.user.login }}
+          ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          set -euo pipefail
+          # First word only, so `/holdfast` does not count and `/hold because ...` does.
+          cmd=$(printf '%s' "$BODY" | head -n1 | awk '{print $1}')
+          case "$cmd" in /hold|/unhold) ;; *) echo "not a command"; exit 0 ;; esac
+
+          allowed=no
+          case "$ASSOC" in OWNER|MEMBER) allowed=yes ;; esac
+          if jq -e --arg u "$LOGIN" '(.humans // []) | index($u) != null' .loop/policy.json >/dev/null 2>&1; then allowed=yes; fi
+          if [ "$allowed" != yes ]; then
+            echo "::warning::$LOGIN ($ASSOC) may not use $cmd"
+            exit 0
+          fi
+
+          if [ "$cmd" = "/hold" ]; then
+            gh label create "loop:hold" --color D93F0B --description "A human stopped the loop's merge" 2>/dev/null || true
+            gh pr edit "$PR" --add-label "loop:hold"
+            echo "loop:hold added by $LOGIN" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            gh pr edit "$PR" --remove-label "loop:hold" || true
+            echo "loop:hold removed by $LOGIN" | tee -a "$GITHUB_STEP_SUMMARY"
+            # A label change made with GITHUB_TOKEN does not start loop-merge.yml, so start it by hand.
+            gh workflow run loop-merge.yml -f pr="$PR" || echo "::warning::could not start loop-merge.yml"
+          fi
