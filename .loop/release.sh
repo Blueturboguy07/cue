@@ -21,7 +21,10 @@ log() { echo "==> $*" >&2; }
 # ---- 0. preflight: nothing here has a side effect -------------------------------------------------
 for t in gh node npm pnpm xcrun ditto security; do command -v "$t" >/dev/null || { echo "missing tool: $t" >&2; exit 1; }; done
 gh auth status >/dev/null 2>&1 || { echo "NEEDS_SECRET=gh auth"; exit 78; }
-security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application" || { echo "NEEDS_SECRET=Developer ID Application identity in the keychain"; exit 78; }
+# grep -q on a pipe under pipefail: grep exits at the first match, the writer dies of SIGPIPE (141) and the
+# check fails on a good input. Capture first, then grep a here-string.
+ids="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+grep -q "Developer ID Application" <<<"$ids" || { echo "NEEDS_SECRET=Developer ID Application identity in the keychain"; exit 78; }
 xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 || { echo "NEEDS_SECRET=notarytool keychain profile $PROFILE"; exit 78; }
 [ -f "$PUBLIK_DIR/scripts/mint-app-token.mts" ] || { echo "publik checkout not found at $PUBLIK_DIR (set PUBLIK_DIR)" >&2; exit 1; }
 git diff --quiet && git diff --cached --quiet || { echo "working tree is not clean" >&2; exit 1; }
@@ -79,7 +82,8 @@ for arch in arm64 x64; do
   zip="dist/cue-$ver-mac-$arch.zip"
   appdir="dist/mac-$arch/cue.app"; [ -d "$appdir" ] || appdir="dist/mac/cue.app"
   [ -d "$appdir" ] || { echo "no .app for $arch under dist/" >&2; exit 1; }
-  codesign -dvv "$appdir" 2>&1 | grep -q "^Authority=Developer ID Application" || { echo "$appdir is not Developer ID signed" >&2; exit 1; }
+  sig="$(codesign -dvv "$appdir" 2>&1 || true)"
+  grep -q "^Authority=Developer ID Application" <<<"$sig" || { echo "$appdir is not Developer ID signed" >&2; exit 1; }
   log "notarizing $zip"
   out=$(xcrun notarytool submit "$zip" --keychain-profile "$PROFILE" --wait 2>&1 | tail -6)
   echo "$out" >&2

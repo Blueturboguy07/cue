@@ -262,16 +262,18 @@ if [ "$py_rc" -ne 0 ] || [ -z "$out" ]; then
   exit 1
 fi
 printf '%s\n' "$out"
-if printf '%s\n' "$out" | grep -q '^CHECK [^:]*: FAIL'; then fail=1; fi
+# here-strings, not printf | grep -q: under pipefail a large output lets grep -q exit first, printf dies of
+# SIGPIPE and the if reads false, which would miss a FAIL line (fail open).
+if grep -q '^CHECK [^:]*: FAIL' <<<"$out"; then fail=1; fi
 
 # ---- test weakening: fails closed.  Exit 0 pass, 1 weakening found, 2 could not decide.
 tw=$(python3 -I "$HERE/test_weakening.py" "$BASE_SHA" "$HEAD_SHA" --repo "$REPO_DIR" 2>&1)
 tw_rc=$?
-if [ "$tw_rc" -eq 0 ] && printf '%s\n' "$tw" | grep -q '^CHECK test-weakening: PASS'; then
+if [ "$tw_rc" -eq 0 ] && grep -q '^CHECK test-weakening: PASS' <<<"$tw"; then
   printf '%s\n' "$tw"
 else
   fail=1
-  if printf '%s\n' "$tw" | grep -q '^CHECK test-weakening: FAIL'; then
+  if grep -q '^CHECK test-weakening: FAIL' <<<"$tw"; then
     printf '%s\n' "$tw" | grep '^CHECK test-weakening:'
   else
     echo "CHECK test-weakening: FAIL checker exit $tw_rc without a verdict (fails closed)"
