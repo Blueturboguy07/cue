@@ -263,6 +263,12 @@
 
       <!-- Tab: Style -->
       <div class="s-body s-tab-pane hidden" data-pane="style">
+        <label class="s-label">Web search</label>
+        <div class="s-field"><span>Provider</span><select id="web-search-provider" class="s-select">
+          <option value="parallel">Parallel (no key needed)</option>
+          <option value="none">Disabled</option>
+        </select></div>
+        <div class="s-note">Type /search followed by a question, or /fetch followed by a public URL. Only that text goes to Parallel, never your screen or meeting. Results go to your selected chat provider. Clear transcript starts a new web conversation.</div>
         <label class="s-label">AI rules <span class="s-hint">how the AI should write its responses</span></label>
         <textarea id="ai-rules" rows="10" spellcheck="false" maxlength="2000" placeholder="e.g.
 - Never use em-dashes.

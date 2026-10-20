@@ -1502,6 +1502,14 @@
     const slidesInterval = $('#slides-interval');
     if (slidesInterval) slidesInterval.value = slidesCfg.intervalMs || 3000;
     // Style tab
+    const webProvider = settings.webSearchProvider === undefined ? 'parallel' : settings.webSearchProvider;
+    const webSelect = $('#web-search-provider');
+    if (![...webSelect.options].some(option => option.value === webProvider)) {
+      const option = document.createElement('option');
+      option.value = webProvider; option.textContent = 'Unknown provider (choose to change)';
+      webSelect.appendChild(option);
+    }
+    webSelect.value = webProvider;
     $('#ai-rules').value = settings.aiRules || '';
     updateAiRulesCounter();
     // Appearance tab
@@ -1771,6 +1779,7 @@
       settings.slides.intervalMs = Math.max(1500, Math.min(15000, v));
     }
     // Style tab
+    settings.webSearchProvider = $('#web-search-provider').value;
     settings.aiRules = $('#ai-rules').value.trim();
     // Appearance tab
     const opacitySlider = $('#s-opacity-slider');
