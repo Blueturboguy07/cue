@@ -17,6 +17,7 @@ const MAX_AI_RULES_CHARS = 2000;
 const DEFAULTS = {
   provider: 'openai',
   sttProvider: 'auto',
+  webSearchProvider: 'parallel', // used only by explicit /search and /fetch commands
   localWhisper: {
     modelId: 'base.en',
     language: 'auto',
