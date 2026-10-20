@@ -27,6 +27,8 @@
     "ai",
     "assistant",
     "windows",
+    "linux",
+    "macos",
     "cross-platform"
   ],
   "devDependencies": {
