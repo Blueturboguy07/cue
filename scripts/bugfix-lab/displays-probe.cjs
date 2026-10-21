@@ -18,6 +18,8 @@ const LAYOUTS = {
   // retry-3 layout: primary RIGHT at (1920,0); secondary LEFT at (0,200), lower, 1.25x
   A: [{ x: 1920, y: 0, width: 1920, height: 1080, scaleFactor: 1, primary: true, taskbar: 40 }, { x: 0, y: 200, width: 1920, height: 1080, scaleFactor: 1.25, taskbar: 0 }],
   // mirror: primary LEFT at (0,0); secondary RIGHT sits higher, at (1920,-200) (the photo's physical arrangement if left is primary)
+  // physically valid Windows layout (primary is always at 0,0): primary RIGHT-higher at (0,0), secondary LEFT lower at (-1920,200), mixed DPI
+  C: [{ x: 0, y: 0, width: 1920, height: 1080, scaleFactor: 1, primary: true, taskbar: 40 }, { x: -1920, y: 200, width: 1920, height: 1080, scaleFactor: 1.5, taskbar: 0 }],
   B: [{ x: 0, y: 0, width: 1920, height: 1080, scaleFactor: 1.25, primary: true, taskbar: 40 }, { x: 1920, y: -200, width: 1920, height: 1080, scaleFactor: 1, taskbar: 0 }]
 };
 const inside = (p, w) => p.x >= w.x && p.x < w.x + w.width && p.y >= w.y && p.y < w.y + w.height;
@@ -28,6 +30,11 @@ const SCEN = [
   { n: 'A4 fresh, drag pill to left display (500,260), restart', L: 'A', seed: null, drag: { x: 500, y: 260 } },
   { n: 'A5 fresh, drag pill to far left top (30,205), restart', L: 'A', seed: null, drag: { x: 30, y: 205 } },
   { n: 'A6 fresh, drag pill to right display top (2000,2), restart', L: 'A', seed: null, drag: { x: 2000, y: 2 } },
+  { n: 'C1 seed on left (lower) display (-1500,210)', L: 'C', seed: { windowX: -1500, windowY: 210 } },
+  { n: 'C2 seed on left display just under its top (-300,201)', L: 'C', seed: { windowX: -300, windowY: 201 } },
+  { n: 'C3 fresh, drag pill to left display (-800,205), restart', L: 'C', seed: null, drag: { x: -800, y: 205 } },
+  { n: 'C4 fresh, drag pill across the seam to (-5,205), restart', L: 'C', seed: null, drag: { x: -5, y: 205 } },
+  { n: 'C5 fresh, drag pill to (-1900,1000) bottom-left, restart', L: 'C', seed: null, drag: { x: -1900, y: 1000 } },
   { n: 'B1 seed on higher right display (2500,-150)', L: 'B', seed: { windowX: 2500, windowY: -150 } },
   { n: 'B2 fresh, drag pill onto the higher right display (2300,-150), restart', L: 'B', seed: null, drag: { x: 2300, y: -150 } },
   { n: 'B3 fresh, drag pill to right display just past the seam (1930,-190), restart', L: 'B', seed: null, drag: { x: 1930, y: -190 } }
