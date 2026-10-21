@@ -1420,6 +1420,8 @@
       line = 'publik API key was revoked. Reconnect to set this computer up again.'; note.classList.add('warn');
     } else if (p.connected) {
       line = `Connected · key ${p.keyId} · ${p.line || 'Ready'}`;
+    } else if (p.disconnected && p.lastError) {
+      line = p.lastError; note.classList.add('warn');
     } else if (p.disconnected) {
       line = 'publik API is disconnected. This computer was removed from your publik account.'; note.classList.add('warn');
     } else if (!p.disclosureAccepted) {

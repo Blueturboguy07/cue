@@ -501,7 +501,7 @@ function markCardSeen(store) {
  * Reconnect). `store` is the app's settings store: getSettings(), setPublik(),
  * setSettings(). Rules:
  *   - never mint twice for a live key;
- *   - a 200 replay with no credential on disk mints a fresh install_id once;
+ *   - a 200 replay with no credential on disk, or a 403 install_revoked, mints a fresh install_id once;
  *   - only apiKeys.publik and publik.* are written — no user-entered key is
  *     ever touched, and the provider is not switched here.
  */
@@ -515,6 +515,8 @@ async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, 
     try {
       r = await provision({ build, installId, fetchImpl, ...device });
     } catch (e) {
+      // The owner revoked this install_id from the dashboard: it can never mint again, so start over with a new one (once).
+      if (e.type === 'install_revoked' && !mintedFresh) { installId = randomUUID(); mintedFresh = true; continue; }
       store.setPublik({ installId, lastError: e.message });
       log({ level: 'error', event: 'publik_provision_failed', msg: e.message, context: { status: e.status || null, type: e.type || '' } });
       return { ok: false, error: e };

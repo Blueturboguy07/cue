@@ -197,3 +197,31 @@ test('an unreachable gateway fails closed with no key and no crash', async () =>
   assert.equal(store.data.apiKeys.publik, '');
   assert.ok(store.data.publik.lastError);
 });
+
+test('a 403 install_revoked mints a fresh install_id once and ends connected', async () => {
+  const realFetch = fetch;
+  const ids = [];
+  const revokedId = publik.newInstallId();
+  const gw = await startFakeGateway();
+  try {
+    const build = { appToken: TOKEN, appSlug: 'cue', baseUrl: gw.baseUrl, disclosureVersion: 1, available: true };
+    const fetchImpl = async (url, init) => {
+      const body = init && init.body ? JSON.parse(init.body) : null;
+      if (body && body.install_id === revokedId) {
+        ids.push(revokedId);
+        return new Response(JSON.stringify({ error: { type: 'install_revoked', message: 'This install was disconnected by its owner.', reprovision: false } }), { status: 403, headers: { 'content-type': 'application/json' } });
+      }
+      if (body) ids.push(body.install_id);
+      return realFetch(url, init);
+    };
+    const store = fakeStore();
+    store.data.publik.installId = revokedId;
+    store.data.publik.disconnected = true;
+    const r = await publik.provisionInstall({ build, store, fetchImpl, device: { appVersion: '0.2.5', platform: 'win32', arch: 'x64' } });
+    assert.equal(r.ok, true);
+    assert.equal(ids.length, 2);
+    assert.notEqual(store.data.publik.installId, revokedId);
+    assert.match(store.data.apiKeys.publik, publik.KEY_RE);
+    assert.equal(store.data.publik.disconnected, false);
+  } finally { await gw.close(); }
+});
