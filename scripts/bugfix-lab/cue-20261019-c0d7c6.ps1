@@ -6,10 +6,11 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 function Done($code, $msg) {
   if ($code -eq 1) { Write-Host "BUGFIX_LAB_PRESENT: $msg" } elseif ($code -eq 0) { Write-Host "BUGFIX_LAB_ABSENT: $msg" } else { Write-Host "BUGFIX_LAB_INCONCLUSIVE: $msg" }
-  Get-Process -Name electron -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-Process -Name $script:ProcName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   exit $code
 }
 
+$script:ProcName = 'electron'
 npm ci
 if ($LASTEXITCODE -ne 0) { Done 2 "npm ci failed ($LASTEXITCODE)" }
 Write-Host "HEAD: $(git rev-parse HEAD)"
@@ -39,7 +40,7 @@ public static class W {
 '@
 function WinRect {
   $s = New-Object 'System.Collections.Generic.HashSet[uint32]'
-  Get-Process -Name electron -ErrorAction SilentlyContinue | ForEach-Object { [void]$s.Add([uint32]$_.Id) }
+  Get-Process -Name $script:ProcName -ErrorAction SilentlyContinue | ForEach-Object { [void]$s.Add([uint32]$_.Id) }
   return [W]::BigWindow($s)
 }
 function Mouse($flag) { [W]::mouse_event($flag, 0, 0, 0, [UIntPtr]::Zero) }
@@ -49,7 +50,10 @@ $vs = "$([W]::GetSystemMetrics(0))x$([W]::GetSystemMetrics(1))"
 Write-Host "primary screen: $vs"
 
 $env:CDP_PORT = '9222'
-$proc = Start-Process -FilePath "node_modules\electron\dist\electron.exe" -ArgumentList ".", "--remote-debugging-port=9222" `
+$exeName = (Get-Content node_modules\electron\path.txt -Raw).Trim()
+$script:ProcName = [IO.Path]::GetFileNameWithoutExtension($exeName)
+Write-Host "electron binary (renamed by postinstall): $exeName"
+$proc = Start-Process -FilePath "node_modules\electron\dist\$exeName" -ArgumentList ".", "--remote-debugging-port=9222" `
   -RedirectStandardOutput "cue-main-process.log" -RedirectStandardError "cue-main-process.log.err" -PassThru
 Start-Sleep -Seconds 8
 if ($proc.HasExited) { Get-Content cue-main-process.log.err -Tail 30; Done 2 "electron exited at startup ($($proc.ExitCode))" }
