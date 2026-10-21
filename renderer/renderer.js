@@ -1417,7 +1417,7 @@
     note.classList.remove('warn');
     let line;
     if (p.connected && p.revoked) {
-      line = 'publik API key was revoked. Reconnect to set this computer up again.'; note.classList.add('warn');
+      line = p.lastError ? `publik API key was revoked. Reconnect failed: ${p.lastError}` : 'publik API key was revoked. Reconnect to set this computer up again.'; note.classList.add('warn');
     } else if (p.connected) {
       line = `Connected · key ${p.keyId} · ${p.line || 'Ready'}`;
     } else if (p.disconnected) {
