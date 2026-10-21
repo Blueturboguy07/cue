@@ -25,7 +25,7 @@ jobs:
         shell: pwsh
         env:
           LAB_SCALE: ${{ inputs.scale }}
-        run: .\scripts\bugfix-lab\cue-20261019-c0d7c6.ps1
+        run: .\scripts\bugfix-lab\cue-20261019-c0d7c6-displays.ps1
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
