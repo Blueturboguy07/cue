@@ -53,7 +53,7 @@ $env:CDP_PORT = '9222'
 $exeName = (Get-Content node_modules\electron\path.txt -Raw).Trim()
 $script:ProcName = [IO.Path]::GetFileNameWithoutExtension($exeName)
 Write-Host "electron binary (renamed by postinstall): $exeName"
-$proc = Start-Process -FilePath "node_modules\electron\dist\$exeName" -ArgumentList ".", "--remote-debugging-port=9222" `
+$proc = Start-Process -FilePath "node_modules\electron\dist\$exeName" -ArgumentList (@(".", "--remote-debugging-port=9222") + $(if ($env:LAB_SCALE) { "--force-device-scale-factor=$($env:LAB_SCALE)" } else { @() })) `
   -RedirectStandardOutput "cue-main-process.log" -RedirectStandardError "cue-main-process.log.err" -PassThru
 Start-Sleep -Seconds 8
 if ($proc.HasExited) { Get-Content cue-main-process.log.err -Tail 30; Done 2 "electron exited at startup ($($proc.ExitCode))" }

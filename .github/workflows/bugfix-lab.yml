@@ -1,7 +1,12 @@
 name: bugfix-lab
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: "optional --force-device-scale-factor (diagnostic only)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -18,6 +23,8 @@ jobs:
           cache: npm
       - name: Run the oracle script
         shell: pwsh
+        env:
+          LAB_SCALE: ${{ inputs.scale }}
         run: .\scripts\bugfix-lab\cue-20261019-c0d7c6.ps1
       - name: Upload evidence
         if: always()
