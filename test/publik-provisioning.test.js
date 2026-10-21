@@ -197,3 +197,38 @@ test('an unreachable gateway fails closed with no key and no crash', async () =>
   assert.equal(store.data.apiKeys.publik, '');
   assert.ok(store.data.publik.lastError);
 });
+
+test('a dashboard-revoked install (403 install_revoked, reprovision:false) reconnects with a fresh install_id', async () => {
+  const seen = new Set();
+  let dead = '';
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (c) => { raw += c; });
+    req.on('end', () => {
+      const body = JSON.parse(raw);
+      const send = (status, obj) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+      if (body.install_id === dead) return send(403, { error: { type: 'install_revoked', message: 'This install was disconnected by its owner.', reprovision: false } });
+      if (seen.has(body.install_id)) return send(200, { install_id: body.install_id, key: null, key_id: 'aaaaaaaaaaaa' });
+      seen.add(body.install_id);
+      const keyId = seen.size === 1 ? 'aaaaaaaaaaaa' : 'bbbbbbbbbbbb';
+      send(201, { install_id: body.install_id, key: `pk_test_${keyId}_${KEY_SECRET}`, key_id: keyId, models: { fast: 'f', balanced: 'b', smart: 's' }, claim_state: 'anonymous', starter_micros: 0 });
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const build = { appToken: TOKEN, appSlug: 'cue', baseUrl: `http://127.0.0.1:${server.address().port}/api/v1`, disclosureVersion: 1, available: true };
+    const store = fakeStore();
+    const device = { appVersion: '0.2.5', platform: 'win32', arch: 'x64' };
+    assert.equal((await publik.provisionInstall({ build, store, device })).ok, true);
+    const firstKey = store.data.apiKeys.publik;
+    dead = store.data.publik.installId;
+    store.setPublik({ revoked: true, disconnected: true });
+    const r = await publik.provisionInstall({ build, store, device });
+    assert.equal(r.ok, true);
+    assert.notEqual(store.data.publik.installId, dead);
+    assert.notEqual(store.data.apiKeys.publik, firstKey);
+    assert.match(store.data.apiKeys.publik, publik.KEY_RE);
+    assert.equal(store.data.publik.revoked, false);
+    assert.equal(store.data.publik.lastError, '');
+  } finally { await new Promise((r) => server.close(r)); }
+});
