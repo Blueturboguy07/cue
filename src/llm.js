@@ -231,6 +231,21 @@ const MINIMAX_BASE_URLS = {
   cn_zh: 'https://api.minimaxi.com/v1'
 };
 
+// Groq's OpenAI-compatible endpoint validates `messages[].content` per model.
+// Only its multimodal models — the Llama 4 Scout / Maverick family — accept
+// the [{type:'text'},{type:'image_url'}] array the screenshot path sends;
+// every text-only model, the default llama-3.1-8b-instant included, rejects
+// the whole request with `400 messages[1].content must be a string` (a
+// Windows reporter hit exactly that on 2026-09-29). So the screenshot rides
+// along only when the chosen model can read it; otherwise the turn goes as
+// plain text and the answer comes back without screen context, not as an
+// error.
+const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
+const GROQ_VISION_MODEL_RE = /llama-4-(scout|maverick)/i;
+function groqAcceptsImages(model) {
+  return GROQ_VISION_MODEL_RE.test(String(model || ''));
+}
+
 function stripDataUrl(dataUrl) {
   const m = /^data:(.+?);base64,(.*)$/s.exec(dataUrl || '');
   return m ? { mime: m[1], b64: m[2] } : null;
@@ -530,7 +545,7 @@ function createLLM(settings) {
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
         if (provider === PUBLIK_PROVIDER) return await streamOpenAI(args);
         if (provider === 'ollama') return await streamOllama(args);
-        if (provider === 'groq') return await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
+        if (provider === 'groq') return await streamOpenAI({ ...args, baseURL: GROQ_BASE_URL, imageDataUrl: groqAcceptsImages(model) ? args.imageDataUrl : null });
         if (provider === 'cerebras') return await streamOpenAI({ ...args, baseURL: CEREBRAS_BASE_URL });
         if (provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
         if (provider === 'deepseek') return await streamOpenAI({ ...args, baseURL: DEEPSEEK_BASE_URL });
@@ -550,6 +565,7 @@ function createLLM(settings) {
 
 module.exports = {
   createLLM,
+  groqAcceptsImages,
   formatProviderErrorMessage,
   isQuotaError,
   isNotFoundError,
