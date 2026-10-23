@@ -31,4 +31,5 @@ jobs:
         shell: pwsh
         env:
           LAB_KEY: ${{ inputs.key }}
-        run: ./scripts/bugfix-lab/$env:LAB_KEY.ps1
+        run: |
+          & "./scripts/bugfix-lab/$($env:LAB_KEY).ps1"
