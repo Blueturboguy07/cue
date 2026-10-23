@@ -312,7 +312,18 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.head_sha }}
           path: head
+          fetch-depth: 0
           persist-credentials: false
+
+      # Test what the squash-merge puts on main, not the bare head: two PRs that each pass alone can break main
+      # together (2026-10-21: publik-loop PRs #1 and #13 each add the same import, a SyntaxError once both land).
+      - name: Merge the current main into the head
+        shell: bash
+        working-directory: head
+        run: |
+          set -euo pipefail
+          git -c user.name=loop-merge -c user.email=loop-merge@invalid merge -q --no-edit origin/main \
+            || { echo "::error::the PR does not merge cleanly onto main. Rebase it."; exit 1; }
 
       - uses: actions/setup-node@v4
         with:
@@ -384,8 +395,27 @@ jobs:
           git -C head worktree add --detach "$PWD/base" "$MB"
           rm -rf base/.loop
           mkdir -p "$RUNNER_TEMP/accept"
-          cp "head/.loop/$TICKET/accept.sh" "$RUNNER_TEMP/accept/accept.sh"
-          if [ -f "head/.loop/$TICKET/accept.ps1" ]; then cp "head/.loop/$TICKET/accept.ps1" "$RUNNER_TEMP/accept/accept.ps1"; fi
+          # The whole evidence dir: accept.sh runs helpers beside it (driver.mts, drv/...). 2026-10-22: with only
+          # accept.sh copied, nine loop PRs failed acceptance at base and head alike (driver missing, exit 1).
+          cp -R "head/.loop/$TICKET/." "$RUNNER_TEMP/accept/"
+
+      # Blind authors write accept.sh on the loop Mac, which has GNU `timeout`; the macOS runner does not
+      # (2026-10-21: every publik-loop PR failed acceptance with "timeout: command not found", exit 127).
+      # Only `timeout` goes on PATH, not all of gnubin, so ls/stat/date stay BSD.
+      - name: Provide GNU timeout on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          set -euo pipefail
+          if ! command -v timeout >/dev/null; then
+            command -v gtimeout >/dev/null || brew install coreutils >/dev/null
+            mkdir -p "$RUNNER_TEMP/bin"
+            ln -sf "$(command -v gtimeout)" "$RUNNER_TEMP/bin/timeout"
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          fi
 
       - name: Run accept.sh at base (expect 1) and head (expect 0)
         shell: bash
