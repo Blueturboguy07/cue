@@ -1357,7 +1357,10 @@
   function updateCustomProviderFields() {
     const provider = settings.provider;
     document.querySelectorAll('[data-key-for]').forEach((el) => {
-      el.classList.toggle('hidden', el.dataset.keyFor !== provider);
+      // Deepgram is a speech-to-text provider, not an LLM provider: its key
+      // field follows the STT selection instead of the LLM one.
+      const show = el.dataset.keyFor === 'deepgram' ? settings.sttProvider === 'deepgram' : el.dataset.keyFor === provider;
+      el.classList.toggle('hidden', !show);
     });
     $('#custom-endpoint-settings').classList.toggle('hidden', provider !== 'custom');
     $('#publik-settings').classList.toggle('hidden', provider !== 'publik');
@@ -1584,6 +1587,7 @@
     document.querySelectorAll('#stt-provider-seg button').forEach((candidate) => {
       candidate.classList.toggle('on', candidate === button);
     });
+    updateCustomProviderFields();
     $('#s-status').textContent = statusText();
   }));
 

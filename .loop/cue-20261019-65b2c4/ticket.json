@@ -1,0 +1,14 @@
+{
+  "key": "cue-20261019-65b2c4",
+  "app_slug": "cue",
+  "repo": "cue",
+  "platform": "macos",
+  "platforms": [],
+  "base_sha": "18f388712633bc37694450c55c4958fce63f8392",
+  "fix_commit": "451c71f08a7732cf2f050e6873769cdda2c8ae1b",
+  "population": "both",
+  "break_id": null,
+  "oracle_sha256": "8633ed258cefd303357bb90fb0a724a2aaa4c25abfb20f5aa06fd90e7d139d69",
+  "blind_round": 1,
+  "blind": "pass"
+}
