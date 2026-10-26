@@ -10,6 +10,7 @@ const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 const { createStreamingSTT } = require('./src/stt-streaming');
 const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
+const { isCrossTalkEcho } = require('./src/echo');
 const { buildInterviewContext, detectCategory } = require('./src/interview-context');
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 const publik = require('./src/publik');
@@ -119,7 +120,8 @@ let slideStableCount = 0;
 let slideBusy = false;
 let slideDisabled = false; // set when the chat key rejects slide captions (stops cost spam)
 let slideTxCursor = 0; // transcript.length at last emitted slide
-const FLUSH_MS = 900;
+const FLUSH_MS = 300;
+const MAX_UTTERANCE_BYTES = 16000 * 2 * 15; // 15s: a long monologue still arrives in pieces
 const STREAM_INACTIVITY_MS = 60000; // abort a stalled LLM stream so state.busy can't wedge forever; thinking models can be silent a while first
 const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
 const RMS_GATE = 180;
@@ -155,10 +157,13 @@ const ringBuffers = {
   them: new AudioRingBuffer(300, 16000)
 };
 
+// Returns false when the turn is the other channel's words echoed back, so callers skip it.
 function pushTranscript(turn) {
+  if (isCrossTalkEcho(turn, transcript)) return false;
   transcript.push(turn);
   if (transcript.length > MAX_TRANSCRIPT_TURNS) transcript.splice(0, transcript.length - MAX_TRANSCRIPT_TURNS);
   if (meetingMemory) meetingMemory.onTurn(turn);
+  return true;
 }
 
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
@@ -177,7 +182,7 @@ function getWhisperRuntime() {
 function publishTranscript(channel, text) {
   if (!text || !text.trim()) return;
   const turn = { channel, text: text.trim(), ts: Date.now() };
-  pushTranscript(turn);
+  if (!pushTranscript(turn)) return;
   send('transcript', turn);
   send('stt:final', { channel, text: turn.text });
 }
@@ -382,10 +387,14 @@ async function flushChannel(channel) {
   if (state.transcribing[channel]) return;
   const chunks = buffers[channel];
   if (!chunks.length) return;
+  // Wait for the speaker to pause so whole sentences go out: fixed 0.9s slices
+  // were misheard at the cuts, invented filler, and burned Groq's per-request minimum.
+  const speaking = vad[channel].getState().isSpeaking;
+  if (speaking && chunks.reduce((n, c) => n + c.length, 0) < MAX_UTTERANCE_BYTES) return;
   const pcm = Buffer.concat(chunks);
   buffers[channel] = [];
   if (pcm.length < MIN_BYTES) return;
-  if (rms16(pcm) < RMS_GATE) return; // silence gate
+  if (rms16(pcm) < RMS_GATE) { if (!speaking) buffers[channel] = chunks.slice(-1); return; } // silence gate; keep a pre-roll so the first word isn't clipped
 
   state.transcribing[channel] = true;
   try {
@@ -402,8 +411,7 @@ async function flushChannel(channel) {
     }
     if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
       const turn = { channel, text: res.text.trim(), ts: Date.now() };
-      pushTranscript(turn);
-      send('transcript', turn);
+      if (pushTranscript(turn)) send('transcript', turn);
     }
   } catch (e) {
     console.log('[stt] error', e && e.message);
@@ -454,7 +462,7 @@ function initStreamingSTT() {
         if (instance && streamingSTT[ch] !== instance) return; // stale instance after a stop/start
 
         const turn = { channel: ch, text, ts: Date.now() };
-        pushTranscript(turn);
+        if (!pushTranscript(turn)) return;
         send('transcript', turn);
         send('stt:final', { channel: ch, text });
       },

@@ -1560,7 +1560,7 @@
     // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
     // is reported as-is so the status line matches what will actually be used.
     const selectedSttProvider = settings.sttProvider || 'auto';
-    const automaticStt = k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : 'none');
+    const automaticStt = k.deepgram ? 'Deepgram' : k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : 'none');
     const stt = selectedSttProvider === 'auto' ? automaticStt : selectedSttProvider;
     return `${labels[settings.provider] || settings.provider}${publikPart} · STT: ${stt}`;
   }
