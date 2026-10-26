@@ -19,8 +19,7 @@ const NOTES_SYSTEM =
 const DEFAULTS = {
   resumeWindowMs: 30 * 60 * 1000, // an open meeting whose last turn is older than this is treated as over
   minTurnsForNotes: 4,             // fewer than this is a false start, not a meeting worth notes
-  maxMeetings: 50,                 // kept on disk; oldest are pruned
-  memoryCount: 3                   // summaries offered to prompts
+  maxMeetings: 50                  // kept on disk; oldest are pruned
 };
 
 function createMeetingMemory(opts) {
@@ -133,15 +132,6 @@ function createMeetingMemory(opts) {
 
     // "Previous meetings" context for prompts — summaries only, never full
     // transcripts, and never the meeting that is happening right now.
-    memoryBlock() {
-      const items = store.recentSummaries(cfg.memoryCount + 1)
-        .filter((m) => !current || m.id !== current.id)
-        .slice(-cfg.memoryCount);
-      if (!items.length) return null;
-      const lines = items.map((m) => `- ${new Date(m.startedAt).toLocaleDateString()} — ${m.title}: ${m.summary}`);
-      return 'Previous meetings (for background only; the live transcript is what matters now):\n' + lines.join('\n');
-    },
-
     flush() { store.flush(); }
   };
 }

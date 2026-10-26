@@ -126,9 +126,9 @@
     busy = v;
     $('#send-btn').classList.toggle('busy', v);
     clearTimeout(busyFailsafe);
-    // Failsafe: main has a 25s stream watchdog that always sends llm:done/llm:error, but if a
+    // Failsafe: main has a 60s stream watchdog that always sends llm:done/llm:error, but if a
     // terminal event is ever lost the whole UI stays frozen — self-clear after a generous window.
-    if (v) busyFailsafe = setTimeout(() => { busy = false; $('#send-btn').classList.toggle('busy', false); }, 40000);
+    if (v) busyFailsafe = setTimeout(() => { busy = false; $('#send-btn').classList.toggle('busy', false); }, 75000);
   }
 
   // ---- transcript helpers ------------------------------------------------

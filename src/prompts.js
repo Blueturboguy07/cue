@@ -10,6 +10,28 @@ function formatTranscript(turns, limit) {
   return recent.map((t) => (t.channel === 'them' ? 'Them: ' : 'You: ') + t.text).join('\n');
 }
 
+// Live-answer modes see only the current question thread, not the whole (possibly
+// resumed) meeting: STT fragments merged into speaker utterances, from the last
+// few minutes, capped — enough for a long question plus its follow-ups.
+const THREAD_WINDOW_MS = 10 * 60 * 1000;
+const THREAD_UTTERANCES = 8;
+function currentThread(turns) {
+  const newest = turns.length ? turns[turns.length - 1].ts : 0;
+  const merged = [];
+  for (const t of turns) {
+    if (newest - t.ts > THREAD_WINDOW_MS) continue;
+    const prev = merged[merged.length - 1];
+    if (prev && prev.channel === t.channel) prev.text += ' ' + t.text;
+    else merged.push({ channel: t.channel, text: t.text });
+  }
+  return formatTranscript(merged, THREAD_UTTERANCES);
+}
+const THREAD_FOCUS = 'Answer the newest question; use earlier lines only if it follows up on them.';
+
+const PRACTICE_CONTEXT =
+  'The user is practicing for interviews: a friend, coach or mock interviewer plays "Them", and the user wants ' +
+  'to see a strong model answer in real time to compare against their own. ';
+
 function buildSystem(base, contextBlock) {
   if (!contextBlock) return base;
   return contextBlock + '\n\n' + base;
@@ -36,7 +58,8 @@ const MODES = {
     resumeMode: 'assist',
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
-        'You are cue, a discreet real-time copilot overlaid on the user\'s screen during an interview or coding session. ' +
+        'You are cue, a real-time practice copilot on the user\'s screen during interview practice or a coding session. ' +
+        PRACTICE_CONTEXT +
         BASE_RULES +
         'Look at the screenshot and the recent conversation, decide what the user needs RIGHT NOW, and deliver it directly with no preamble.\n\n' +
         'Detect the question type and respond accordingly:\n' +
@@ -52,8 +75,8 @@ const MODES = {
       ), aiRules, 'assist');
     },
     build(ctx) {
-      const t = formatTranscript(ctx.transcript, 14);
-      return 'Recent conversation:\n' + (t || '(none)') + '\n\nRespond with exactly what I should say right now.';
+      const t = currentThread(ctx.transcript);
+      return 'Current question thread (newest last):\n' + (t || '(none)') + '\n\n' + THREAD_FOCUS + ' Respond with exactly what I should say right now.';
     }
   },
 
@@ -65,10 +88,11 @@ const MODES = {
     resumeMode: 'say',
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
-        'You are cue, whispering the perfect reply to the candidate during a live interview. ' +
+        'You are cue, an interview practice coach. ' +
+        PRACTICE_CONTEXT +
         BASE_RULES +
-        '"Them" is the interviewer; "You" is the candidate.\n\n' +
-        'Draft ONE natural, confident reply the candidate can say out loud, in first person.\n\n' +
+        '"Them" is the practice interviewer; "You" is the user practicing as the candidate.\n\n' +
+        'Draft ONE natural, confident model answer the candidate could say out loud, in first person.\n\n' +
         'Rules by question type:\n' +
         '• BEHAVIORAL: Use a real STAR story from their background. Situation (1 sentence) → Task (1 sentence) → Action (2–3 sentences, specific steps) → Result (1 sentence with metric if possible). Never generic.\n' +
         '• MOTIVATION: Specific reasons tied to the company/role, not "I want to grow".\n' +
@@ -81,9 +105,9 @@ const MODES = {
       ), aiRules, 'say');
     },
     build(ctx) {
-      const t = formatTranscript(ctx.transcript, 16);
-      return 'Interview conversation so far:\n' + (t || '(listening not started yet)') +
-        '\n\nWhat should I say next?';
+      const t = currentThread(ctx.transcript);
+      return 'Current question thread (newest last):\n' + (t || '(listening not started yet)') +
+        '\n\n' + THREAD_FOCUS + ' What should I say next?';
     }
   },
 
@@ -121,7 +145,8 @@ const MODES = {
     resumeMode: 'ask',
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
-        'You are cue, a real-time copilot with access to the candidate\'s screen and live interview. ' +
+        'You are cue, a real-time practice copilot with access to the user\'s screen and their practice interview. ' +
+        PRACTICE_CONTEXT +
         BASE_RULES +
         'Answer the question directly and concisely. ' +
         'When the question is about the candidate\'s background, use their actual experience. ' +
@@ -130,8 +155,8 @@ const MODES = {
       ), aiRules, 'ask');
     },
     build(ctx) {
-      const t = formatTranscript(ctx.transcript, 12);
-      return (t ? 'Recent conversation:\n' + t + '\n\n' : '') + 'Question: ' + ctx.userText;
+      const t = currentThread(ctx.transcript);
+      return (t ? 'Current question thread (newest last):\n' + t + '\n\n' : '') + 'Question: ' + ctx.userText;
     }
   },
 
@@ -143,9 +168,10 @@ const MODES = {
     resumeMode: 'say',  // same context budget as 'say'
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
-        'You are cue, whispering a direct answer to the candidate for ONE specific question. ' +
+        'You are cue, giving a model answer to ONE specific practice-interview question. ' +
+        PRACTICE_CONTEXT +
         BASE_RULES +
-        'The interviewer\'s exact question is provided below. Focus ONLY on answering that question — ignore any other conversation context.\n\n' +
+        'The practice interviewer\'s exact question is provided below. Focus ONLY on answering that question — ignore any other conversation context.\n\n' +
         'Rules:\n' +
         '• BEHAVIORAL ("tell me about a time…"): STAR format using real stories from the candidate\'s background. Situation → Task → Action → Result. Include metrics if available.\n' +
         '• MOTIVATION ("why this company/role"): Specific, genuine reasons from their stated preferences.\n' +
@@ -180,4 +206,4 @@ const MODES = {
   }
 };
 
-module.exports = { MODES, formatTranscript };
+module.exports = { MODES, formatTranscript, currentThread };

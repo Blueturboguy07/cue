@@ -130,28 +130,6 @@ test('catchUp writes notes for ended meetings that have none', async () => {
   assert.equal(store.get(b.id).summary, '');
 });
 
-test('memoryBlock offers recent summaries but never the live meeting', async () => {
-  const { store, memory } = harness();
-  for (let i = 0; i < 5; i++) {
-    const m = store.add();
-    store.update(m.id, { title: `Meeting ${i}`, summary: `Summary ${i}`, endedAt: 10 + i });
-  }
-  const block = memory.memoryBlock();
-  assert.match(block, /^Previous meetings/);
-  assert.match(block, /Meeting 2: Summary 2[\s\S]*Meeting 3: Summary 3[\s\S]*Meeting 4: Summary 4/);
-  assert.ok(!block.includes('Meeting 1'), 'only the last three');
-
-  memory.onTurn(turn('them', 'live a', 1_000_001));
-  memory.onTurn(turn('you', 'live b', 1_000_002));
-  await memory.refreshNotes(); // live meeting now has a summary too
-  const during = memory.memoryBlock();
-  assert.ok(!during.includes(memory.current.title), 'live meeting must not be fed back as memory');
-  assert.match(during, /Meeting 4/);
-
-  const empty = createMeetingMemory({ store: createMeetingStore({}), llmFactory: () => null });
-  assert.equal(empty.memoryBlock(), null);
-});
-
 test('store: prune keeps the newest N and debounced saves coalesce until flush', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cue-memory-'));
   const file = path.join(dir, 'meetings.json');
