@@ -6,7 +6,8 @@ const { OPTIONAL_API_KEY_PLACEHOLDER } = require('../src/openai-compatible');
 let capturedClientOptions = null;
 let capturedCompletionRequest = null;
 let fakeResponseHeaders = null; // when set, create() returns an APIPromise-like with withResponse()
-let fakeCreateError = null;     // when set, create() rejects with it (the SDK's APIError shape)
+let fakeCreateError = null;     // when set, create() rejects with it (the SDK's APIError shape); `.once` clears it after one call
+let fakeStreamParts = null;     // when set, the stream yields these parts instead of one 'ok' token
 const originalModuleLoad = Module._load;
 
 Module._load = function loadWithOpenAIStub(request, parent, isMain) {
@@ -18,8 +19,8 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
           completions: {
             create: (completionRequest) => {
               capturedCompletionRequest = completionRequest;
-              const data = [{ choices: [{ delta: { content: 'ok' } }] }];
-              if (fakeCreateError) return Promise.reject(fakeCreateError);
+              const data = fakeStreamParts || [{ choices: [{ delta: { content: 'ok' } }] }];
+              if (fakeCreateError) { const error = fakeCreateError; if (error.once) fakeCreateError = null; return Promise.reject(error); }
               if (!fakeResponseHeaders) return Promise.resolve(data);
               const headers = fakeResponseHeaders;
               const p = Promise.resolve(data);
@@ -56,6 +57,7 @@ test.beforeEach(() => {
   capturedCompletionRequest = null;
   fakeResponseHeaders = null;
   fakeCreateError = null;
+  fakeStreamParts = null;
 });
 
 test('routes the Custom provider through the configured OpenAI-compatible endpoint', async () => {
@@ -609,4 +611,42 @@ test('geminiGenerationConfig: smart tier keeps the model default reasoning with 
   const cfg = geminiGenerationConfig({ system: 'sys', maxTokens: 1400, thinking: true });
   assert.equal(cfg.thinkingConfig, undefined);
   assert.ok(cfg.maxOutputTokens >= 1400 + 4096);
+});
+
+test('OpenAI-compatible cap leaves room for hidden thinking; publik keeps its own cap', async () => {
+  const stream = (llm) => llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
+  await stream(createLLM(createCustomSettings()));
+  assert.equal(capturedCompletionRequest.max_tokens, 700 + 2048);
+  await stream(createLLM(createCustomSettings({ smart: true })));
+  assert.equal(capturedCompletionRequest.max_tokens, 1400 + 4096);
+  await stream(createLLM(publikSettings()));
+  assert.equal(capturedCompletionRequest.max_tokens, 700);
+});
+
+test('a model that rejects max_tokens is retried once with max_completion_tokens, and remembered', async () => {
+  const settings = createCustomSettings({ smart: true, models: { custom: { fast: 'x', smart: 'router/reasoning-only' } } });
+  fakeCreateError = Object.assign(sdkError(400, { message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead." }), { once: true });
+  const llm = createLLM(settings);
+  assert.equal(await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} }), 'ok');
+  assert.equal(capturedCompletionRequest.max_completion_tokens, 1400 + 4096);
+  assert.equal('max_tokens' in capturedCompletionRequest, false);
+  capturedCompletionRequest = null;
+  await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
+  assert.equal(capturedCompletionRequest.max_completion_tokens, 1400 + 4096);
+});
+
+test('a safety-filtered empty reply surfaces as an error instead of a blank answer', async () => {
+  fakeStreamParts = [{ choices: [{ delta: {}, finish_reason: 'content_filter' }] }];
+  await assert.rejects(
+    createLLM(createCustomSettings()).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} }),
+    /safety filter/
+  );
+});
+
+test('an empty reply for any other reason names the finish reason', async () => {
+  fakeStreamParts = [{ choices: [{ delta: {}, finish_reason: 'length' }] }];
+  await assert.rejects(
+    createLLM(createCustomSettings()).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} }),
+    /empty answer \(finish reason: length\)/
+  );
 });

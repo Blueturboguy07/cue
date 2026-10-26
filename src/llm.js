@@ -236,7 +236,15 @@ function stripDataUrl(dataUrl) {
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onResponse }) {
+// Thinking models behind OpenAI-compatible APIs (routers, reasoning models) count
+// hidden reasoning against the cap, same as Gemini below — measured: Sonnet via
+// TokenRouter spent all 700 tokens on a "say" prompt and streamed 222 chars.
+const OPENAI_THINKING_HEADROOM = { fast: 2048, smart: 4096 };
+// Models that rejected max_tokens and asked for max_completion_tokens, so later
+// requests skip the failed first attempt.
+const usesMaxCompletionTokens = new Set();
+
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, thinking, headroom = OPENAI_THINKING_HEADROOM[thinking ? 'smart' : 'fast'], onToken, onResponse }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
@@ -253,21 +261,39 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
       messages.push({ role: t.role, content: t.text });
     }
   });
-  const pending = client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens });
+  const open = async (limitParam) => {
+    const pending = client.chat.completions.create({ model, messages, stream: true, [limitParam]: maxTokens + headroom });
+    if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
+      // The gateway stamps x-publik-* headers at admission; hand the raw
+      // Response to the caller so the balance line can move before settlement.
+      const { data, response } = await pending.withResponse();
+      try { onResponse(response); } catch { /* a display hook must never break the answer */ }
+      return data;
+    }
+    return pending;
+  };
   let stream;
-  if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
-    // The gateway stamps x-publik-* headers at admission; hand the raw
-    // Response to the caller so the balance line can move before settlement.
-    const { data, response } = await pending.withResponse();
-    try { onResponse(response); } catch { /* a display hook must never break the answer */ }
-    stream = data;
-  } else {
-    stream = await pending;
+  try {
+    stream = await open(usesMaxCompletionTokens.has(model) ? 'max_completion_tokens' : 'max_tokens');
+  } catch (error) {
+    // Newer OpenAI reasoning models (also via routers) 400 on max_tokens.
+    if (!(error && error.status === 400 && /max_completion_tokens/.test(error.message || ''))) throw error;
+    usesMaxCompletionTokens.add(model);
+    stream = await open('max_completion_tokens');
   }
   let full = '';
+  let finishReason = null;
   for await (const part of stream) {
-    const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
+    const choice = part.choices && part.choices[0];
+    const d = choice && choice.delta && choice.delta.content;
     if (d) { full += d; onToken(d); }
+    if (choice && choice.finish_reason) finishReason = choice.finish_reason;
+  }
+  // A filtered or budget-exhausted reply streams nothing; say so instead of a blank panel.
+  if (!full) {
+    throw new Error(finishReason === 'content_filter'
+      ? "The model's provider blocked this answer with its safety filter."
+      : `The model returned an empty answer${finishReason ? ` (finish reason: ${finishReason})` : ''}.`);
   }
   return full;
 }
@@ -528,7 +554,8 @@ function createLLM(settings) {
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
-        if (provider === PUBLIK_PROVIDER) return await streamOpenAI(args);
+        // publik's gateway lives outside this repo and may price against the cap; leave it unchanged.
+        if (provider === PUBLIK_PROVIDER) return await streamOpenAI({ ...args, headroom: 0 });
         if (provider === 'ollama') return await streamOllama(args);
         if (provider === 'groq') return await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
         if (provider === 'cerebras') return await streamOpenAI({ ...args, baseURL: CEREBRAS_BASE_URL });
