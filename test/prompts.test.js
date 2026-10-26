@@ -111,3 +111,20 @@ test('live-answer prompts frame the session as interview practice', () => {
     assert.ok(!/whisper|discreet|live interview/i.test(system), `${mode} should not describe covert live use`);
   }
 });
+
+test('feedback coaches the user\'s own attempt at the current question', () => {
+  const def = MODES.feedback;
+  assert.equal(def.transcriptRequired, true, 'nothing to coach before anything was said');
+  const system = def.buildSystem(null, '');
+  assert.match(system, /Breakdown/);
+  assert.match(system, /Your answer/);
+  assert.match(system, /Fix now/);
+  const transcript = [
+    { channel: 'them', text: 'Old question.', ts: 0 },
+    { channel: 'them', text: 'How would you design a cache?', ts: 20 * 60000 },
+    { channel: 'you', text: 'I would use a hash map', ts: 20 * 60000 + 5000 }
+  ];
+  const text = def.build({ transcript, userText: '' });
+  assert.ok(!text.includes('Old question'), 'only the current thread is coached');
+  assert.match(text, /You: I would use a hash map/);
+});

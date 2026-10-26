@@ -137,6 +137,33 @@ const MODES = {
     }
   },
 
+  // ── Feedback: coach the user's own attempt at the current question ─────────
+  feedback: {
+    needsScreen: false,
+    userBubble: 'Feedback',
+    small: false,
+    resumeMode: 'say',
+    transcriptRequired: true,
+    buildSystem(contextBlock, aiRules) {
+      return applyRules(buildSystem(
+        'You are cue, a practice coach. ' +
+        PRACTICE_CONTEXT +
+        BASE_RULES +
+        '"Them" asks the questions; "You" lines are the user\'s own spoken attempt (speech-to-text, so ignore filler and transcription slips).\n\n' +
+        'Reply with these bold sections, short bullets, no preamble:\n' +
+        '**Breakdown** — 3–5 numbered steps a strong answer to the newest question would walk through, each one line.\n' +
+        '**Your answer** — what landed and what was missing, vague or wrong, quoting their words where useful. ' +
+        'If they have not answered yet, say so in one line and skip this section.\n' +
+        '**Fix now** — the single most important change, then one tightened version of their answer in first person (2–4 sentences).',
+        contextBlock
+      ), aiRules, 'feedback');
+    },
+    build(ctx) {
+      return 'Current question thread (newest last):\n' + currentThread(ctx.transcript) +
+        '\n\nCoach my answer to the newest question.';
+    }
+  },
+
   // ── Ask: free-form question ────────────────────────────────────────────────
   ask: {
     needsScreen: true,
