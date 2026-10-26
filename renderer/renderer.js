@@ -1356,10 +1356,12 @@
 
   function updateCustomProviderFields() {
     const provider = settings.provider;
+    // Chat and speech-to-text are picked separately, so show both their credentials.
+    const sttProvider = settings.sttProvider;
     document.querySelectorAll('[data-key-for]').forEach((el) => {
-      el.classList.toggle('hidden', el.dataset.keyFor !== provider);
+      el.classList.toggle('hidden', el.dataset.keyFor !== provider && el.dataset.keyFor !== sttProvider);
     });
-    $('#custom-endpoint-settings').classList.toggle('hidden', provider !== 'custom');
+    $('#custom-endpoint-settings').classList.toggle('hidden', provider !== 'custom' && sttProvider !== 'custom');
     $('#publik-settings').classList.toggle('hidden', provider !== 'publik');
     const minimaxRegionSettings = $('#minimax-region-settings');
     if (minimaxRegionSettings) minimaxRegionSettings.classList.toggle('hidden', provider !== 'minimax');
@@ -1584,6 +1586,7 @@
     document.querySelectorAll('#stt-provider-seg button').forEach((candidate) => {
       candidate.classList.toggle('on', candidate === button);
     });
+    updateCustomProviderFields();
     $('#s-status').textContent = statusText();
   }));
 
@@ -1751,7 +1754,9 @@
     // this, `settings.provider` stays on its default ('openai') forever and
     // cue keeps reporting itself unconfigured even though a valid key was
     // saved for the provider the user actually meant to use.
-    if (!settings.apiKeys[settings.provider]) {
+    // Custom and Ollama can run keyless and publik's key is redacted here, so
+    // an empty slot doesn't mean unconfigured — don't let a Groq STT key steal chat.
+    if (!settings.apiKeys[settings.provider] && !['custom', 'ollama', 'publik'].includes(settings.provider)) {
       const keyedProviders = ['cerebras', 'openai', 'anthropic', 'gemini', 'groq', 'minimax', 'deepseek', 'azure'];
       const justFilled = keyedProviders.find((p) => settings.apiKeys[p]);
       if (justFilled) settings.provider = justFilled;

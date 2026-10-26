@@ -99,3 +99,28 @@ test('Gemini STT migrates a retired model saved on disk instead of 404ing foreve
   });
   assert.deepEqual(stt.models, [CURRENT_GEMINI_DEFAULT]);
 });
+
+test('explicit Groq selection transcribes with Groq only, beside any chat provider', () => {
+  // e.g. chat on a Custom router (TokenRouter) + speech on Groq; an OpenAI key
+  // present for something else must not pull audio onto OpenAI Realtime.
+  const settings = {
+    provider: 'custom',
+    sttProvider: 'groq',
+    baseUrl: 'https://router.example/v1',
+    apiKeys: { custom: 'router-key', groq: 'gsk_test', openai: 'openai-key' }
+  };
+  assert.deepEqual(createSTT(settings).providers, ['groq']);
+  assert.equal(createStreamingSTT(settings, 'you', callbacks).type, 'batch');
+});
+
+test('Settings lets chat and speech-to-text use different providers', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');
+  assert.match(html, /<button data-stt-provider="groq">/);
+  // The STT provider's key field must be visible even when chat is on another provider.
+  assert.match(renderer, /el\.dataset\.keyFor !== provider && el\.dataset\.keyFor !== sttProvider/);
+  // A Groq STT key must not switch chat away from a keyless Custom endpoint.
+  assert.match(renderer, /!\['custom', 'ollama', 'publik'\]\.includes\(settings\.provider\)/);
+});
