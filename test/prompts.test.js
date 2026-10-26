@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { MODES, currentThread } = require('../src/prompts');
+const { MODES, currentThread, questionThread } = require('../src/prompts');
 
 test('assist mode gives a direct answer in first person', () => {
   const system = MODES.assist.buildSystem(null);
@@ -127,4 +127,23 @@ test('feedback coaches the user\'s own attempt at the current question', () => {
   const text = def.build({ transcript, userText: '' });
   assert.ok(!text.includes('Old question'), 'only the current thread is coached');
   assert.match(text, /You: I would use a hash map/);
+});
+
+test('back-to-back questions stay separate and only the newest is up for answering', () => {
+  const transcript = [
+    { channel: 'them', text: 'What is your name?', ts: 0 },
+    { channel: 'them', text: 'Where are you based?', ts: 6000 },
+    { channel: 'them', text: 'How would you design', ts: 12000 },
+    { channel: 'them', text: 'a URL shortener?', ts: 12900 },
+    { channel: 'you', text: 'So first I would', ts: 16000 }
+  ];
+  assert.equal(currentThread(transcript).split('\n').length, 4, 'a 3s+ pause splits utterances; a short gap merges');
+  const q = questionThread(transcript);
+  assert.match(q, /context only, do not answer these\):\nThem: What is your name\?\nThem: Where are you based\?/);
+  assert.match(q, /Newest question \(answer only this\):\nThem: How would you design a URL shortener\?/);
+  assert.match(q, /Said since then:\nYou: So first I would$/);
+  for (const mode of ['say', 'assist', 'feedback']) {
+    assert.match(MODES[mode].build({ transcript, userText: '' }), /Newest question \(answer only this\):\nThem: How would you design a URL shortener\?/);
+  }
+  assert.equal(questionThread([]), 'Current thread (newest last):\n(none)');
 });

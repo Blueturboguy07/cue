@@ -15,18 +15,35 @@ function formatTranscript(turns, limit) {
 // few minutes, capped — enough for a long question plus its follow-ups.
 const THREAD_WINDOW_MS = 10 * 60 * 1000;
 const THREAD_UTTERANCES = 8;
-function currentThread(turns) {
+// A pause this long starts a new utterance, so back-to-back questions stay separate.
+const UTTERANCE_GAP_MS = 3000;
+function threadUtterances(turns) {
   const newest = turns.length ? turns[turns.length - 1].ts : 0;
   const merged = [];
   for (const t of turns) {
     if (newest - t.ts > THREAD_WINDOW_MS) continue;
     const prev = merged[merged.length - 1];
-    if (prev && prev.channel === t.channel) prev.text += ' ' + t.text;
-    else merged.push({ channel: t.channel, text: t.text });
+    if (prev && prev.channel === t.channel && t.ts - prev.ts < UTTERANCE_GAP_MS) { prev.text += ' ' + t.text; prev.ts = t.ts; }
+    else merged.push({ channel: t.channel, text: t.text, ts: t.ts });
   }
-  return formatTranscript(merged, THREAD_UTTERANCES);
+  return merged.slice(-THREAD_UTTERANCES);
 }
-const THREAD_FOCUS = 'Answer the newest question; use earlier lines only if it follows up on them.';
+function currentThread(turns) {
+  return formatTranscript(threadUtterances(turns));
+}
+// Puts the newest "Them" utterance on its own, so the model answers it and not
+// earlier questions nobody asked cue about.
+function questionThread(turns) {
+  const u = threadUtterances(turns);
+  const i = u.map((t) => t.channel).lastIndexOf('them');
+  if (i < 0) return 'Current thread (newest last):\n' + (formatTranscript(u) || '(none)');
+  const earlier = formatTranscript(u.slice(0, i));
+  const since = formatTranscript(u.slice(i + 1));
+  return (earlier ? 'Earlier in this thread (context only, do not answer these):\n' + earlier + '\n\n' : '') +
+    'Newest question (answer only this):\n' + formatTranscript([u[i]]) +
+    (since ? '\n\nSaid since then:\n' + since : '');
+}
+const THREAD_FOCUS = 'Answer only the newest question; use earlier lines only to understand it if it follows up on them.';
 
 const PRACTICE_CONTEXT =
   'The user is practicing for interviews: a friend, coach or mock interviewer plays "Them", and the user wants ' +
@@ -75,8 +92,7 @@ const MODES = {
       ), aiRules, 'assist');
     },
     build(ctx) {
-      const t = currentThread(ctx.transcript);
-      return 'Current question thread (newest last):\n' + (t || '(none)') + '\n\n' + THREAD_FOCUS + ' Respond with exactly what I should say right now.';
+      return questionThread(ctx.transcript) + '\n\n' + THREAD_FOCUS + ' Respond with exactly what I should say right now.';
     }
   },
 
@@ -105,9 +121,7 @@ const MODES = {
       ), aiRules, 'say');
     },
     build(ctx) {
-      const t = currentThread(ctx.transcript);
-      return 'Current question thread (newest last):\n' + (t || '(listening not started yet)') +
-        '\n\n' + THREAD_FOCUS + ' What should I say next?';
+      return questionThread(ctx.transcript) + '\n\n' + THREAD_FOCUS + ' What should I say next?';
     }
   },
 
@@ -159,8 +173,7 @@ const MODES = {
       ), aiRules, 'feedback');
     },
     build(ctx) {
-      return 'Current question thread (newest last):\n' + currentThread(ctx.transcript) +
-        '\n\nCoach my answer to the newest question.';
+      return questionThread(ctx.transcript) + '\n\nCoach my answer to the newest question.';
     }
   },
 
@@ -233,4 +246,4 @@ const MODES = {
   }
 };
 
-module.exports = { MODES, formatTranscript, currentThread };
+module.exports = { MODES, formatTranscript, currentThread, questionThread };
