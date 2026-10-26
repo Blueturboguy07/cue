@@ -348,9 +348,9 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
   return full;
 }
 
-async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, effort, onToken, onActivity }) {
   const Anthropic = require('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = turns.map((t, i) => {
     const last = i === turns.length - 1;
     if (last && imageDataUrl && t.role === 'user') {
@@ -362,10 +362,21 @@ async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, max
     }
     return { role: t.role, content: t.text };
   });
-  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true });
+  // Effort only takes hold with adaptive thinking, and thinking spends from max_tokens, so lift the cap.
+  const strength = effort ? { thinking: { type: 'adaptive' }, output_config: { effort }, max_tokens: maxTokens + 16000 } : {};
+  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true, ...strength });
   let full = '';
+  let stopReason = null;
   for await (const ev of stream) {
+    // Thinking streams no text for a while; any event (pings included) proves the stream is alive.
+    if (typeof onActivity === 'function') onActivity();
     if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') { full += ev.delta.text; onToken(ev.delta.text); }
+    if (ev.type === 'message_delta' && ev.delta && ev.delta.stop_reason) stopReason = ev.delta.stop_reason;
+  }
+  if (!full) {
+    throw new Error(stopReason === 'refusal'
+      ? "The model's provider blocked this answer with its safety filter."
+      : `The model returned an empty answer${stopReason ? ` (finish reason: ${stopReason})` : ''}.`);
   }
   return full;
 }
@@ -561,7 +572,11 @@ function createLLM(settings) {
         if (provider === 'cerebras') return await streamOpenAI({ ...args, baseURL: CEREBRAS_BASE_URL });
         if (provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
         if (provider === 'deepseek') return await streamOpenAI({ ...args, baseURL: DEEPSEEK_BASE_URL });
-        if (provider === 'anthropic') return await streamAnthropic(args);
+        if (provider === 'anthropic') {
+          // An Anthropic-format relay (e.g. TokenRouter); the SDK adds /v1 itself.
+          const relay = String(settings.anthropicBaseUrl || '').trim().replace(/\/+$/, '').replace(/\/v1$/, '');
+          return await streamAnthropic({ ...args, baseURL: relay || undefined, effort: (settings.anthropicEffort || {})[tier] || undefined });
+        }
         if (provider === 'gemini') return await streamGemini(args);
         if (provider === 'azure') return await streamAzure(args);
         throw new Error('unknown provider: ' + provider);

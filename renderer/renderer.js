@@ -1478,6 +1478,9 @@
     document.querySelectorAll('#minimax-region-seg button').forEach((b) => b.classList.toggle('on', b.dataset.region === (settings.minimaxRegion || 'global_en')));
     $('#key-azure').value = settings.apiKeys.azure || '';
     $('#azure-endpoint').value = settings.azureEndpoint || '';
+    $('#anthropic-base-url').value = settings.anthropicBaseUrl || '';
+    $('#effort-fast').value = (settings.anthropicEffort || {}).fast || '';
+    $('#effort-smart').value = (settings.anthropicEffort || {}).smart || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
     $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
     fillAppLinkCallers();
@@ -1746,6 +1749,8 @@
     settings.apiKeys.deepseek = $('#key-deepseek').value.trim();
     settings.apiKeys.azure = $('#key-azure').value.trim();
     settings.azureEndpoint = $('#azure-endpoint').value.trim();
+    settings.anthropicBaseUrl = $('#anthropic-base-url').value.trim();
+    settings.anthropicEffort = { fast: $('#effort-fast').value, smart: $('#effort-smart').value };
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();

@@ -32,6 +32,14 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
       }
     };
   }
+  if (request === '@anthropic-ai/sdk') {
+    return class FakeAnthropic {
+      constructor(clientOptions) {
+        capturedClientOptions = clientOptions;
+        this.messages = { create: async (req) => { capturedCompletionRequest = req; return fakeStreamParts || [{ type: 'ping' }, { type: 'content_block_delta', delta: { type: 'text_delta', text: 'ok' } }]; } };
+      }
+    };
+  }
   return originalModuleLoad.call(this, request, parent, isMain);
 };
 
@@ -648,5 +656,30 @@ test('an empty reply for any other reason names the finish reason', async () => 
   await assert.rejects(
     createLLM(createCustomSettings()).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} }),
     /empty answer \(finish reason: length\)/
+  );
+});
+
+test('anthropic can go through a relay with a per-tier effort', async () => {
+  const settings = { provider: 'anthropic', smart: true, apiKeys: { anthropic: 'k' }, models: { anthropic: { fast: 'f', smart: 'anthropic/claude-sonnet-5.5' } },
+    anthropicBaseUrl: 'https://api.tokenrouter.com/v1/', anthropicEffort: { fast: '', smart: 'high' } };
+  let activity = 0;
+  assert.equal(await createLLM(settings).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {}, onActivity: () => activity++ }), 'ok');
+  assert.equal(capturedClientOptions.baseURL, 'https://api.tokenrouter.com', 'the SDK adds /v1 itself');
+  assert.deepEqual(capturedCompletionRequest.thinking, { type: 'adaptive' });
+  assert.deepEqual(capturedCompletionRequest.output_config, { effort: 'high' });
+  assert.equal(capturedCompletionRequest.max_tokens, 1400 + 16000, 'thinking needs room under the cap');
+  assert.equal(activity, 2, 'every event keeps the watchdog alive');
+
+  await createLLM({ ...settings, smart: false, anthropicBaseUrl: '' }).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} });
+  assert.equal(capturedClientOptions.baseURL, undefined);
+  assert.equal(capturedCompletionRequest.output_config, undefined, 'default effort sends nothing extra');
+  assert.equal(capturedCompletionRequest.max_tokens, 700);
+});
+
+test('anthropic refusal is reported instead of a blank answer', async () => {
+  fakeStreamParts = [{ type: 'message_delta', delta: { stop_reason: 'refusal' } }];
+  await assert.rejects(
+    createLLM({ provider: 'anthropic', smart: false, apiKeys: { anthropic: 'k' }, models: { anthropic: { fast: 'f' } } }).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} }),
+    /safety filter/
   );
 });

@@ -34,6 +34,8 @@ const DEFAULTS = {
   minimaxRegion: 'global_en',
   apiKeys: { cerebras: '', openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '', deepseek: '', azure: '', publik: '' },
   azureEndpoint: '',
+  anthropicBaseUrl: '',
+  anthropicEffort: { fast: '', smart: '' },
   // publik API (packaged-build default). apiKeys.publik holds the minted key;
   // everything here is state the main process owns — the renderer only reads
   // a redacted view of it through publik:state and can never write it.

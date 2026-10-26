@@ -852,6 +852,7 @@ async function runFeature(mode, userText) {
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
           onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); },
+          onActivity: () => { if (!streamSettled) rearm(); },
           onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined
         }),
         stalled
