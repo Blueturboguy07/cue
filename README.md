@@ -145,6 +145,7 @@ cue uses **your own** API key, so it's free to run (you only pay your AI provide
 | **Google Gemini** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | One key does chat + transcription. |
 | **Azure AI Foundry** | [ai.azure.com](https://ai.azure.com) | Paste your **endpoint** plus your key in Settings. **Azure OpenAI:** `https://&lt;resource&gt;.openai.azure.com/openai` — **AI Foundry:** `https://&lt;host&gt;.cognitiveservices.azure.com` (cue appends `/openai/v1` itself). The **model** fields are your deployment names. No speech-to-text — add an OpenAI or Gemini key for listening. |
 | **DeepSeek** | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys) | OpenAI-compatible chat API. No speech-to-text — add an OpenAI or Gemini key too if you want the listening features. |
+| **Atlas Cloud** | [console.atlascloud.ai/api-keys](https://console.atlascloud.ai/api-keys) | OpenAI-compatible chat API at `https://api.atlascloud.ai/v1`. The default models accept screenshots. No speech-to-text — add an OpenAI or Gemini key too if you want the listening features. |
 | **Groq** | [console.groq.com](https://console.groq.com) | Fast OpenAI-compatible chat. Groq Whisper can also handle transcription if you pick Groq on the Audio tab. |
 | **Custom** | Your endpoint or gateway | Any OpenAI-compatible Chat Completions endpoint. The API key is optional for unauthenticated local servers. |
 

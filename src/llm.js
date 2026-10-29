@@ -40,6 +40,7 @@ const DEFAULT_MODELS = {
   // replacement aliases are deepseek-flash (non-thinking) and deepseek-v4-pro
   // (thinking), so those are the defaults used everywhere in this file.
   deepseek: 'deepseek-flash',
+  atlascloud: 'google/gemini-3.1-flash-lite',
   azure: 'gpt-4o-mini',
   publik: publik.DEFAULT_MODELS.fast
 };
@@ -80,10 +81,15 @@ const DEAD_DEEPSEEK_MODEL_RE = /^deepseek-(chat|reasoner)$/i;
 const CURRENT_DEEPSEEK_FAST_DEFAULT = 'deepseek-flash';
 const CURRENT_DEEPSEEK_SMART_DEFAULT = 'deepseek-v4-pro';
 
-const PROVIDER_LABELS = { azure: 'Azure AI Foundry', cerebras: 'Cerebras', openai: 'OpenAI', minimax: 'MiniMax', publik: publik.PROVIDER_LABEL, deepseek: 'DeepSeek' };
+const PROVIDER_LABELS = { atlascloud: 'Atlas Cloud', azure: 'Azure AI Foundry', cerebras: 'Cerebras', openai: 'OpenAI', minimax: 'MiniMax', publik: publik.PROVIDER_LABEL, deepseek: 'DeepSeek' };
 
 // DeepSeek is OpenAI-compatible and reuses the OpenAI screenshot/streaming path via baseURL.
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+
+// Atlas Cloud is an OpenAI-compatible gateway with a single fixed endpoint, so it
+// reuses the OpenAI screenshot/streaming path via baseURL. The default models
+// accept image input, which the screenshot path needs.
+const ATLASCLOUD_BASE_URL = 'https://api.atlascloud.ai/v1';
 
 function normalizeProviderName(provider) {
   if (!provider) return 'provider';
@@ -534,6 +540,7 @@ function createLLM(settings) {
         if (provider === 'cerebras') return await streamOpenAI({ ...args, baseURL: CEREBRAS_BASE_URL });
         if (provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
         if (provider === 'deepseek') return await streamOpenAI({ ...args, baseURL: DEEPSEEK_BASE_URL });
+        if (provider === 'atlascloud') return await streamOpenAI({ ...args, baseURL: ATLASCLOUD_BASE_URL });
         if (provider === 'anthropic') return await streamAnthropic(args);
         if (provider === 'gemini') return await streamGemini(args);
         if (provider === 'azure') return await streamAzure(args);
