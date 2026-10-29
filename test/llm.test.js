@@ -236,6 +236,48 @@ test('reports a configuration error when the DeepSeek key is missing', () => {
   assert.match(llm.configurationError, /Add your deepseek API key/);
 });
 
+// ---- Atlas Cloud ------------------------------------------------------------
+// Atlas Cloud is OpenAI-compatible with a single fixed endpoint, so this asserts
+// the model/readiness plumbing and the baseURL used to reach it.
+
+function atlascloudSettings(overrides) {
+  return Object.assign({
+    provider: 'atlascloud',
+    smart: true,
+    apiKeys: { atlascloud: 'apikey-test' },
+    models: { atlascloud: { fast: 'google/gemini-3.1-flash-lite', smart: 'google/gemini-3.5-flash' } }
+  }, overrides || {});
+}
+
+test('selects the Atlas Cloud model for the active tier and reports readiness', () => {
+  const smart = createLLM(atlascloudSettings({ smart: true }));
+  assert.equal(smart.provider, 'atlascloud');
+  assert.equal(smart.model, 'google/gemini-3.5-flash');
+  assert.equal(smart.ready, true);
+
+  const fast = createLLM(atlascloudSettings({ smart: false }));
+  assert.equal(fast.model, 'google/gemini-3.1-flash-lite');
+});
+
+test('falls back to the default Atlas Cloud model when none is configured', () => {
+  const llm = createLLM(atlascloudSettings({ smart: false, models: {} }));
+  assert.equal(llm.model, 'google/gemini-3.1-flash-lite');
+});
+
+test('routes Atlas Cloud to its OpenAI-compatible endpoint', async () => {
+  capturedClientOptions = null;
+  const llm = createLLM(atlascloudSettings());
+  await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
+  assert.equal(capturedClientOptions.baseURL, 'https://api.atlascloud.ai/v1');
+  assert.equal(capturedClientOptions.apiKey, 'apikey-test');
+});
+
+test('reports a configuration error when the Atlas Cloud key is missing', () => {
+  const llm = createLLM(atlascloudSettings({ apiKeys: { atlascloud: '' } }));
+  assert.equal(llm.ready, false);
+  assert.match(llm.configurationError, /Add your atlascloud API key/);
+});
+
 // ---- Gemini 404/429 error mapping ------------------------------------------
 // Reproduces the exact bug-report clusters: "Error: got status: 404 Not Found.
 // {"error":{"message":"exception parsing response","code":404,"status":"Not
