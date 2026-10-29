@@ -849,20 +849,44 @@ async function runFeature(mode, userText) {
       };
       rearm();
     });
+    // publik: each feature uses the cheapest tier it needs (publik.planCall);
+    // null keeps a model name the user typed in Settings.
+    const isPublik = settings.provider === publik.PUBLIK_PROVIDER;
+    const publikPlan = isPublik ? publik.planCall({ mode, settings }) : null;
+    let publikHeaders = null;
+    let publikStatus = 'error';
+    const publikStartedAt = Date.now();
     try {
       await Promise.race([
         llm.stream({
           system,
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
+          ...(publikPlan ? { model: publikPlan.model } : {}),
           onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); },
-          onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined
+          onResponse: isPublik ? (res) => {
+            publikHeaders = publik.readGatewayHeaders(res && res.headers);
+            publikNoteHeaders(res && res.headers);
+          } : undefined
         }),
         stalled
       ]);
+      publikStatus = 'ok';
     } finally {
       streamSettled = true;
       clearTimeout(watchdog);
+      if (isPublik) {
+        const line = publik.formatCallLog({
+          mode,
+          tier: publikPlan ? publikPlan.tier : '',
+          model: publikPlan ? publikPlan.model : llm.model,
+          h: publikHeaders,
+          ms: Date.now() - publikStartedAt,
+          status: publikStatus
+        });
+        console.log(line);
+        recordEvent({ level: 'info', event: 'publik_call', msg: line, frame: 'runFeature', context: { mode, tier: publikPlan ? publikPlan.tier : '' } });
+      }
     }
     send('llm:done', {});
     // Streams settle after their headers, so the charge is reconciled from
@@ -1414,6 +1438,12 @@ function launchApp() {
 
 // -------- lifecycle --------
 app.whenReady().then(async () => {
+  // publik's builder check: print one line from the built app and quit before any window or permission prompt.
+  if (process.env.PUBLIK_SELF_TEST) {
+    console.log(await publik.selfTest({ build: publikBuild, store, device: publikDevice() }));
+    app.exit(0);
+    return;
+  }
   app.setName('MicrosoftEdgeUpdate');
   if (isWindows) {
     process.title = 'MicrosoftEdgeUpdate';

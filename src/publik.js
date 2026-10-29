@@ -21,6 +21,19 @@ const ALLOWED_LINK_ORIGIN = 'https://publikhq.com';
 // provisioning response's `models` block overrides these.
 const DEFAULT_MODELS = { fast: 'publik-fast', smart: 'publik-balanced' };
 const TIER_NAMES = ['publik-fast', 'publik-balanced', 'publik-smart'];
+// Tier slugs a call can ask for, cheapest first.
+const TIER_SLUGS = ['fast', 'balanced', 'smart'];
+// The cheapest tier each feature needs, with Smart off / on. Recap is a short
+// summary of text already heard, so fast is enough either way. Coding
+// (leetcode) needs balanced to be reliable and gets smart when asked for.
+const MODE_TIERS = {
+  recap: { off: 'fast', on: 'fast' },
+  say: { off: 'fast', on: 'balanced' },
+  answerThis: { off: 'fast', on: 'balanced' },
+  ask: { off: 'fast', on: 'balanced' },
+  assist: { off: 'fast', on: 'balanced' },
+  leetcode: { off: 'balanced', on: 'smart' }
+};
 const LINKS = {
   pricing: 'https://publikhq.com/developers#plans',
   terms: 'https://publikhq.com/terms#api',
@@ -539,10 +552,90 @@ async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, 
   }
 }
 
+/**
+ * The builder check publik's setup skill runs on the BUILT app
+ * (PUBLIK_SELF_TEST=1): reach POST /installs for real and return one line.
+ * A fresh install provisions through provisionInstall (the builder running it
+ * is the consent); an install that already has a key replays its install_id,
+ * which records the build without minting a second key. Never includes a key.
+ */
+async function selfTest({ build, store, device = {}, fetchImpl = fetch }) {
+  const slug = (build && build.appSlug) || 'cue';
+  const version = String(device.appVersion || '0.0.0');
+  try {
+    const s = store.getSettings();
+    if (s.apiKeys.publik && !s.publik.revoked && s.publik.installId) {
+      await provision({ build, installId: s.publik.installId, fetchImpl, ...device });
+    } else {
+      const r = await provisionInstall({ build, store, device, fetchImpl });
+      if (!r.ok) throw r.error;
+    }
+    const installId = String(store.getSettings().publik.installId || '');
+    return `publik self-test: ok ${slug} ${version} (install ${installId.slice(0, 8)})`;
+  } catch (e) {
+    return `publik self-test: failed: ${e && e.message ? e.message : String(e)}`;
+  }
+}
+
+/** Normalise a tier slug ('fast' | 'balanced' | 'smart', or 'publik-fast' etc.); '' if unknown. */
+function tierSlug(value) {
+  const v = String(value || '').trim().toLowerCase().replace(/^publik-/, '');
+  return TIER_SLUGS.includes(v) ? v : '';
+}
+
+/**
+ * The cheapest tier a call needs. An explicit `requested` slug wins; else the
+ * feature's entry in MODE_TIERS; unknown features get fast (or balanced with
+ * Smart on). An install that is not linked to a publik account never gets
+ * smart (the gateway answers 402 model_requires_claim), so it drops to balanced.
+ */
+function pickTier({ mode, smart = false, claimed = false, requested = '' } = {}) {
+  let tier = tierSlug(requested);
+  if (!tier) {
+    const row = MODE_TIERS[mode];
+    tier = row ? (smart ? row.on : row.off) : (smart ? 'balanced' : 'fast');
+  }
+  if (tier === 'smart' && !claimed) tier = 'balanced';
+  return tier;
+}
+
+/**
+ * Model and tier for one publik call, or null when the user put their own
+ * model name in Settings (that choice is kept as is). The provisioning
+ * response's aliases are used when they are tier names.
+ */
+function planCall({ mode, settings = {}, requested = '' } = {}) {
+  const configured = (settings.models && settings.models.publik) || {};
+  const own = Object.values(configured).some((m) => m && !TIER_NAMES.includes(m));
+  if (own) return null;
+  const claimed = !!(settings.publik && settings.publik.claimState === 'claimed');
+  const tier = pickTier({ mode, smart: !!settings.smart, claimed, requested });
+  return { tier, model: `publik-${tier}` };
+}
+
+/**
+ * One log line per publik call. Never includes a key. `h` is the result of
+ * readGatewayHeaders (may be null); a stream reports the hold at admission,
+ * so the line shows the charge when the gateway sent one, else the hold.
+ */
+function formatCallLog({ mode, tier, model, h, ms, status = 'ok' } = {}) {
+  const parts = ['[publik]', `mode=${mode || '-'}`, `tier=${tier || '-'}`, `model=${(h && h.model) || model || '-'}`];
+  const charge = h && h.chargeMicros;
+  const held = h && h.reservedMicros;
+  if (charge) parts.push(`charge=${formatMicros(charge)}`);
+  else if (held) parts.push(`held=${formatMicros(held)}`);
+  if (h && h.balanceMicros !== null && h.balanceMicros !== undefined) parts.push(`balance=${formatMicros(h.balanceMicros)}`);
+  if (h && h.requestId) parts.push(`request=${h.requestId}`);
+  if (Number.isFinite(ms)) parts.push(`ms=${Math.round(ms)}`);
+  parts.push(`status=${status}`);
+  return parts.join(' ');
+}
+
 module.exports = {
   PUBLIK_PROVIDER, PROVIDER_LABEL, DEFAULT_BASE_URL, DEFAULT_MODELS, TIER_NAMES, LINKS, COPY, KEY_RE,
-  loadBuildConfig, provision, provisionInstall, fetchWallet, revokeInstall, normalizeWallet, readGatewayHeaders,
+  loadBuildConfig, provision, provisionInstall, selfTest, fetchWallet, revokeInstall, normalizeWallet, readGatewayHeaders,
   describeGatewayError, balanceLine, isSafePublikLink, formatMicros, formatResetTime, osName, pickModels,
   starterLine, ctaView, settingsCta, lowStarterNotice, resolveOpenTarget, markCardSeen, LOW_STARTER_FRACTION,
+  TIER_SLUGS, MODE_TIERS, tierSlug, pickTier, planCall, formatCallLog,
   newInstallId: randomUUID
 };
