@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('cue', {
   whisperModelImport: (modelId) => ipcRenderer.invoke('whisper:model-import', modelId),
   platformInfo: () => ipcRenderer.invoke('platform:info'),
   ask: (payload) => ipcRenderer.send('ask', payload),
+  captureSet: (active) => ipcRenderer.invoke('capture:set', active),
   captureToggle: () => ipcRenderer.invoke('capture:toggle').catch((err) => {
     console.error('[cue] captureToggle error', err);
     return false;
@@ -44,7 +45,7 @@ contextBridge.exposeInMainWorld('cue', {
   permissionsContinue: () => ipcRenderer.send('permissions:continue'),
   log: (msg) => ipcRenderer.send('log', msg),
   on: (channel, cb) => {
-    const allowed = ['capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'transcript:restore', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'publik:state', 'slides:update'];
+    const allowed = ['capture:state', 'meeting-audio:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'transcript:restore', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'publik:state', 'slides:update'];
     if (!allowed.includes(channel)) return;
     ipcRenderer.on(channel, (_e, data) => cb(data));
   }

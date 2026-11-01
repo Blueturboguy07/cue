@@ -290,3 +290,28 @@ test('a publik API key is reported as a boolean only — the pk_ value never lea
   assert.equal(state.provider, 'publik');
   assert.doesNotMatch(JSON.stringify(state), /pk_/);
 });
+
+test('set_capturing waits for startup and reports the actual result', async () => {
+  const AppLink = require('../vendor/app-link');
+  const originalAction = AppLink.AppLinkServer.prototype.action;
+  const originalStart = AppLink.AppLinkServer.prototype.start;
+  const actions = new Map();
+  AppLink.AppLinkServer.prototype.action = function (name, def) { actions.set(name, def); };
+  AppLink.AppLinkServer.prototype.start = async function () {};
+  const { applink } = loadAppLink();
+  let resolve, settled = false;
+  const startup = new Promise((done) => { resolve = done; });
+  try {
+    applink.startAppLink({ snapshot: () => snapshot(), setCapturing: () => startup, getWindow: () => null });
+    const pending = actions.get('set_capturing').handler({ active: true }, { caller: { id: 'synthetic', name: 'Synthetic caller' } })
+      .then((value) => { settled = true; return value; });
+    await Promise.resolve();
+    assert.equal(settled, false);
+    resolve(false);
+    assert.deepEqual(await pending, { capturing: false });
+  } finally {
+    AppLink.AppLinkServer.prototype.action = originalAction;
+    AppLink.AppLinkServer.prototype.start = originalStart;
+    delete require.cache[require.resolve('../src/applink')];
+  }
+});

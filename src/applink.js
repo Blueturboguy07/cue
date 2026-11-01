@@ -116,9 +116,8 @@ function startAppLink(deps) {
   link.action('set_capturing', {
     description: 'Start or stop listening',
     inputSchema: { type: 'object', properties: { active: { type: 'boolean' } }, required: ['active'] },
-    handler: (args, { caller }) => {
-      const active = !!args.active;
-      deps.setCapturing(active);
+    handler: async (args, { caller }) => {
+      const active = await deps.setCapturing(args.active);
       link.record({
         level: 'info',
         event: 'applink_set_capturing',

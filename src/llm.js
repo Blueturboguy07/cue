@@ -1,8 +1,9 @@
 // LLM factory — OpenAI, Anthropic, Gemini, and OpenAI-compatible APIs behind one streaming interface.
-// stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken }) -> Promise<fullText>
+// stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken, signal }) -> Promise<fullText>
 
 const { createCompatibleClientOptions } = require('./openai-compatible');
 const publik = require('./publik');
+const { abortable } = require('./abort');
 
 const CUSTOM_PROVIDER = 'custom';
 const PUBLIK_PROVIDER = publik.PUBLIK_PROVIDER;
@@ -244,7 +245,7 @@ const OPENAI_THINKING_HEADROOM = { fast: 2048, smart: 4096 };
 // requests skip the failed first attempt.
 const usesMaxCompletionTokens = new Set();
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, thinking, headroom = OPENAI_THINKING_HEADROOM[thinking ? 'smart' : 'fast'], onToken, onResponse }) {
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, thinking, headroom = OPENAI_THINKING_HEADROOM[thinking ? 'smart' : 'fast'], onToken, onResponse, signal }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
@@ -262,7 +263,7 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
     }
   });
   const open = async (limitParam) => {
-    const pending = client.chat.completions.create({ model, messages, stream: true, [limitParam]: maxTokens + headroom });
+    const pending = client.chat.completions.create({ model, messages, stream: true, [limitParam]: maxTokens + headroom }, { signal });
     if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
       // The gateway stamps x-publik-* headers at admission; hand the raw
       // Response to the caller so the balance line can move before settlement.
@@ -276,6 +277,7 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
   try {
     stream = await open(usesMaxCompletionTokens.has(model) ? 'max_completion_tokens' : 'max_tokens');
   } catch (error) {
+    signal?.throwIfAborted();
     // Newer OpenAI reasoning models (also via routers) 400 on max_tokens.
     if (!(error && error.status === 400 && /max_completion_tokens/.test(error.message || ''))) throw error;
     usesMaxCompletionTokens.add(model);
@@ -309,7 +311,7 @@ function normalizeAzureBaseURL(raw) {
   return u;
 }
 
-async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, endpoint }) {
+async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, endpoint, signal }) {
   const url = normalizeAzureBaseURL(endpoint);
   if (!url) throw new Error('Missing Azure endpoint. Add your Azure AI Foundry or Azure OpenAI endpoint in Settings.');
   const messages = [{ role: 'system', content: system }];
@@ -339,7 +341,7 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
     };
     client = new OpenAI({ baseURL: url, apiKey, fetch: azureFetch });
   }
-  const stream = await client.chat.completions.create({ model, messages, stream: true, max_completion_tokens: maxTokens });
+  const stream = await client.chat.completions.create({ model, messages, stream: true, max_completion_tokens: maxTokens }, { signal });
   let full = '';
   for await (const part of stream) {
     const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
@@ -348,7 +350,7 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
   return full;
 }
 
-async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, effort, onToken, onActivity }) {
+async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, effort, onToken, onActivity, signal }) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = turns.map((t, i) => {
@@ -364,7 +366,7 @@ async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDat
   });
   // Effort only takes hold with adaptive thinking, and thinking spends from max_tokens, so lift the cap.
   const strength = effort ? { thinking: { type: 'adaptive' }, output_config: { effort }, max_tokens: maxTokens + 16000 } : {};
-  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true, ...strength });
+  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true, ...strength }, { signal });
   let full = '';
   let stopReason = null;
   for await (const ev of stream) {
@@ -400,7 +402,7 @@ function geminiGenerationConfig({ system, maxTokens, thinking }) {
   return config;
 }
 
-async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, thinking, onToken }) {
+async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, thinking, onToken, signal }) {
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
   const contents = turns.map((t, i) => {
@@ -413,10 +415,12 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
     return { role: t.role === 'assistant' ? 'model' : 'user', parts };
   });
   const config = geminiGenerationConfig({ system, maxTokens, thinking });
+  if (signal) config.abortSignal = signal;
   let stream;
   try {
     stream = await ai.models.generateContentStream({ model, contents, config });
   } catch (e) {
+    signal?.throwIfAborted();
     // A model that predates thinkingLevel (or a custom id that rejects it)
     // should still answer: retry once without the thinking setting.
     if (!config.thinkingConfig || !/thinking/i.test((e && e.message) || '')) throw e;
@@ -431,7 +435,7 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
   return full;
 }
 
-async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, signal }) {
   const baseUrl = apiKey || 'http://localhost:11434';
   const url = `${baseUrl.replace(/\/$/, '')}/api/chat`;
 
@@ -454,6 +458,7 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
   try {
     response = await fetch(url, {
       method: 'POST',
+      signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages, stream: true })
     });
@@ -560,9 +565,14 @@ function createLLM(settings) {
     ready,
     configurationError,
     async stream(params) {
+      const signal = params.signal;
+      signal?.throwIfAborted();
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
       const args = { apiKey, baseURL, endpoint, model, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
-      try {
+      for (const hook of ['onToken', 'onActivity', 'onResponse']) {
+        if (typeof params[hook] === 'function') args[hook] = (...values) => { signal?.throwIfAborted(); return params[hook](...values); };
+      }
+      const dispatch = async () => {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
         // publik's gateway lives outside this repo and may price against the cap; leave it unchanged.
@@ -580,7 +590,11 @@ function createLLM(settings) {
         if (provider === 'gemini') return await streamGemini(args);
         if (provider === 'azure') return await streamAzure(args);
         throw new Error('unknown provider: ' + provider);
+      };
+      try {
+        return await abortable(dispatch(), signal);
       } catch (error) {
+        signal?.throwIfAborted();
         // publik branches return an Error carrying `.action`; the string
         // branches keep working unchanged.
         const wrapped = formatProviderErrorMessage(error, provider, model);

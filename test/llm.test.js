@@ -5,6 +5,7 @@ const { OPTIONAL_API_KEY_PLACEHOLDER } = require('../src/openai-compatible');
 
 let capturedClientOptions = null;
 let capturedCompletionRequest = null;
+let capturedRequestOptions = null;
 let fakeResponseHeaders = null; // when set, create() returns an APIPromise-like with withResponse()
 let fakeCreateError = null;     // when set, create() rejects with it (the SDK's APIError shape); `.once` clears it after one call
 let fakeStreamParts = null;     // when set, the stream yields these parts instead of one 'ok' token
@@ -17,8 +18,9 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
         capturedClientOptions = clientOptions;
         this.chat = {
           completions: {
-            create: (completionRequest) => {
+            create: (completionRequest, options) => {
               capturedCompletionRequest = completionRequest;
+              capturedRequestOptions = options;
               const data = fakeStreamParts || [{ choices: [{ delta: { content: 'ok' } }] }];
               if (fakeCreateError) { const error = fakeCreateError; if (error.once) fakeCreateError = null; return Promise.reject(error); }
               if (!fakeResponseHeaders) return Promise.resolve(data);
@@ -36,9 +38,20 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
     return class FakeAnthropic {
       constructor(clientOptions) {
         capturedClientOptions = clientOptions;
-        this.messages = { create: async (req) => { capturedCompletionRequest = req; return fakeStreamParts || [{ type: 'ping' }, { type: 'content_block_delta', delta: { type: 'text_delta', text: 'ok' } }]; } };
+        this.messages = { create: async (req, options) => { capturedCompletionRequest = req; capturedRequestOptions = options; return fakeStreamParts || [{ type: 'ping' }, { type: 'content_block_delta', delta: { type: 'text_delta', text: 'ok' } }]; } };
       }
     };
+  }
+  if (request === '@google/genai') {
+    return { GoogleGenAI: class {
+      constructor() {
+        this.models = { generateContentStream: async (req) => {
+          capturedCompletionRequest = req;
+          capturedRequestOptions = { signal: req.config.abortSignal };
+          return fakeStreamParts || [{ text: 'ok' }];
+        } };
+      }
+    } };
   }
   return originalModuleLoad.call(this, request, parent, isMain);
 };
@@ -63,6 +76,7 @@ function createCustomSettings(overrides = {}) {
 test.beforeEach(() => {
   capturedClientOptions = null;
   capturedCompletionRequest = null;
+  capturedRequestOptions = null;
   fakeResponseHeaders = null;
   fakeCreateError = null;
   fakeStreamParts = null;
@@ -682,4 +696,49 @@ test('anthropic refusal is reported instead of a blank answer', async () => {
     createLLM({ provider: 'anthropic', smart: false, apiKeys: { anthropic: 'k' }, models: { anthropic: { fast: 'f' } } }).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} }),
     /safety filter/
   );
+});
+
+for (const provider of ['openai', 'custom', 'anthropic', 'azure', 'gemini']) {
+  test(`${provider}: cancellation reaches the transport and drops late tokens`, async () => {
+    const request = new AbortController(), tokens = [];
+    fakeStreamParts = (async function* () {
+      yield provider === 'anthropic'
+        ? { type: 'content_block_delta', delta: { type: 'text_delta', text: 'first' } }
+        : provider === 'gemini' ? { text: 'first' } : { choices: [{ delta: { content: 'first' } }] };
+      request.abort();
+      yield provider === 'anthropic'
+        ? { type: 'content_block_delta', delta: { type: 'text_delta', text: 'late' } }
+        : provider === 'gemini' ? { text: 'late' } : { choices: [{ delta: { content: 'late' } }] };
+    })();
+    const llm = createLLM(createCustomSettings({ provider, apiKeys: { [provider]: 'synthetic' }, azureEndpoint: 'https://synthetic.cognitiveservices.azure.com' }));
+    await assert.rejects(llm.stream({ system: '', turns: [], signal: request.signal, onToken: (token) => tokens.push(token) }), { name: 'AbortError' });
+    assert.equal(capturedRequestOptions.signal, request.signal);
+    assert.deepEqual(tokens, ['first']);
+  });
+}
+
+test('an already aborted LLM request never reaches a provider', async () => {
+  const request = new AbortController(); request.abort();
+  const llm = createLLM(createCustomSettings());
+  await assert.rejects(llm.stream({ system: '', turns: [], signal: request.signal, onToken() {} }), { name: 'AbortError' });
+  assert.equal(capturedCompletionRequest, null);
+});
+
+test('Ollama passes cancellation to fetch and drops late tokens', async (t) => {
+  const originalFetch = global.fetch;
+  t.after(() => { global.fetch = originalFetch; });
+  const request = new AbortController(), tokens = [];
+  let options;
+  global.fetch = async (_url, init) => {
+    options = init;
+    return { ok: true, body: (async function* () {
+      yield Buffer.from('{"message":{"content":"first"}}\n');
+      request.abort();
+      yield Buffer.from('{"message":{"content":"late"}}\n');
+    })() };
+  };
+  const llm = createLLM({ provider: 'ollama' });
+  await assert.rejects(llm.stream({ system: '', turns: [], signal: request.signal, onToken: (token) => tokens.push(token) }), { name: 'AbortError' });
+  assert.equal(options.signal, request.signal);
+  assert.deepEqual(tokens, ['first']);
 });

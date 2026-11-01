@@ -2,14 +2,15 @@
 // into the live transcript so cue remembers what was said:
 //   • every transcript turn is persisted as it lands (survives a crash/restart)
 //   • an interrupted meeting is resumed on the next launch if it is recent
-//   • when listening stops, notes (summary / decisions / action items) are
-//     written with the LLM and stored; earlier-ended meetings without notes
-//     are caught up in the background on launch
+//   • explicitly approved meetings can get LLM notes when listening stops;
+//     catch-up uses the same recorded recipient approval, never old history
+//     without approval
 //   • the last few meeting summaries are offered as a "previous meetings"
 //     block for prompts
 // All I/O and the LLM are injected so the lifecycle is unit-testable.
 
 const { buildNotesPrompt, parseNotes } = require('./notes');
+const { abortable } = require('./abort');
 
 const NOTES_SYSTEM =
   'You are cue, writing private meeting notes for the user ("You") from a transcript of a conversation with ' +
@@ -30,6 +31,9 @@ function createMeetingMemory(opts) {
   let current = null;        // the meeting the live transcript is being written to
   let notesTurnCount = 0;    // transcript length when notes were last written for `current`
   let notesInFlight = null;
+  const getNotesDestination = opts.getNotesDestination || (() => null);
+  const notesRequests = new Set();
+  let notesGeneration = 0;
 
   function lastTurnTs(m) {
     return m.transcript.length ? m.transcript[m.transcript.length - 1].ts : m.startedAt;
@@ -44,23 +48,32 @@ function createMeetingMemory(opts) {
   // Write notes for a meeting with the LLM. Resolves to the parsed notes, or
   // null when there is nothing to do (too short, no usable provider, failure).
   async function writeNotes(m) {
-    if (!m || m.transcript.length < cfg.minTurnsForNotes) return null;
+    if (!m || m.notesSuppressed || m.transcript.length < cfg.minTurnsForNotes) return null;
+    const destination = getNotesDestination();
+    if (!destination || m.notesDestination !== destination) return null;
     const llm = llmFactory();
     if (!llm || !llm.ready) return null;
+    const request = new AbortController();
+    const turns = m.transcript.slice();
+    notesRequests.add(request);
     try {
-      const text = await llm.stream({
+      const text = await abortable(llm.stream({
         system: NOTES_SYSTEM,
-        turns: [{ role: 'user', text: buildNotesPrompt(m.transcript) }],
+        turns: [{ role: 'user', text: buildNotesPrompt(turns) }],
+        signal: request.signal,
         onToken: () => {}
-      });
+      }), request.signal);
+      if (request.signal.aborted || getNotesDestination() !== destination) return null;
       const notes = parseNotes(text);
       if (!notes.summary) return null;
-      store.update(m.id, { ...notes, title: titleFor(notes.summary, m.startedAt), notesAt: now(), notesTurns: m.transcript.length });
-      log(`notes written for meeting ${m.id} (${m.transcript.length} turns)`);
+      store.update(m.id, { ...notes, title: titleFor(notes.summary, m.startedAt), notesAt: now(), notesTurns: turns.length });
+      log(`notes written for meeting ${m.id} (${turns.length} turns)`);
       return notes;
     } catch (e) {
-      log(`notes failed for meeting ${m.id}: ${e && e.message}`);
+      if (!request.signal.aborted) log(`notes failed for meeting ${m.id}: ${e && e.message}`);
       return null;
+    } finally {
+      notesRequests.delete(request);
     }
   }
 
@@ -90,6 +103,7 @@ function createMeetingMemory(opts) {
       if (current && now() - lastTurnTs(current) > cfg.resumeWindowMs) this.end();
       if (!current) {
         current = store.add();
+        store.update(current.id, { notesDestination: getNotesDestination() });
         notesTurnCount = 0;
         store.prune(cfg.maxMeetings);
         log(`meeting ${current.id} started`);
@@ -104,18 +118,19 @@ function createMeetingMemory(opts) {
       if (notesInFlight) return notesInFlight;
       const m = current;
       const count = m.transcript.length;
-      notesInFlight = writeNotes(m).then((notes) => { if (notes && current === m) notesTurnCount = count; return notes; })
-        .finally(() => { notesInFlight = null; });
-      return notesInFlight;
+      const pending = writeNotes(m).then((notes) => { if (notes && current === m) notesTurnCount = count; return notes; })
+        .finally(() => { if (notesInFlight === pending) notesInFlight = null; });
+      notesInFlight = pending;
+      return pending;
     },
 
     // Close the current meeting (transcript cleared, quit, or a long gap).
     // Returns the notes promise so a caller can wait for them if it wants to.
-    end() {
+    end({ writeNotes: generateNotes = true } = {}) {
       if (!current) return Promise.resolve(null);
       const m = current;
-      store.update(m.id, { endedAt: now() });
-      const notes = this.refreshNotes();
+      store.update(m.id, { endedAt: now(), ...(!generateNotes ? { notesSuppressed: true } : {}) });
+      const notes = generateNotes ? this.refreshNotes() : Promise.resolve(null);
       current = null;
       notesTurnCount = 0;
       log(`meeting ${m.id} ended (${m.transcript.length} turns)`);
@@ -124,10 +139,21 @@ function createMeetingMemory(opts) {
 
     // Launch-time catch-up: meetings that ended without notes (quit, crash).
     async catchUp() {
+      const generation = notesGeneration;
       const pending = store.all().filter((m) => m.endedAt && !m.summary && m.transcript.length >= cfg.minTurnsForNotes);
       let written = 0;
-      for (const m of pending) { if (await writeNotes(m)) written++; } // sequential: one provider call at a time
+      for (const m of pending) {
+        if (generation !== notesGeneration) break;
+        if (await writeNotes(m)) written++;
+      } // sequential: one provider call at a time
       return written;
+    },
+
+    cancelNotes() {
+      notesGeneration++;
+      for (const request of notesRequests) request.abort();
+      notesRequests.clear();
+      notesInFlight = null;
     },
 
     // "Previous meetings" context for prompts — summaries only, never full

@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCap
 const path = require('path');
 const os = require('os');
 const store = require('./src/store');
+const { createCaptureController } = require('./src/capture-controller');
+const { abortable } = require('./src/abort');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { parseDocumentFile } = require('./src/resume');
@@ -19,6 +21,7 @@ const publik = require('./src/publik');
 const publikBuild = publik.loadBuildConfig();
 const { createMeetingStore } = require('./src/meetings');
 const { createMeetingMemory } = require('./src/meeting-memory');
+const { notesDestination } = require('./src/notes-policy');
 const {
   hashRGBA,
   shouldEmitSlide,
@@ -118,6 +121,7 @@ let slideTimer = null;
 let slideLastHash = null;
 let slideStableCount = 0;
 let slideBusy = false;
+let slideController = null;
 let slideDisabled = false; // set when the chat key rejects slide captions (stops cost spam)
 let slideTxCursor = 0; // transcript.length at last emitted slide
 const FLUSH_MS = 300;
@@ -129,8 +133,25 @@ let flushTimer = null;
 let whisperModelManager = null;
 let localWhisperTranscriber = null;
 let activeWhisperModelId = null;
-let desiredCaptureState = false;
-let captureTransition = Promise.resolve(false);
+const captureController = createCaptureController({ start: startCapturing, stop: stopCapturing });
+function setCapturing(active) {
+  if (active === false) cancelFeature();
+  return captureController.set(active);
+}
+const batchRequests = { you: null, them: null };
+let featureRequest = null;
+function cancelFeature() {
+  if (!featureRequest) return;
+  featureRequest.abort();
+  featureRequest = null;
+  state.busy = false;
+  send('llm:done', {});
+}
+function cancelBatch(channel) {
+  batchRequests[channel]?.abort();
+  batchRequests[channel] = null;
+  state.transcribing[channel] = false;
+}
 
 // -------- streaming STT state --------
 let streamingSTT = { you: null, them: null }; // streaming STT instances per channel
@@ -187,7 +208,7 @@ function publishTranscript(channel, text) {
   send('stt:final', { channel, text: turn.text });
 }
 
-async function startLocalWhisper(settings) {
+async function startLocalWhisper(settings, signal) {
   if (!whisperModelManager) throw new Error('The local Whisper model manager is not ready.');
   const localSettings = settings.localWhisper || {};
   const model = requireWhisperModel(localSettings.modelId || 'base.en');
@@ -203,6 +224,7 @@ async function startLocalWhisper(settings) {
       throw error;
     });
 
+    signal.throwIfAborted();
     transcriber = new LocalWhisperTranscriber({
       sessionOptions: {
         executablePath: runtime.executablePath,
@@ -227,6 +249,7 @@ async function startLocalWhisper(settings) {
 
     localWhisperTranscriber = transcriber;
     await transcriber.start();
+    signal.throwIfAborted();
   } catch (error) {
     if (localWhisperTranscriber === transcriber) localWhisperTranscriber = null;
     activeWhisperModelId = null;
@@ -310,6 +333,12 @@ function createWindow() {
   if (isWindows) {
     winOptions.type = 'toolbar';
   }
+  // On macOS, 'panel' makes a non-activating NSPanel: clicking cue no longer
+  // activates the app, so a full-screen browser keeps focus instead of firing
+  // blur/visibilitychange (which pages answer by exiting full screen or logging).
+  if (isMac) {
+    winOptions.type = 'panel';
+  }
 
   win = new BrowserWindow(winOptions);
 
@@ -377,14 +406,19 @@ function createWindow() {
     }
   });
   win.webContents.on('render-process-gone', (_e, d) => {
+    setCapturing(false).catch(() => {});
     console.log('[cue] renderer gone', JSON.stringify(d));
     recordEvent({ level: 'fatal', event: 'renderer_gone', code: d && d.reason, msg: 'renderer process ended: ' + JSON.stringify(d), frame: 'BrowserWindow' });
   });
+  win.webContents.on('did-start-loading', () => { setCapturing(false).catch(() => {}); });
+  win.on('closed', () => { setCapturing(false).catch(() => {}); });
 }
 
 // -------- STT flushing (batch mode fallback) --------
 async function flushChannel(channel) {
-  if (state.transcribing[channel]) return;
+  const sessionSignal = captureController.signal;
+  if (!state.capturing || !sessionSignal || sessionSignal.aborted || state.transcribing[channel]) return;
+  if (channel === 'them' && store.getSettings().meetingAudio !== true) return;
   const chunks = buffers[channel];
   if (!chunks.length) return;
   // Wait for the speaker to pause so whole sentences go out: fixed 0.9s slices
@@ -396,6 +430,8 @@ async function flushChannel(channel) {
   if (pcm.length < MIN_BYTES) return;
   if (rms16(pcm) < RMS_GATE) { if (!speaking) buffers[channel] = chunks.slice(-1); return; } // silence gate; keep a pre-roll so the first word isn't clipped
 
+  const request = batchRequests[channel] = new AbortController();
+  const signal = AbortSignal.any([sessionSignal, request.signal]);
   state.transcribing[channel] = true;
   try {
     const settings = store.getSettings();
@@ -404,7 +440,8 @@ async function flushChannel(channel) {
       if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription key set. Add an OpenAI (Whisper) or Groq key in Settings to enable listening. Screen/LeetCode features work without it.' }); }
       return;
     }
-    const res = await stt.transcribe(pcm);
+    const res = await abortable(stt.transcribe(pcm, { signal }), signal);
+    signal.throwIfAborted();
     if (res.error) {
       handleSttError(res.error, settings);
       return;
@@ -414,10 +451,14 @@ async function flushChannel(channel) {
       if (pushTranscript(turn)) send('transcript', turn);
     }
   } catch (e) {
+    if (signal.aborted) return;
     console.log('[stt] error', e && e.message);
     recordEvent({ level: 'error', event: 'stt_failed', msg: e && e.message ? e.message : String(e), frame: 'flushChannel', context: { channel } });
   } finally {
-    state.transcribing[channel] = false;
+    if (batchRequests[channel] === request) {
+      batchRequests[channel] = null;
+      state.transcribing[channel] = false;
+    }
   }
 }
 
@@ -452,14 +493,16 @@ function stopFlushLoop() { if (flushTimer) { clearInterval(flushTimer); flushTim
 
 // -------- streaming STT setup --------
 function initStreamingSTT() {
+  const signal = captureController.signal;
   const settings = store.getSettings();
   streamingMode = false;
 
   ['you', 'them'].forEach((channel) => {
+    if (channel === 'them' && settings.meetingAudio !== true) return;
     let instance = null; // set below; lets the callbacks tell a stale instance from the live one
     const sttInstance = createStreamingSTT(settings, channel, {
       onTranscript: (ch, text) => {
-        if (instance && streamingSTT[ch] !== instance) return; // stale instance after a stop/start
+        if (signal.aborted || (instance && streamingSTT[ch] !== instance)) return; // stale instance after a stop/start
 
         const turn = { channel: ch, text, ts: Date.now() };
         if (!pushTranscript(turn)) return;
@@ -467,14 +510,14 @@ function initStreamingSTT() {
         send('stt:final', { channel: ch, text });
       },
       onInterim: (ch, text) => {
-        if (instance && streamingSTT[ch] !== instance) return;
+        if (signal.aborted || (instance && streamingSTT[ch] !== instance)) return;
         send('stt:interim', { channel: ch, text });
       },
       onError: (err) => {
         // A socket torn down by a quick stop/start can still report an error a
         // moment later; acting on it would kill the sessions that replaced it
         // and start the batch loop alongside them (double transcription).
-        if (instance && streamingSTT[channel] !== instance) return;
+        if (signal.aborted || (instance && streamingSTT[channel] !== instance)) return;
         console.log('[streaming-stt] error', err.provider, err.message);
         const batchFallbackAvailable = createSTT(settings).available;
         stopStreamingSTT(); // close WebSockets and clear keep-alive intervals
@@ -488,6 +531,7 @@ function initStreamingSTT() {
         streamingMode = false;
       },
       onStatusChange: (ch, status) => {
+        if (signal.aborted || (instance && streamingSTT[ch] !== instance)) return;
         send('stt:status', { channel: ch, status });
         if (status === 'connected') {
           console.log(`[streaming-stt] ${ch} channel connected`);
@@ -509,8 +553,9 @@ function initStreamingSTT() {
 function stopStreamingSTT() {
   ['you', 'them'].forEach((channel) => {
     if (streamingSTT[channel]) {
-      streamingSTT[channel].disconnect();
+      const instance = streamingSTT[channel];
       streamingSTT[channel] = null;
+      try { instance.disconnect(); } catch (_) {}
     }
   });
   streamingMode = false;
@@ -538,71 +583,63 @@ async function captureHashFrame() {
   return { width: size.width, height: size.height, data: bmp };
 }
 
-async function captionSlide(imageDataUrl, transcriptSlice) {
-  const settings = store.getSettings();
-  const llm = createLLM(settings);
+async function captionSlide(imageDataUrl, transcriptSlice, sessionSignal) {
+  const request = new AbortController();
+  const signal = AbortSignal.any([sessionSignal, request.signal]);
+  signal.throwIfAborted();
+  const llm = createLLM(store.getSettings());
   if (!llm.ready) throw new Error(llm.configurationError || 'Complete the provider settings.');
-  let watchdog = null;
-  const stalled = new Promise((_res, reject) => {
-    watchdog = setTimeout(() => reject(new Error('slide caption timed out')), STREAM_INACTIVITY_MS);
-  });
+  const watchdog = setTimeout(() => request.abort(new Error('slide caption timed out')), STREAM_INACTIVITY_MS);
   try {
-    return await Promise.race([
-      llm.stream({
-        system: buildSlideSystem(),
-        turns: [{ role: 'user', text: buildSlideUser(transcriptSlice) }],
-        imageDataUrl,
-        maxTokens: 300,
-        onToken: () => {}
-      }),
-      stalled
-    ]);
+    return await abortable(llm.stream({
+      system: buildSlideSystem(),
+      turns: [{ role: 'user', text: buildSlideUser(transcriptSlice) }],
+      imageDataUrl,
+      signal,
+      maxTokens: 300,
+      onToken: () => {}
+    }), signal);
   } finally {
     clearTimeout(watchdog);
   }
 }
 
 async function pollSlides() {
-  if (!state.capturing || slideBusy || slideDisabled) return;
+  const controller = slideController;
+  if (!state.capturing || !controller || controller.signal.aborted || slideBusy || slideDisabled) return;
   const cfg = getSlidesConfig();
-  if (!cfg.enabled) return;
-  if (slideStore.count() >= cfg.maxSlides) return;
-  let frame = null;
-  try {
-    frame = await captureHashFrame();
-  } catch {
-    return;
-  }
-  if (!frame) return;
-  const newHash = hashRGBA(frame.width, frame.height, frame.data);
-  if (!newHash) return;
-  const decision = shouldEmitSlide(slideLastHash, newHash, {
-    threshold: cfg.threshold,
-    stableCount: slideStableCount,
-    requiredStable: DEFAULT_STABLE_REQUIRED
-  });
-  slideStableCount = decision.stableCount;
-  if (!decision.emit) {
-    if (slideLastHash && decision.distance != null && decision.distance <= cfg.threshold) slideLastHash = slideLastHash;
-    return;
-  }
-  slideLastHash = newHash;
-  slideStableCount = decision.stableCount;
-  // Stable change: take one full-res frame and caption it.
+  if (!cfg.enabled || slideStore.count() >= cfg.maxSlides) return;
+  const signal = controller.signal;
   slideBusy = true;
   try {
-    const imageDataUrl = await captureScreenshot();
+    const frame = await abortable(captureHashFrame(), signal);
+    signal.throwIfAborted();
+    if (!frame) return;
+    const newHash = hashRGBA(frame.width, frame.height, frame.data);
+    if (!newHash) return;
+    const decision = shouldEmitSlide(slideLastHash, newHash, {
+      threshold: cfg.threshold,
+      stableCount: slideStableCount,
+      requiredStable: DEFAULT_STABLE_REQUIRED
+    });
+    slideStableCount = decision.stableCount;
+    if (!decision.emit) return;
+    const imageDataUrl = await abortable(captureScreenshot(), signal);
+    signal.throwIfAborted();
     if (!imageDataUrl) return;
     const txStart = slideTxCursor;
     const txEnd = transcript.length;
     const slice = transcript.slice(txStart, txEnd).slice(-8);
-    const caption = (await captionSlide(imageDataUrl, slice) || '').trim();
+    const caption = (await captionSlide(imageDataUrl, slice, signal) || '').trim();
+    signal.throwIfAborted();
     if (!caption) return;
+    slideLastHash = newHash;
     const slide = slideStore.add({ hash: newHash, caption, txStart, txEnd });
     slideTxCursor = txEnd;
     send('slides:update', { count: slideStore.count(), last: slide });
     recordEvent({ level: 'info', event: 'slide_captured', msg: 'slide ' + slideStore.count() + ' captioned' });
   } catch (e) {
+    if (signal.aborted) return;
     const msg = (e && e.message) || String(e);
     if (/429|quota|401|403|model_not_found/i.test(msg)) {
       slideDisabled = true;
@@ -611,22 +648,28 @@ async function pollSlides() {
       console.log('[slides] caption failed', msg);
     }
   } finally {
-    slideBusy = false;
+    if (slideController === controller) slideBusy = false;
   }
 }
 
 function startSlideLoop() {
   stopSlideLoop();
+  slideController = new AbortController();
   const cfg = getSlidesConfig();
   slideTimer = setInterval(() => { pollSlides().catch(() => {}); }, cfg.intervalMs);
   if (slideTimer.unref) slideTimer.unref();
 }
 
 function stopSlideLoop() {
+  slideController?.abort();
+  slideController = null;
+  slideBusy = false;
   if (slideTimer) { clearInterval(slideTimer); slideTimer = null; }
 }
 
 function resetSlidesSession() {
+  stopSlideLoop();
+  if (state.capturing) startSlideLoop();
   slideStore.clear();
   slideLastHash = null;
   slideStableCount = 0;
@@ -683,64 +726,68 @@ function routeAudio(channel, pcmBuffer) {
 // Mic + system audio are both captured in the RENDERER (getUserMedia for the mic,
 // getDisplayMedia loopback for system audio) so they run inside cue's own process
 // and use cue's own Screen-Recording grant — no separate helper binary to authorize.
-async function setCapturing(active) {
-  if (active === state.capturing) return state.capturing;
-
-  if (active) {
-    sttDisabled = false; // reset on re-enable
-    const settings = store.getSettings();
-    if ((settings.sttProvider || 'auto') === 'local') {
-      try {
-        await startLocalWhisper(settings);
-        state.capturing = true;
-        console.log('[cue] capture started, mode: local');
-        slideDisabled = false;
-        slideTxCursor = transcript.length;
-        slideStore = createSlideStore({ maxSlides: getSlidesConfig().maxSlides });
-        slideLastHash = null;
-        slideStableCount = 0;
-        startSlideLoop();
-        send('capture:state', { active: true, streaming: false, mode: 'local' });
-        send('slides:update', { count: 0, last: null });
-        return true;
-      } catch (error) {
-        state.capturing = false;
-        desiredCaptureState = false;
-        if (error.code === 'STARTUP_CANCELLED') {
-          send('stt:status', { provider: 'local', status: 'off' });
-          send('capture:state', { active: false, streaming: false, mode: 'local' });
-          return false;
-        }
-        send('stt:status', { provider: 'local', status: 'error' });
-        send('status', { message: `Local transcription could not start: ${error.message} No audio was sent to a cloud provider.` });
+async function startCapturing(signal) {
+  signal.throwIfAborted();
+  sttDisabled = false; // reset on re-enable
+  const settings = store.getSettings();
+  if ((settings.sttProvider || 'auto') === 'local') {
+    try {
+      await startLocalWhisper(settings, signal);
+      signal.throwIfAborted();
+      state.capturing = true;
+      console.log('[cue] capture started, mode: local');
+      slideDisabled = false;
+      slideTxCursor = transcript.length;
+      slideStore = createSlideStore({ maxSlides: getSlidesConfig().maxSlides });
+      slideLastHash = null;
+      slideStableCount = 0;
+      startSlideLoop();
+      send('capture:state', { active: true, streaming: false, mode: 'local' });
+      send('slides:update', { count: 0, last: null });
+      return true;
+    } catch (error) {
+      state.capturing = false;
+      if (signal.aborted) return false;
+      if (error.code === 'STARTUP_CANCELLED') {
+        send('stt:status', { provider: 'local', status: 'off' });
         send('capture:state', { active: false, streaming: false, mode: 'local' });
         return false;
       }
+      send('stt:status', { provider: 'local', status: 'error' });
+      send('status', { message: `Local transcription could not start: ${error.message} No audio was sent to a cloud provider.` });
+      send('capture:state', { active: false, streaming: false, mode: 'local' });
+      return false;
     }
-
-    state.capturing = true;
-    // Try streaming first, fall back to batch
-    const streaming = initStreamingSTT();
-    if (!streaming) {
-      startFlushLoop();
-    }
-    slideDisabled = false;
-    slideTxCursor = transcript.length;
-    const slideCfg = getSlidesConfig();
-    slideStore = createSlideStore({ maxSlides: slideCfg.maxSlides });
-    slideLastHash = null;
-    slideStableCount = 0;
-    startSlideLoop();
-    console.log('[cue] capture started, mode:', streaming ? 'streaming' : 'batch');
-    send('capture:state', { active: true, streaming: streamingMode, mode: streaming ? 'streaming' : 'batch' });
-    send('slides:update', { count: 0, last: null });
-    return true;
   }
 
+  state.capturing = true;
+  // Try streaming first, fall back to batch
+  const streaming = initStreamingSTT();
+  if (!streaming) {
+    startFlushLoop();
+  }
+  slideDisabled = false;
+  slideTxCursor = transcript.length;
+  const slideCfg = getSlidesConfig();
+  slideStore = createSlideStore({ maxSlides: slideCfg.maxSlides });
+  slideLastHash = null;
+  slideStableCount = 0;
+  startSlideLoop();
+  console.log('[cue] capture started, mode:', streaming ? 'streaming' : 'batch');
+  send('capture:state', { active: true, streaming: streamingMode, mode: streaming ? 'streaming' : 'batch' });
+  send('slides:update', { count: 0, last: null });
+  return true;
+}
+
+async function stopCapturing() {
+  const wasCapturing = state.capturing;
   state.capturing = false;
+  cancelFeature();
+  cancelBatch('you'); cancelBatch('them');
   stopFlushLoop();
   stopStreamingSTT();
   if (meetingMemory) {
+    meetingMemory.cancelNotes();
     // Write/refresh the notes for this meeting in the background so the
     // summary survives even if cue is closed before the meeting formally ends.
     meetingMemory.refreshNotes().then((notes) => {
@@ -757,7 +804,8 @@ async function setCapturing(active) {
   if (stoppingLocalTranscriber) {
     send('stt:status', { provider: 'local', status: 'stopping' });
     try {
-      await stoppingLocalTranscriber.stop();
+      if (wasCapturing) await stoppingLocalTranscriber.stop();
+      else await stoppingLocalTranscriber.forceStop();
     } catch (error) {
       console.log('[local-whisper] stop error', error && error.message);
     } finally {
@@ -773,6 +821,7 @@ async function runFeature(mode, userText) {
   const def = MODES[mode];
   if (!def) return;
   state.busy = true;
+  const request = featureRequest = new AbortController();
   let streamSettled = false; // drop stray tokens from a stream we've already abandoned
   try {
     const settings = store.getSettings();
@@ -811,10 +860,12 @@ async function runFeature(mode, userText) {
     let imageDataUrl = null;
     if (def.needsScreen) {
       try {
-        imageDataUrl = await captureScreenshot();
+        imageDataUrl = await abortable(captureScreenshot(), request.signal);
+        request.signal.throwIfAborted();
         if (!imageDataUrl) throw new Error('No screen source was available.');
       }
       catch (e) {
+        request.signal.throwIfAborted();
         recordEvent({ level: 'error', event: 'screen_capture_failed', msg: e && e.message ? e.message : String(e), frame: 'captureScreenshot', context: { mode } });
         const message = process.platform === 'darwin'
           ? 'Screen capture needs permission — grant Screen Recording to cue in System Settings.'
@@ -842,29 +893,24 @@ async function runFeature(mode, userText) {
     const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '') : (def.system || '');
     const built = def.build({ transcript, userText: userText || '' });
 
-    // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
-    // leaving state.busy = true and wedging every later question until an app restart.
     let watchdog = null;
-    let rearm = () => {};
-    const stalled = new Promise((_res, reject) => {
-      rearm = () => {
-        clearTimeout(watchdog);
-        watchdog = setTimeout(() => reject(new Error('the model stopped responding (timed out). Please try again.')), STREAM_INACTIVITY_MS);
-      };
-      rearm();
-    });
+    const rearm = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => request.abort(new Error('the model stopped responding (timed out). Please try again.')), STREAM_INACTIVITY_MS);
+    };
+    rearm();
     try {
-      await Promise.race([
-        llm.stream({
-          system,
-          turns: [{ role: 'user', text: built }],
-          imageDataUrl,
-          onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); },
-          onActivity: () => { if (!streamSettled) rearm(); },
-          onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined
-        }),
-        stalled
-      ]);
+      await abortable(llm.stream({
+        system,
+        turns: [{ role: 'user', text: built }],
+        imageDataUrl,
+        signal: request.signal,
+        onToken: (t) => { if (streamSettled || request.signal.aborted) return; rearm(); send('llm:token', { text: t }); },
+        onActivity: () => { if (!streamSettled && !request.signal.aborted) rearm(); },
+        onResponse: settings.provider === publik.PUBLIK_PROVIDER
+          ? (res) => { if (!request.signal.aborted) publikNoteHeaders(res && res.headers); } : undefined
+      }), request.signal);
+      request.signal.throwIfAborted();
     } finally {
       streamSettled = true;
       clearTimeout(watchdog);
@@ -874,13 +920,14 @@ async function runFeature(mode, userText) {
     // GET /wallet shortly after the answer — one request per answer, debounced.
     if (settings.provider === publik.PUBLIK_PROVIDER) publikScheduleWalletRefresh();
   } catch (e) {
+    if (featureRequest !== request) return;
     recordEvent({ level: 'error', event: 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider } });
     const action = e && e.action ? e.action : null;
     send('llm:error', { message: e && e.message ? e.message : String(e), action });
     if (action) publikHandleErrorAction(action);
   } finally {
     streamSettled = true;
-    state.busy = false;
+    if (featureRequest === request) { featureRequest = null; state.busy = false; }
   }
 }
 
@@ -890,9 +937,20 @@ async function runFeature(mode, userText) {
 ipcMain.handle('settings:get', () => store.redactForRenderer(store.getSettings()));
 ipcMain.handle('settings:set', (_e, patch) => {
   sttDisabled = false;
+  const previous = store.getSettings();
+  const meetingAudioWasEnabled = previous.meetingAudio === true;
+  const previousNotesDestination = notesDestination(previous);
+  const previousSlides = JSON.stringify(previous.slides || {});
   const next = store.setSettings(store.stripRendererPatch(patch));
+  if (previousNotesDestination !== notesDestination(next)) meetingMemory?.cancelNotes();
   // Restart slide polling with the new interval when capturing (keeps slides).
-  if (state.capturing) startSlideLoop();
+  if (next.meetingAudio !== true) { buffers.them = []; cancelBatch('them'); }
+  if (state.capturing && !localWhisperTranscriber && meetingAudioWasEnabled !== (next.meetingAudio === true)) {
+    stopStreamingSTT(); stopFlushLoop();
+    if (!initStreamingSTT()) startFlushLoop();
+  }
+  send('meeting-audio:state', { enabled: next.meetingAudio === true });
+  if (state.capturing && previousSlides !== JSON.stringify(next.slides || {})) startSlideLoop();
   return store.redactForRenderer(next);
 });
 
@@ -1067,18 +1125,9 @@ ipcMain.on('publik:open', (_e, url) => {
   if (!target) { recordEvent({ level: 'warn', event: 'publik_open_dropped', msg: '', frame: 'publik:open', context: {} }); return; }
   shell.openExternal(target).catch(() => {});
 });
-ipcMain.handle('capture:toggle', () => {
-  const targetState = !desiredCaptureState;
-  desiredCaptureState = targetState;
-  if (!targetState && !state.capturing && localWhisperTranscriber) {
-    localWhisperTranscriber.forceStop().catch(() => {});
-  }
-  captureTransition = captureTransition
-    .catch(() => state.capturing)
-    .then(() => setCapturing(targetState));
-  return captureTransition;
-});
-ipcMain.handle('capture:state', () => ({ active: state.capturing }));
+ipcMain.handle('capture:set', (_event, active) => setCapturing(active));
+ipcMain.handle('capture:toggle', () => captureController.toggle());
+ipcMain.handle('capture:state', () => ({ active: state.capturing, desired: captureController.desired }));
 ipcMain.handle('whisper:models', () => getWhisperOverview());
 ipcMain.handle('whisper:model-download', async (_event, modelId) => {
   if (!whisperModelManager) throw new Error('The local Whisper model manager is not ready.');
@@ -1121,7 +1170,10 @@ ipcMain.handle('platform:info', () => ({
   winSupportsContentProtection: WIN_SUPPORTS_CONTENT_PROTECTION
 }));
 ipcMain.handle('transcript:clear', () => {
-  if (meetingMemory) meetingMemory.end().catch(() => {}); // it stays in history with its notes
+  if (meetingMemory) {
+    meetingMemory.cancelNotes();
+    meetingMemory.end({ writeNotes: false }).catch(() => {});
+  } // Clearing keeps local history without starting a provider request.
   transcript.splice(0, transcript.length);
   resetSlidesSession();
   send('slides:update', { count: 0, last: null });
@@ -1141,7 +1193,7 @@ ipcMain.handle('slides:clear', () => {
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
-ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
+ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing && store.getSettings().meetingAudio === true) routeAudio('them', arrayBuffer); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
 // Window dragging is done here rather than with CSS drag regions, which misbehave while the
 // renderer toggles click-through. The window follows the cursor until the renderer says stop.
@@ -1348,6 +1400,7 @@ function launchApp() {
   meetingMemory = createMeetingMemory({
     store: createMeetingStore({ file: path.join(app.getPath('userData'), 'meetings.json'), debounceMs: 1500 }),
     llmFactory: () => createLLM(store.getSettings()),
+    getNotesDestination: () => notesDestination(store.getSettings()),
     log: (msg) => console.log('[meetings]', msg)
   });
   restoredTurns = meetingMemory.resumeOpen();
@@ -1370,7 +1423,7 @@ function launchApp() {
   // started"), and also invoked this one-time `callback` a SECOND time. Never pass a
   // boolean on any platform, and invoke `callback` from exactly one place.
   //
-  // 2. On macOS the grant is not free: the only route to system audio is a
+  // 2. Meeting audio Off denies grants on every platform. On macOS the grant is not free: the only route to system audio is a
   // ScreenCaptureKit session over a real display, so while it is held open macOS paints
   // its screen-recording indicator and names cue under Control Center's "Currently
   // Sharing" — pixels every screen-share viewer sees. Nothing app-side suppresses it
@@ -1379,13 +1432,15 @@ function launchApp() {
   // unless the user switched Meeting audio on in Settings > Audio. This guard is the
   // enforcement point and holds even if another renderer path calls getDisplayMedia.
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-    // The macOS consent gate resolves to an empty source list instead of invoking the
+    // The consent gate resolves to an empty source list instead of invoking the
     // one-time reply itself, so this handler keeps exactly one invocation site.
     // test/display-media-audio.test.js counts them, because a second site is how the
     // "One-time callback was called more than once" bug happened before.
-    const allowed = !isMac || Boolean(store.getSettings().meetingAudio);
+    const signal = captureController.signal;
+    const allowed = store.getSettings().meetingAudio === true && !!signal && !signal.aborted;
     (allowed ? desktopCapturer.getSources({ types: ['screen'] }) : Promise.resolve([]))
-      .then((sources) => (sources.length ? { video: sources[0], audio: 'loopback' } : undefined))
+      .then((sources) => (sources.length && !signal.aborted && store.getSettings().meetingAudio === true
+        ? { video: sources[0], audio: 'loopback' } : undefined))
       .catch((err) => {
         console.error('[main] system audio: desktopCapturer.getSources failed:', err);
         return undefined;
@@ -1452,10 +1507,13 @@ app.whenReady().then(async () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  // Quitting mid-meeting is a pause, not an end: the meeting stays open on disk
-  // so a relaunch within the resume window picks it back up (a stale one is
-  // closed and its notes written at the next launch). Just get the bytes down.
+  const quittingTranscriber = localWhisperTranscriber;
+  // Keep the meeting open for an explicit, consented resumption.
+  meetingMemory?.cancelNotes();
   if (meetingMemory) meetingMemory.flush();
+  meetingMemory = null;
+  setCapturing(false).catch(() => {});
+  cancelBatch('you'); cancelBatch('them');
   // Best effort, deliberately not blocking the quit: the library also removes
   // the instance file from a `process.on('exit')` handler, and a file left
   // behind is harmless anyway because readers check whether the PID is alive.
@@ -1465,7 +1523,7 @@ app.on('will-quit', () => {
   if (whisperModelManager?.activeDownload) {
     whisperModelManager.cancelDownload(whisperModelManager.activeDownload.modelId);
   }
-  if (localWhisperTranscriber) localWhisperTranscriber.forceStop().catch(() => {});
+  if (quittingTranscriber) quittingTranscriber.forceStop().catch(() => {});
 });
 app.on('window-all-closed', (e) => {
   // Don't quit while the permissions window is open — the user may be in System Settings

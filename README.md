@@ -174,7 +174,11 @@ Deepgram and OpenAI keys stream transcripts word by word automatically. A Gemini
 
 ### Meeting memory
 
-cue keeps what it hears. Every transcript turn is saved to `meetings.json` in cue's data folder as it lands, so a crash or a quit mid-meeting loses nothing: relaunch within 30 minutes and the transcript is restored to the sidebar and **Recap** / **Follow-up questions** carry on from where the conversation was. When you stop listening, cue writes notes for the meeting with your chat model — summary, key points, decisions, action items, follow-ups — and the summaries of your last three meetings are given to the model as background for later conversations (the live transcript always takes priority). A 30-minute silence, the clear-transcript button, or a stale meeting at launch closes the meeting. The newest 50 meetings are kept; nothing leaves your computer except the transcript sent to your chosen provider to write the notes.
+cue saves transcript turns to `meetings.json` in its data folder. Relaunch within 30 minutes to restore an interrupted meeting; the newest 50 meetings are kept.
+
+Automatic meeting notes are **off by default**. Enable **Settings → Audio → Write notes automatically** before a meeting begins to send its transcript to the selected chat provider when listening stops. Local transcription does not make cloud-generated notes local. Approval stays with that meeting and recipient: changing providers does not authorize sending old meetings to the new provider, and older history without recorded approval is skipped. Clearing the transcript closes the meeting and suppresses automatic notes, including later catch-up; its local history remains.
+
+Ending a session stops input capture, invalidates pending media/model starts, and cancels active chat, batch transcription, and slide-caption requests. Requests already delivered to a provider cannot be retracted. If automatic notes are enabled for the meeting, stopping can start that separately approved notes request.
 
 ### Optional — tailor answers to your background
 
@@ -286,7 +290,7 @@ Run `xattr -cr /Applications/cue.app` in Terminal once (see Install → Option A
 - When Custom is selected, its API key and LLM request data are sent to the Base URL you configured.
 - Your optional résumé text also lives in `cue-data.json` and is sent with each model request to your selected AI provider. It is stored as plain text; clear it in Settings to remove it.
 - In Local transcription mode, microphone and meeting audio stay on your computer. In cloud transcription modes, audio is sent only to the selected speech provider.
-- Audio utterances and the current transcript stay in memory; Cue does not write captured audio to disk. Downloaded local model files remain on disk until you delete them.
+- Cue does not write captured audio to disk. Transcript turns and approved notes persist in `meetings.json`; clearing the live transcript does not delete that history. Downloaded local model files remain on disk until you delete them.
 - Screenshots are sent to your selected chat provider only when a feature needs the screen.
 
 ## Contributing
