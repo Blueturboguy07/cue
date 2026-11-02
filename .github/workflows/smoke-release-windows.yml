@@ -19,8 +19,8 @@ jobs:
     name: released cue-win-x64.exe (publik first screen + meeting audio)
     runs-on: windows-latest
     env:
-      CUE_TAG: v0.2.9
-      CUE_SHA256: 2ea49b1251970e65180e9a44aaecf312d6f8bb0c717ba05adf1c5585468f7aa2
+      CUE_TAG: v0.2.10
+      CUE_SHA256: 223bf487ce34a176cebd19f570e3becaad691a21ae7218bb06ab24d08b4121a2
     steps:
       - name: Check out the oracle helpers
         uses: actions/checkout@v4
