@@ -37,12 +37,12 @@ const BYO = 'or use your own key in Settings.';
 const COPY = {
   label: PROVIDER_LABEL,
   cost: 'Every request is priced per use at 50% of the model\'s published list price. Most people spend under $2 a month.',
-  dataPath: 'Your prompts and screenshots go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time.',
+  dataPath: 'Your prompts, screenshots and, while cue listens, your audio go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time.',
   disclosure: {
     title: 'cue uses publik API',
     intro: 'cue needs an AI model to work. By default it runs on publik API, so you need no key of your own.',
     cost: 'Every request is priced per use at 50% of the model\'s published list price, from your publik balance. A new computer starts at $0.00. Linking this computer to your publik account gives $0.05 of free use, once. Most people spend under $2 a month. You can see every charge in the app and at publikhq.com.',
-    dataPath: 'Your prompts and screenshots go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time in Settings.',
+    dataPath: 'Your prompts, screenshots and, while cue listens, your audio go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time in Settings.',
     accept: 'Continue with publik API',
     decline: 'Use my own key instead',
     terms: 'By continuing you agree to the publik API terms.'
@@ -327,15 +327,18 @@ function describeGatewayError({ status, body, model, retryAfter } = {}) {
         action: { kind: 'reprovision' }
       };
     }
+    // `revoked` tells main.js the key on disk is dead, so the state (and
+    // Settings) says so at once and the first Reconnect press mints a new
+    // key instead of only re-reading the wallet (smoke test 2026-11-02).
     if (type === 'key_revoked') {
       return {
         message: `${PROVIDER_LABEL} is disconnected. This computer was removed from your publik account. Reconnect to set it up again, ${BYO}`,
-        action: { kind: 'reconnect', label: 'Reconnect' }
+        action: { kind: 'reconnect', label: 'Reconnect', revoked: 'key_revoked' }
       };
     }
     return {
       message: `${PROVIDER_LABEL} did not accept this computer's key. Reconnect to set it up again, ${BYO}`,
-      action: { kind: 'reconnect', label: 'Reconnect' }
+      action: { kind: 'reconnect', label: 'Reconnect', revoked: 'invalid_key' }
     };
   }
   if (status === 429) {
@@ -579,7 +582,30 @@ async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, 
   }
 }
 
+/**
+ * The Reconnect button (main.js publik:reconnect). `refreshWallet()` re-reads
+ * GET /wallet and returns the new publik state (it marks the key revoked on a
+ * 401); `provision()` runs provisionInstall and returns the new state.
+ *   - not consented: nothing happens (only "Continue" may mint);
+ *   - a key that still looks live: re-read the wallet; when the gateway now
+ *     says the key is revoked (a dashboard revoke), mint in the SAME press.
+ *     Before 0.2.7 the first press stopped after the wallet read, so the
+ *     person saw nothing change and had to press a second time;
+ *   - no key, or a revoked one: mint (a finished install_id gets a fresh one).
+ */
+async function reconnectInstall({ store, refreshWallet, provision, state }) {
+  const s = store.getSettings();
+  if (!s.publik.disclosureAccepted) return state();
+  if (s.apiKeys.publik && !s.publik.revoked) {
+    const after = await refreshWallet();
+    if (!after || !after.revoked) return after;
+  }
+  store.setPublik({ revoked: true });
+  return provision();
+}
+
 module.exports = {
+  reconnectInstall,
   PUBLIK_PROVIDER, PROVIDER_LABEL, DEFAULT_BASE_URL, DEFAULT_MODELS, TIER_NAMES, LINKS, COPY, KEY_RE,
   loadBuildConfig, provision, provisionInstall, fetchWallet, revokeInstall, normalizeWallet, readGatewayHeaders,
   describeGatewayError, balanceLine, isSafePublikLink, formatMicros, formatResetTime, osName, pickModels,

@@ -4,6 +4,7 @@ const os = require('os');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
+const { UtteranceBatcher } = require('./src/publik-stt-batcher');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
@@ -107,6 +108,8 @@ let appLaunched = false;
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
 const buffers = { you: [], them: [] };
+const publikSttBatchers = { you: new UtteranceBatcher(), them: new UtteranceBatcher() };
+let publikSttNoticeAt = 0; // last "Transcription paused" notice for a passing publik error
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
 let meetingMemory = null; // persists the transcript per meeting + notes; see src/meeting-memory.js
@@ -378,21 +381,46 @@ function createWindow() {
 }
 
 // -------- STT flushing (batch mode fallback) --------
+// Said once when listening has no transcription path at all. With publik
+// selected and connected, src/stt.js transcribes through publik API, so this
+// only shows when publik is not set up (or its key was revoked) or another
+// provider without an audio key is selected.
+function noTranscriptionMessage(settings) {
+  const tail = 'Screen/LeetCode features work without it.';
+  if (settings.provider === publik.PUBLIK_PROVIDER) {
+    return `Listening needs publik API to be connected. Set it up or press Reconnect in Settings, or choose Local transcription. ${tail}`;
+  }
+  const publikHint = publikBuild.available ? ', switch to publik API' : '';
+  return `No transcription key set. Add an OpenAI (Whisper) or Groq key in Settings${publikHint}, or choose Local transcription to enable listening. ${tail}`;
+}
+
 async function flushChannel(channel) {
   if (state.transcribing[channel]) return;
   const chunks = buffers[channel];
-  if (!chunks.length) return;
-  const pcm = Buffer.concat(chunks);
   buffers[channel] = [];
-  if (pcm.length < MIN_BYTES) return;
-  if (rms16(pcm) < RMS_GATE) return; // silence gate
+  const windowPcm = chunks.length ? Buffer.concat(chunks) : null;
+  // silence gate: a window that is too short or too quiet is not speech
+  const voiced = windowPcm && windowPcm.length >= MIN_BYTES && rms16(windowPcm) >= RMS_GATE ? windowPcm : null;
+  const settings = store.getSettings();
+  const stt = createSTT(settings);
+  let pcm = voiced;
+  if (stt.providers[0] === publik.PUBLIK_PROVIDER) {
+    // publik API: whole utterances, so two busy channels stay under the
+    // key's 60 requests a minute (src/publik-stt-batcher.js).
+    pcm = publikSttBatchers[channel].push(voiced);
+  } else {
+    publikSttBatchers[channel].reset();
+  }
+  if (!pcm) return;
+  // After publik refused for good (balance used up, a refused request), do
+  // not send every utterance again; listening resumes on the next start or
+  // a Settings save, which clear sttDisabled.
+  if (sttDisabled && stt.providers[0] === publik.PUBLIK_PROVIDER) return;
 
   state.transcribing[channel] = true;
   try {
-    const settings = store.getSettings();
-    const stt = createSTT(settings);
     if (!stt.available) {
-      if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription key set. Add an OpenAI (Whisper) or Groq key in Settings to enable listening. Screen/LeetCode features work without it.' }); }
+      if (!sttDisabled) { sttDisabled = true; send('status', { message: noTranscriptionMessage(settings) }); }
       return;
     }
     const res = await stt.transcribe(pcm);
@@ -426,6 +454,23 @@ function handleSttError(err, settings) {
     context: { provider: err.provider, status: err.status || null, alreadyDisabled: sttDisabled },
   });
   if (sttDisabled) return;
+  if (err.provider === publik.PUBLIK_PROVIDER) {
+    // publik API: busy (429), unreachable (5xx, network) or a timeout is
+    // passing; say so at most once a minute and keep listening. Anything
+    // else (balance used up, key revoked, a refused request) stops
+    // transcription with the gateway's own sentence and its one button --
+    // "update your key" is wrong for a key cue minted.
+    const passing = err.status === 429 || !err.status || err.status >= 500;
+    if (passing) {
+      const now = Date.now();
+      if (now - publikSttNoticeAt > 60000) { publikSttNoticeAt = now; send('status', { message: `Transcription paused: ${err.message}` }); }
+      return;
+    }
+    sttDisabled = true;
+    send('status', { message: `Transcription stopped: ${err.message}`, action: err.action || null });
+    if (err.action) publikHandleErrorAction(err.action);
+    return;
+  }
   const isQuota = err.status === 429 || err.code === 'RESOURCE_EXHAUSTED' || (err.message && err.message.includes('Quota exceeded'));
   const noAccess = err.status === 403 || err.status === 401 || err.code === 'model_not_found' || isQuota;
   sttDisabled = true; // stop hammering the API every few seconds
@@ -741,6 +786,7 @@ async function setCapturing(active) {
   }
   stopSlideLoop();
   buffers.you = []; buffers.them = [];
+  publikSttBatchers.you.reset(); publikSttBatchers.them.reset();
   vad.you.reset(); vad.them.reset();
   ringBuffers.you.clear(); ringBuffers.them.clear();
   const stoppingLocalTranscriber = localWhisperTranscriber;
@@ -1019,8 +1065,19 @@ function publikHandleRevoked(e) {
   if (silent) publikProvision().catch(() => {});
 }
 function publikHandleErrorAction(action) {
-  if (!action || action.kind !== 'reprovision') return;
-  publikHandleRevoked({ type: 'key_revoked', reprovision: true });
+  if (!action) return;
+  if (action.kind === 'reprovision') {
+    publikHandleRevoked({ type: 'key_revoked', reprovision: true });
+    return;
+  }
+  // A 401 on a question (or a transcription): the key on disk is dead. Mark
+  // it now, so Settings shows Reconnect and the first Reconnect press mints.
+  if (action.kind === 'reconnect' && action.revoked) {
+    const s = store.getSettings();
+    if (!s.apiKeys.publik || s.publik.revoked) return;
+    publikHandleRevoked({ type: action.revoked === 'key_revoked' ? 'key_revoked' : 'invalid_api_key', reprovision: false });
+    publikPush();
+  }
 }
 
 ipcMain.handle('publik:state', () => publikState());
@@ -1032,13 +1089,11 @@ ipcMain.handle('publik:accept-disclosure', async () => {
   store.setSettings({ provider: publik.PUBLIK_PROVIDER });
   return publikProvision();
 });
-ipcMain.handle('publik:reconnect', async () => {
-  const s = store.getSettings();
-  if (!s.publik.disclosureAccepted) return publikState();
-  if (s.apiKeys.publik && !s.publik.revoked) return publikRefreshWallet();
-  store.setPublik({ revoked: true });
-  return publikProvision();
-});
+// One press reconnects: a wallet read that finds the key revoked goes on to
+// mint in the same press (src/publik.js reconnectInstall).
+ipcMain.handle('publik:reconnect', () => publik.reconnectInstall({
+  store, refreshWallet: publikRefreshWallet, provision: publikProvision, state: publikState
+}));
 ipcMain.handle('publik:refresh', () => publikRefreshWallet());
 ipcMain.handle('publik:disconnect', async () => {
   const s = store.getSettings();

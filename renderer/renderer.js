@@ -1248,9 +1248,11 @@
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => el.classList.remove('show'), button ? 30000 : 11000);
   }
-  cue.on('status', ({ message }) => {
+  cue.on('status', ({ message, action }) => {
     cue.log('[status] ' + message);
-    showStatus(message);
+    // A publik transcription failure carries one button (Reconnect, or a
+    // publikhq.com link), the same as a failed question.
+    showStatus(message, action && action.kind ? publikActionButton(action) : undefined);
     if (sttState !== 'disconnected') {
       const lower = message.toLowerCase();
       if (lower.includes('error') || lower.includes(' off')) setSttState('error');
@@ -1377,7 +1379,12 @@
       btn.addEventListener('click', () => cue.publikOpen(action.url));
     } else if (action.kind === 'reconnect') {
       btn.textContent = action.label || 'Reconnect';
-      btn.addEventListener('click', async () => { btn.disabled = true; publikState = await cue.publikReconnect(); renderPublikBlock(); });
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        publikState = await cue.publikReconnect();
+        renderPublikBlock();
+        showReconnectResult(publikState);
+      });
     } else if (action.kind === 'disclosure') {
       btn.textContent = 'Set up publik API';
       btn.addEventListener('click', () => showPublikDisclosure());
@@ -1388,6 +1395,20 @@
       return null;
     }
     return btn;
+  }
+
+  // What a Reconnect press did, said in the overlay: before, the button only
+  // went grey and the person could not tell whether anything happened.
+  function showReconnectResult(p) {
+    if (!p) return;
+    if (p.connected && !p.revoked) {
+      const cta = p.settingsCta;
+      const linkBtn = cta ? publikActionButton({ kind: 'link', label: cta.label, url: cta.url }) : null;
+      showStatus(`publik API is connected again · key ${p.keyId}.${p.claimState !== 'claimed' ? ' Link this computer to your publik account to use your balance.' : ''}`, linkBtn || undefined);
+      return;
+    }
+    const status = p.status && p.status.text ? p.status.text : 'publik API could not reconnect. Open Settings to try again.';
+    showStatus(status, publikActionButton({ kind: 'reconnect', label: 'Try again' }));
   }
 
   // Low starter (CONTRACT §12 / task 3): one non-blocking banner with one
@@ -1452,7 +1473,11 @@
   $('#publik-byo').addEventListener('click', selectByoProvider);
   cue.on('publik:state', (state) => { publikState = state; renderPublikBlock(); maybeShowLowStarter(state); });
 
+  // Keys as they were when Settings opened: saveSettings only follows a key
+  // typed in this visit (see there).
+  let keysAtOpen = {};
   function fillSettings() {
+    keysAtOpen = { ...(settings.apiKeys || {}) };
     // Keys tab
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
     $('#key-cerebras').value = settings.apiKeys.cerebras || '';
@@ -1549,7 +1574,8 @@
     // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
     // is reported as-is so the status line matches what will actually be used.
     const selectedSttProvider = settings.sttProvider || 'auto';
-    const automaticStt = k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : 'none');
+    const publikStt = settings.provider === 'publik' && publikState && publikState.connected && !publikState.revoked;
+    const automaticStt = k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini' : (publikStt ? 'publik API' : 'none')));
     const stt = selectedSttProvider === 'auto' ? automaticStt : selectedSttProvider;
     return `${labels[settings.provider] || settings.provider}${publikPart} · STT: ${stt}`;
   }
@@ -1746,9 +1772,16 @@
     // this, `settings.provider` stays on its default ('openai') forever and
     // cue keeps reporting itself unconfigured even though a valid key was
     // saved for the provider the user actually meant to use.
-    if (!settings.apiKeys[settings.provider]) {
+    // The renderer never sees the publik key (apiKeys.publik is always ''),
+    // so "the active provider has no key" was always true for publik: every
+    // Settings close sent a person who had just picked publik back to an old
+    // own key (smoke test 2026-11-02, a 0.2.4 file with an OpenAI key). Two
+    // rules now: a connected publik stays selected, and only a key typed in
+    // this visit can move the provider.
+    const publikLive = settings.provider === 'publik' && !!(publikState && publikState.connected && !publikState.revoked);
+    if (!publikLive && !settings.apiKeys[settings.provider]) {
       const keyedProviders = ['cerebras', 'openai', 'anthropic', 'gemini', 'groq', 'minimax', 'deepseek', 'azure'];
-      const justFilled = keyedProviders.find((p) => settings.apiKeys[p]);
+      const justFilled = keyedProviders.find((p) => settings.apiKeys[p] && settings.apiKeys[p] !== (keysAtOpen[p] || ''));
       if (justFilled) settings.provider = justFilled;
     }
     // Transcription
@@ -1772,6 +1805,7 @@
     if (opacitySlider) settings.opacity = clampOpacity(Number(opacitySlider.value) / 100);
     try {
       settings = await cue.settingsSet(settings);
+      keysAtOpen = { ...(settings.apiKeys || {}) };
       $('#s-status').textContent = statusText();
       updateSmartTooltip();
       return true;

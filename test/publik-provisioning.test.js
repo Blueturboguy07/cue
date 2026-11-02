@@ -291,3 +291,80 @@ test('an unreachable gateway fails closed with no key and no crash', async () =>
   assert.equal(store.data.apiKeys.publik, '');
   assert.ok(store.data.publik.lastError);
 });
+
+// Smoke test 2026-11-02 (v0.2.6): after a dashboard revoke the stored key still
+// looks live (revoked:false) until something reads the gateway. The error
+// toast offers Reconnect; v0.2.6's publik:reconnect only re-read the wallet on
+// that first press (which set revoked:true) and returned, so the person saw
+// nothing change. reconnectInstall goes on to mint in the same press.
+function mainLikeHandlers(store, build) {
+  const state = () => {
+    const s = store.getSettings();
+    return { connected: !!s.apiKeys.publik, revoked: !!s.publik.revoked, disconnected: !!s.publik.disconnected, keyId: s.publik.keyId, claimUrl: s.publik.claimUrl, lastError: s.publik.lastError };
+  };
+  const calls = { wallet: 0, provision: 0 };
+  // Same store writes as main.js publikRefreshWallet + publikHandleRevoked.
+  const refreshWallet = async () => {
+    calls.wallet += 1;
+    const s = store.getSettings();
+    try {
+      const w = await publik.fetchWallet({ baseUrl: build.baseUrl, apiKey: s.apiKeys.publik });
+      store.setPublik({ wallet: w, balanceMicros: w.balanceMicros, revoked: false, disconnected: false, lastError: '' });
+    } catch (e) {
+      if (e.status === 401) store.setPublik({ revoked: true, disconnected: e.type === 'key_revoked' && e.reprovision !== true, lastError: '' });
+    }
+    return state();
+  };
+  const provision = async () => { calls.provision += 1; await publik.provisionInstall({ build, store, device: { appVersion: '0.2.7', platform: 'darwin', arch: 'arm64' } }); return state(); };
+  return { state, refreshWallet, provision, calls };
+}
+
+test('one Reconnect press after a dashboard revoke mints a new install and claim link (stored key still looked live)', async () => {
+  const gw = await startFakeGateway();
+  try {
+    const build = { appToken: TOKEN, appSlug: 'cue', baseUrl: gw.baseUrl, disclosureVersion: 1, available: true };
+    const store = fakeStore({ provider: 'publik' });
+    store.setPublik({ disclosureAccepted: 1 });
+    await publik.provisionInstall({ build, store, device: { appVersion: '0.2.7', platform: 'darwin', arch: 'arm64' } });
+    const oldId = store.data.publik.installId;
+    const oldKey = store.data.apiKeys.publik;
+    gw.installs.get(oldId).ownerRevoked = true; // the owner pressed Revoke on publikhq.com/wallet
+    assert.equal(store.data.publik.revoked, false, 'precondition: cue has not noticed the revoke yet');
+
+    const h = mainLikeHandlers(store, build);
+    const after = await publik.reconnectInstall({ store, refreshWallet: h.refreshWallet, provision: h.provision, state: h.state });
+    assert.equal(h.calls.wallet, 1);
+    assert.equal(h.calls.provision, 1, 'the same press goes on to mint');
+    assert.equal(after.connected, true);
+    assert.equal(after.revoked, false);
+    assert.equal(after.disconnected, false);
+    assert.notEqual(store.data.apiKeys.publik, oldKey);
+    assert.notEqual(store.data.publik.installId, oldId, 'a finished install_id is never re-used');
+    assert.equal(after.claimUrl, 'https://publikhq.com/claim/HK7F-2QW2', 'a new claim link for the new install');
+  } finally { await gw.close(); }
+});
+
+test('Reconnect on a live key only re-reads the wallet and never mints', async () => {
+  const gw = await startFakeGateway();
+  try {
+    const build = { appToken: TOKEN, appSlug: 'cue', baseUrl: gw.baseUrl, disclosureVersion: 1, available: true };
+    const store = fakeStore({ provider: 'publik' });
+    store.setPublik({ disclosureAccepted: 1 });
+    await publik.provisionInstall({ build, store, device: { appVersion: '0.2.7', platform: 'darwin', arch: 'arm64' } });
+    const key = store.data.apiKeys.publik;
+    const h = mainLikeHandlers(store, build);
+    const after = await publik.reconnectInstall({ store, refreshWallet: h.refreshWallet, provision: h.provision, state: h.state });
+    assert.equal(h.calls.provision, 0);
+    assert.equal(after.connected, true);
+    assert.equal(store.data.apiKeys.publik, key);
+    assert.equal(gw.requests.filter((q) => q.url === '/api/v1/installs').length, 1);
+  } finally { await gw.close(); }
+});
+
+test('Reconnect before consent does nothing (only "Continue" may mint)', async () => {
+  const store = fakeStore({ provider: 'publik' });
+  let touched = 0;
+  const after = await publik.reconnectInstall({ store, refreshWallet: async () => { touched += 1; }, provision: async () => { touched += 1; }, state: () => 'state' });
+  assert.equal(after, 'state');
+  assert.equal(touched, 0);
+});

@@ -460,6 +460,18 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
   return full;
 }
 
+// The publik model a screenshot question uses. On the smart tier that is the
+// model already chosen. On the fast tier it is the smart alias (the user's
+// Smart field, else the provisioning response's, else publik-balanced),
+// unless the user typed their own Fast model: an explicit choice stands.
+function publikVisionModel(settings, fastOrSmartModel) {
+  if (settings.smart) return fastOrSmartModel;
+  const tierModels = (settings.models || {})[PUBLIK_PROVIDER] || {};
+  const fast = String(tierModels.fast || '').trim();
+  if (fast && !publik.TIER_NAMES.includes(fast)) return fastOrSmartModel;
+  return String(tierModels.smart || '').trim() || publik.DEFAULT_MODELS.smart;
+}
+
 function createLLM(settings) {
   const provider = settings.provider;
   const keys = settings.apiKeys || {};
@@ -517,14 +529,21 @@ function createLLM(settings) {
 
   const ready = !configurationError && !!model;
   const maxTokens = settings.smart ? 1400 : 700;
+  // publik's fast tier encodes a screenshot too coarsely to read a real
+  // screen (smoke test 2026-11-02: it named "Jira" and "Itch.io" for a
+  // LinkedIn page, from ~20-40 image tokens, while publik-balanced read it
+  // right). A question that carries a screenshot goes to the smart alias;
+  // text-only questions stay on the fast tier.
+  const visionModel = provider === PUBLIK_PROVIDER ? publikVisionModel(settings, model) : model;
 
   return {
-    provider, model, apiKey, baseURL,
+    provider, model, visionModel, apiKey, baseURL,
     ready,
     configurationError,
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
-      const args = { apiKey, baseURL, endpoint, model, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
+      const useModel = params && params.imageDataUrl ? visionModel : model;
+      const args = { apiKey, baseURL, endpoint, model: useModel, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
@@ -541,7 +560,7 @@ function createLLM(settings) {
       } catch (error) {
         // publik branches return an Error carrying `.action`; the string
         // branches keep working unchanged.
-        const wrapped = formatProviderErrorMessage(error, provider, model);
+        const wrapped = formatProviderErrorMessage(error, provider, useModel);
         throw wrapped instanceof Error ? wrapped : new Error(wrapped);
       }
     }
