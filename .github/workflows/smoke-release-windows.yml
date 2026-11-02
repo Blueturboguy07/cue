@@ -1,0 +1,69 @@
+name: smoke-release-windows
+
+# Smoke test of the RELEASED Windows installer (not a source build): download
+# cue-win-x64.exe from the GitHub release, check its sha256, install it the
+# way a customer does (NSIS, per-user, silent), launch the installed cue.exe,
+# and run the meeting-audio oracle observer (scripts/bugfix-lab/cdp-observe.js)
+# plus a publik-option probe against it over CDP.
+on:
+  push:
+    branches:
+      - "smoke/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  release-exe:
+    name: released cue-win-x64.exe (meeting audio + publik option)
+    runs-on: windows-latest
+    env:
+      CUE_TAG: v0.2.6
+      CUE_SHA256: 1dc1a2f670aa775e2075d207b6034a3e108312a315de258544b4a77030a15a49
+    steps:
+      - name: Check out the oracle helpers
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the CDP client only (no app build)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path cdp-deps | Out-Null
+          Push-Location cdp-deps
+          npm init -y | Out-Null
+          npm install --no-save --ignore-scripts ws@8.18.0
+          Pop-Location
+
+      - name: Run the released-exe oracle
+        id: oracle
+        shell: pwsh
+        run: |
+          .\scripts\bugfix-lab\cue-release-exe-meeting-audio.ps1 -Tag $env:CUE_TAG -Sha256 $env:CUE_SHA256
+          $code = $LASTEXITCODE
+          "exit_code=$code" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          exit $code
+        continue-on-error: true
+
+      - name: Report the oracle's verdict
+        shell: pwsh
+        run: |
+          Write-Host "Oracle exit code: ${{ steps.oracle.outputs.exit_code }}"
+          if ("${{ steps.oracle.outputs.exit_code }}" -ne "0") { exit 1 }
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-release-windows-evidence
+          path: |
+            cdp-result.json
+            publik-option.json
+            cue-screenshot.png
+            cue-main-process.log
+            cue-main-process.log.err
+          if-no-files-found: warn
