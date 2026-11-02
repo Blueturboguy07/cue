@@ -478,6 +478,23 @@ function lowStarterNotice(p) {
 }
 
 /**
+ * The one status sentence on the settings card, with its warn flag. The
+ * gateway's own answer (lastError) wins over the fixed revoked/disconnected
+ * copy: after a dashboard revoke the stale key is still on disk and `revoked`
+ * is set, so the fixed copy used to hide why Reconnect had just failed.
+ */
+function statusLine(p) {
+  const warn = (text) => ({ text, warn: true });
+  if (!p) return { text: '', warn: false };
+  if (p.connected && p.revoked) return warn(p.lastError || `${PROVIDER_LABEL} key was revoked. Reconnect to set this computer up again.`);
+  if (p.connected) return { text: `Connected · key ${p.keyId} · ${p.line || 'Ready'}`, warn: false };
+  if (p.disconnected) return warn(p.lastError || `${PROVIDER_LABEL} is disconnected. This computer was removed from your publik account.`);
+  if (!p.disclosureAccepted) return { text: 'Not set up yet — no key needed to set it up.', warn: false };
+  if (p.lastError) return warn(p.lastError);
+  return { text: 'Connecting…', warn: false };
+}
+
+/**
  * What publik:open may hand to the system browser: the requested link when it
  * is on publikhq.com, else the stored fallback when that is, else nothing.
  * A link off publikhq.com is dropped, never rewritten to a third origin.
@@ -497,11 +514,25 @@ function markCardSeen(store) {
 }
 
 /**
+ * True when the gateway says this install_id is finished for good: the owner
+ * revoked it from the dashboard (403 install_revoked, reprovision:false) or it
+ * was removed for abuse. The server never re-keys such an install_id, so the
+ * only way back is a fresh one.
+ */
+function isInstallFinished(e) {
+  if (!e) return false;
+  if (e.type === 'install_revoked') return true;
+  return e.status === 410;
+}
+
+/**
  * The provisioning flow main.js runs after the disclosure is accepted (and on
  * Reconnect). `store` is the app's settings store: getSettings(), setPublik(),
  * setSettings(). Rules:
  *   - never mint twice for a live key;
  *   - a 200 replay with no credential on disk mints a fresh install_id once;
+ *   - a finished install_id (403 install_revoked: revoked from the dashboard)
+ *     drops the stale key and mints a fresh install_id once;
  *   - only apiKeys.publik and publik.* are written — no user-entered key is
  *     ever touched, and the provider is not switched here.
  */
@@ -515,8 +546,17 @@ async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, 
     try {
       r = await provision({ build, installId, fetchImpl, ...device });
     } catch (e) {
+      if (isInstallFinished(e) && !mintedFresh) {
+        // The old key, claim link and wallet belong to the finished install;
+        // the file keeps the new install_id so a retry stays idempotent.
+        const finished = installId;
+        installId = randomUUID(); mintedFresh = true;
+        store.setPublik({ installId, apiKey: '', keyId: '', claimUrl: '', claimCode: '', claimState: '', balanceMicros: null, wallet: null, lastError: '' });
+        log({ level: 'info', event: 'publik_install_reprovisioned', msg: finished, context: { status: e.status || null, type: e.type || '' } });
+        continue;
+      }
       store.setPublik({ installId, lastError: e.message });
-      log({ level: 'error', event: 'publik_provision_failed', msg: e.message, context: { status: e.status || null, type: e.type || '' } });
+      log({ level: 'error', event: 'publik_provision_failed', msg: e.message, context: { status: e.status || null, type: e.type || '', freshInstall: mintedFresh } });
       return { ok: false, error: e };
     }
     if (r.replay) {
@@ -543,6 +583,6 @@ module.exports = {
   PUBLIK_PROVIDER, PROVIDER_LABEL, DEFAULT_BASE_URL, DEFAULT_MODELS, TIER_NAMES, LINKS, COPY, KEY_RE,
   loadBuildConfig, provision, provisionInstall, fetchWallet, revokeInstall, normalizeWallet, readGatewayHeaders,
   describeGatewayError, balanceLine, isSafePublikLink, formatMicros, formatResetTime, osName, pickModels,
-  starterLine, ctaView, settingsCta, lowStarterNotice, resolveOpenTarget, markCardSeen, LOW_STARTER_FRACTION,
-  newInstallId: randomUUID
+  starterLine, ctaView, settingsCta, lowStarterNotice, statusLine, resolveOpenTarget, markCardSeen, isInstallFinished,
+  LOW_STARTER_FRACTION, newInstallId: randomUUID
 };

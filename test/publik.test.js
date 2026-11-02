@@ -296,6 +296,46 @@ test('400 unknown_model, 413, 503 and network failures; anything else falls thro
   assert.equal(publik.describeGatewayError({ status: 500, body: {} }), null);
 });
 
+// ---- status line -------------------------------------------------------------
+
+test('statusLine shows the gateway\'s last answer over the fixed revoked/disconnected copy', () => {
+  const base = { connected: true, revoked: false, disconnected: false, keyId: 'k'.repeat(12), disclosureAccepted: 1, lastError: '', line: 'Ready · $0.18 left' };
+  assert.deepEqual(publik.statusLine(base), { text: `Connected · key ${'k'.repeat(12)} · Ready · $0.18 left`, warn: false });
+  // After a dashboard revoke the stale key is still on disk (connected) and
+  // revoked is set; a failed Reconnect must show why, not the generic line.
+  const masked = { ...base, revoked: true, lastError: 'This install was disconnected by its owner. Provision a new install.' };
+  assert.deepEqual(publik.statusLine(masked), { text: 'This install was disconnected by its owner. Provision a new install.', warn: true });
+  assert.deepEqual(publik.statusLine({ ...base, revoked: true }), { text: 'publik API key was revoked. Reconnect to set this computer up again.', warn: true });
+  // Key already cleared (Disconnect pressed first), then the dashboard revoke.
+  assert.deepEqual(publik.statusLine({ ...base, connected: false, disconnected: true, lastError: 'Too many installs from this network.' }), { text: 'Too many installs from this network.', warn: true });
+  assert.deepEqual(publik.statusLine({ ...base, connected: false, disconnected: true }), { text: 'publik API is disconnected. This computer was removed from your publik account.', warn: true });
+  assert.deepEqual(publik.statusLine({ ...base, connected: false, disclosureAccepted: 0, lastError: 'ignored before consent' }), { text: 'Not set up yet — no key needed to set it up.', warn: false });
+  assert.deepEqual(publik.statusLine({ ...base, connected: false, lastError: 'Unknown app token.' }), { text: 'Unknown app token.', warn: true });
+  assert.deepEqual(publik.statusLine({ ...base, connected: false }), { text: 'Connecting…', warn: false });
+  assert.deepEqual(publik.statusLine(null), { text: '', warn: false });
+});
+
+test('the settings card paints publik:state.status and keeps no status copy of its own', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');
+  const start = src.indexOf('function renderPublikBlock()');
+  assert.ok(start > -1, 'renderPublikBlock not found');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  assert.match(body, /p\.status/);
+  assert.doesNotMatch(body, /key was revoked/, 'the revoked copy lives in src/publik.js statusLine()');
+  assert.doesNotMatch(body, /is disconnected\./, 'the disconnected copy lives in src/publik.js statusLine()');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /view\.status = publik\.statusLine\(view\)/);
+});
+
+test('isInstallFinished: 403 install_revoked and 410 end an install_id; a 401 key_revoked does not', () => {
+  assert.equal(publik.isInstallFinished({ status: 403, type: 'install_revoked', reprovision: false }), true);
+  assert.equal(publik.isInstallFinished({ status: 410, type: '' }), true);
+  assert.equal(publik.isInstallFinished({ status: 401, type: 'key_revoked', reprovision: false }), false);
+  assert.equal(publik.isInstallFinished({ status: 403, type: 'app_suspended' }), false);
+  assert.equal(publik.isInstallFinished({ status: 429, type: 'rate_limited' }), false);
+  assert.equal(publik.isInstallFinished(null), false);
+});
+
 // ---- balance line ------------------------------------------------------------
 
 test('balanceLine renders the anonymous, claimed-with-plan and claimed-no-plan forms', () => {

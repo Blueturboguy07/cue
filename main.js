@@ -934,6 +934,10 @@ function publikState() {
     links: publik.LINKS
   };
   view.line = publik.balanceLine(view);
+  // The status sentence on the settings card (the gateway's last answer wins
+  // over the fixed revoked/disconnected copy), computed here so the renderer
+  // only paints.
+  view.status = publik.statusLine(view);
   // CONTRACT §12: the first-run card (shown while connected && !cardShown),
   // the settings button, and the low-starter banner — all computed here so
   // the renderer only paints.

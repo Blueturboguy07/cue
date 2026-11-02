@@ -1413,23 +1413,13 @@
     const show = (id, on) => $(id).classList.toggle('hidden', !on);
     $('#publik-cost-note').textContent = p.copy.cost;
     $('#publik-data-note').textContent = p.copy.dataPath;
+    // The status sentence comes from src/publik.js statusLine() via
+    // publik:state, so the gateway's last answer (lastError) is never hidden
+    // behind the fixed revoked/disconnected copy.
     const note = $('#publik-status-note');
-    note.classList.remove('warn');
-    let line;
-    if (p.connected && p.revoked) {
-      line = 'publik API key was revoked. Reconnect to set this computer up again.'; note.classList.add('warn');
-    } else if (p.connected) {
-      line = `Connected · key ${p.keyId} · ${p.line || 'Ready'}`;
-    } else if (p.disconnected) {
-      line = 'publik API is disconnected. This computer was removed from your publik account.'; note.classList.add('warn');
-    } else if (!p.disclosureAccepted) {
-      line = 'Not set up yet — no key needed to set it up.';
-    } else if (p.lastError) {
-      line = p.lastError; note.classList.add('warn');
-    } else {
-      line = 'Connecting…';
-    }
-    note.textContent = line;
+    const status = p.status || { text: '', warn: false };
+    note.classList.toggle('warn', !!status.warn);
+    note.textContent = status.text;
     // Low starter: the same sentence the banner used, kept on the card.
     const low = $('#publik-low-note');
     low.textContent = p.lowStarter ? p.lowStarter.message : '';
