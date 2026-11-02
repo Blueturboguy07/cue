@@ -1436,6 +1436,11 @@
     show('#publik-link', !!cta);
     show('#publik-add-credit', p.connected && !p.revoked && p.claimState === 'claimed' && !!p.addCreditUrl);
     show('#publik-disconnect', p.connected && !p.revoked);
+    // index.html ships the "publik API" picker button hidden. A build with an
+    // app token must show it, or a user who picked their own key has no way
+    // back to publik (af29ec5 dropped this line; 0.2.4 settings files keep
+    // provider=openai after an upgrade).
+    $('#provider-publik').classList.toggle('hidden', !p.available);
     if (settings.provider === 'publik') $('#s-status').textContent = statusText();
   }
   $('#publik-setup').addEventListener('click', () => showPublikDisclosure());
@@ -2032,6 +2037,8 @@
     // A build with no app token never shows the option, and keeps the BYO
     // onboarding card. With one, the "Connect an AI provider" card becomes the
     // publik disclosure; the BYO branch stays one tap away on that card.
+    // The "publik API" picker button follows the same rule.
+    $('#provider-publik').classList.toggle('hidden', !publikState.available);
     if (publikState.available) OB_STEPS.splice(2, 1, { ...publikStep(), publik: true });
 
     // R4: shortcut hints
