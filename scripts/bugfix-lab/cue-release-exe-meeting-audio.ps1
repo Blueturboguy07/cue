@@ -33,8 +33,9 @@ $pkg = Get-Content (Join-Path $appDir 'package.json') -Raw | ConvertFrom-Json
 Write-Host "installed package version: $($pkg.version)"
 $build = Get-Content (Join-Path $appDir 'src\publik-build.json') -Raw | ConvertFrom-Json
 Write-Host "publik-build.json appToken length: $($build.appToken.Length) (value not printed)"
-$toggles = (Select-String -Path (Join-Path $appDir 'renderer\renderer.js') -Pattern "#provider-publik'\)\.classList\.toggle\('hidden'").Count
-Write-Host "renderer #provider-publik toggle lines: $toggles"
+$card = Join-Path $appDir 'renderer\publik-card.js'
+Write-Host "v0.2.8 publik-first: renderer/publik-card.js present=$(Test-Path $card)"
+if (Test-Path $card) { Write-Host "publik-card.js 'Sign in with publik' lines: $((Select-String -Path $card -Pattern 'Sign in with publik').Count)" }
 $loopback = Select-String -Path (Join-Path $appDir 'main.js') -Pattern "audio: 'loopback'" | Select-Object -First 1
 Write-Host "main.js loopback handler: $($loopback.LineNumber): $($loopback.Line.Trim())"
 $batcher = Test-Path (Join-Path $appDir 'src\publik-stt-batcher.js')
@@ -45,13 +46,15 @@ Write-Host "v0.2.7 fix markers: llm.js publikVisionModel lines=$vision"
 $env:NODE_PATH = (Resolve-Path 'cdp-deps\node_modules').Path
 $outLog = "cue-main-process.log"
 
-Write-Host "== launch installed cue.exe with remote debugging (publik option probe) =="
+Write-Host "== FRESH launch of installed cue.exe (publik-first first screen probe) =="
+Get-Process -Name cue -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+$env:LAUNCH_MS = [string][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $proc = Start-Process -FilePath $exe.FullName -ArgumentList "--remote-debugging-port=9223" `
   -RedirectStandardOutput "publik-probe.log" -RedirectStandardError "publik-probe.log.err" -PassThru -WindowStyle Normal
-Start-Sleep -Seconds 8
 $env:CDP_PORT = "9223"
-node scripts/bugfix-lab/cdp-publik-option.js > publik-option.json
-Write-Host "publik option: $(Get-Content publik-option.json -Raw)"
+node scripts/bugfix-lab/cdp-publik-first.js > publik-first.json
+Write-Host "publik first: $(Get-Content publik-first.json -Raw)"
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 Get-Process -Name cue -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
@@ -77,6 +80,17 @@ try {
 } catch {
   Write-Host "(could not parse/decode cdp-result.json: $_)"
 }
+
+Write-Host "== play speech on the system output for the loopback level check (session still running) =="
+try {
+  Add-Type -AssemblyName System.Speech
+  $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+  $synth.SetOutputToDefaultAudioDevice()
+  $synth.Speak("Please book a meeting room for the design review on Thursday at three. Tell me about a time you led a project.")
+  Write-Host "speech played"
+} catch { Write-Host "speech could not play: $_" }
+Start-Sleep -Seconds 7
+if (Test-Path $outLog) { $lv = Select-String -Path $outLog -Pattern '\[audio\]'; Write-Host "audio level lines: $($lv.Count)"; $lv | ForEach-Object { Write-Host "LEVEL $($_.Line)" } }
 
 Write-Host "== main process log (tail) =="
 if (Test-Path $outLog) { Get-Content $outLog -Tail 40 }

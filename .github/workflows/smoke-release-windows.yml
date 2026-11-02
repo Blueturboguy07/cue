@@ -16,11 +16,11 @@ permissions:
 
 jobs:
   release-exe:
-    name: released cue-win-x64.exe (meeting audio + publik option)
+    name: released cue-win-x64.exe (publik first screen + meeting audio)
     runs-on: windows-latest
     env:
-      CUE_TAG: v0.2.7
-      CUE_SHA256: 129d4d554681742bd280cf417b149e1ec11dae15a7020a953734a685ef03110f
+      CUE_TAG: v0.2.8
+      CUE_SHA256: 09d27791c6710584aab8f371dd45bdf9dfbf2f0acf6cfaaa18bdb2823d2a0124
     steps:
       - name: Check out the oracle helpers
         uses: actions/checkout@v4
@@ -62,7 +62,12 @@ jobs:
           name: smoke-release-windows-evidence
           path: |
             cdp-result.json
-            publik-option.json
+            publik-first.json
+            win-first-screen.png
+            win-onboarding-publik-step.png
+            win-overlay.png
+            win-settings.png
+            publik-probe.log
             cue-screenshot.png
             cue-main-process.log
             cue-main-process.log.err
