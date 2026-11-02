@@ -30,7 +30,8 @@
     notConnected: 'Not connected.',
     notLinked: 'This computer is not linked to your publik account yet.',
     connecting: 'Connecting…',
-    byoSummary: 'Use your own API key instead'
+    byoSummary: 'Use your own API key instead',
+    fixKey: 'Fix my key'
   };
 
   function money(micros) {
@@ -75,7 +76,13 @@
     const live = !!(p.connected && !p.revoked);
     view.disconnect = live;
     if (provider && provider !== PUBLIK) {
-      view.status = `You use your own ${PROVIDER_NAMES[provider] || provider} key now.`;
+      const name = PROVIDER_NAMES[provider] || provider;
+      if (ownKeyFailed(p, provider)) {
+        // The provider refused the key (a question, or the free startup check).
+        view.status = `Your ${name} key did not work.`; view.warn = true;
+      } else {
+        view.status = `You use your own ${name} key now.`;
+      }
       view.primary = { kind: 'switch', label: COPY.switchTo };
       return view;
     }
@@ -148,6 +155,11 @@
     return starter !== null && Number.isFinite(starter) && balance <= starter;
   }
 
+  /** True when main.js says this own provider refused its key (p.ownKeyFailed). */
+  function ownKeyFailed(p, provider) {
+    return !!(p && p.ownKeyFailed && provider && provider !== PUBLIK && p.ownKeyFailed.provider === provider);
+  }
+
   /** True when the selected provider can answer a question now. */
   function providerReady(settings, p) {
     if (!settings) return false;
@@ -174,6 +186,15 @@
         return { title: 'Finish signing in', body: 'Sign in on publikhq.com to link this computer. cue runs on your publik balance. You need no API key.', primary: { kind: 'link', label: COPY.signIn }, secondary: null };
       }
     }
+    // A bad own key (a 0.2.4/0.2.5 user with a home-made OpenAI key): the key
+    // is there, so providerReady is true, but nothing answers. publik first.
+    if (settings && ownKeyFailed(p, settings.provider)) {
+      const name = PROVIDER_NAMES[settings.provider] || settings.provider;
+      if (p.available) {
+        return { title: `Your ${name} key did not work`, body: 'Switch to publik to use cue with no API key, or fix your key in Settings.', primary: { kind: 'switch', label: COPY.switchTo }, secondary: { kind: 'fix-key', label: COPY.fixKey } };
+      }
+      return { title: `Your ${name} key did not work`, body: 'Check the key in Settings.', primary: { kind: 'fix-key', label: COPY.fixKey }, secondary: null };
+    }
     if (providerReady(settings, p)) return null;
     if (p && p.available) {
       // Reconnect marks the key revoked before it mints, so a failed mint
@@ -196,5 +217,5 @@
     return { title: 'Connect an AI model', body: 'Add an API key in Settings to start.', primary: { kind: 'settings', label: 'Open Settings' }, secondary: null };
   }
 
-  return { PUBLIK, LOW_BALANCE_MICROS, PROVIDER_NAMES, COPY, cardView, onlyFreeMoney, providerReady, setupPrompt, money };
+  return { PUBLIK, LOW_BALANCE_MICROS, PROVIDER_NAMES, COPY, cardView, onlyFreeMoney, ownKeyFailed, providerReady, setupPrompt, money };
 }));

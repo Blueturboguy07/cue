@@ -112,9 +112,12 @@ test('publik transcription uses the provisioning base URL and never the Custom s
   assert.equal(publikTranscription(publikSettings({ publik: {} })).baseURL, publik.DEFAULT_BASE_URL);
 });
 
-test('an own audio key is used first; publik is the last fallback', () => {
-  const stt = createSTT(publikSettings({ apiKeys: { publik: PUBLIK_KEY, groq: 'gsk-test' } }));
-  assert.deepEqual(stt.providers, ['groq', 'publik']);
+// 0.2.9 (smoke test v0.2.8): with publik as the provider, Auto audio is
+// publik only. An old own key is used only when it is picked on the Audio tab.
+test('publik provider + Auto audio: publik transcribes, an own audio key is not tried first', () => {
+  const stt = createSTT(publikSettings({ apiKeys: { publik: PUBLIK_KEY, groq: 'gsk-test', openai: 'sk-old' } }));
+  assert.deepEqual(stt.providers, ['publik']);
+  assert.deepEqual(createSTT(publikSettings({ sttProvider: 'groq', apiKeys: { publik: PUBLIK_KEY, groq: 'gsk-test' } })).providers, ['groq']);
 });
 
 test('publik never transcribes when it is not the selected provider, its key is revoked or missing, or STT is set explicitly', () => {

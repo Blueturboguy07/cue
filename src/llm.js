@@ -136,6 +136,19 @@ function isRateLimitError(error) {
     /\b429\b|too many requests|rate limit/i.test(text);
 }
 
+// An own provider refused the key itself: OpenAI/Groq/DeepSeek/Anthropic
+// answer 401 ("Incorrect API key provided", invalid_api_key,
+// authentication_error); Gemini answers 400 "API key not valid". A 403
+// alone is not enough (it also means "no access to this model").
+function isAuthError(error) {
+  const status = error && (error.status || error.statusCode || error.response?.status);
+  const code = error && (error.code || error.error?.code || error.error?.type);
+  const rawMessage = (error && (error.message || String(error))) || '';
+  const text = `${rawMessage} ${code || ''}`.toLowerCase();
+  if (status === 401) return true;
+  return /incorrect api key|invalid[ _-]?api[ _-]?key|invalid x-api-key|api key not valid|api_key_invalid|authentication_error/.test(text);
+}
+
 function isNotFoundError(error) {
   const status = error && (error.status || error.statusCode || error.response?.status);
   const code = error && (error.code || error.error?.code);
@@ -197,6 +210,15 @@ function formatProviderErrorMessage(error, provider, model) {
   if (provider === PUBLIK_PROVIDER) {
     const described = describePublikError(error, model);
     if (described) return described;
+  }
+
+  // A bad own key: one plain sentence, never the provider's raw 401 (which
+  // also echoes part of the key). main.js adds "Switch to publik" and
+  // "Fix my key" (src/publik.js ownKeyFailedMessage).
+  if (provider !== PUBLIK_PROVIDER && isAuthError(error)) {
+    const failed = new Error(`Your ${label} key did not work.`);
+    failed.ownKeyFailed = { provider, providerName: label };
+    return failed;
   }
 
   if (isQuotaError(error)) {
@@ -574,6 +596,8 @@ function createLLM(settings) {
 module.exports = {
   createLLM,
   formatProviderErrorMessage,
+  isAuthError,
+  normalizeProviderName,
   isQuotaError,
   isNotFoundError,
   geminiGenerationConfig,

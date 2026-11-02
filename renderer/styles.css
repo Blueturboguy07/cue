@@ -578,6 +578,12 @@ button:focus { outline: none; }
 .publik-line.warn { color: #fcd3a5; }
 #cue-status button { margin-left: 10px; padding: 4px 10px; border-radius: 8px; border: 1px solid rgba(60,131,245,0.40); background: rgba(60,131,245,0.14); color: #cfe0ff; font: 600 11.5px var(--font); cursor: pointer; }
 #cue-status button:hover { background: rgba(60,131,245,0.24); }
+/* publik first in a toast: "Switch to publik" / "Sign in with publik" is the
+   blue button; a second button ("Fix my key") is quiet. */
+#cue-status button[data-kind="switch"], #cue-status button[data-kind="disclosure"] { border-color: transparent; background: var(--accent); color: #fff; }
+#cue-status button[data-kind="switch"]:hover, #cue-status button[data-kind="disclosure"]:hover { filter: brightness(1.08); background: var(--accent); }
+#cue-status button.secondary { margin-left: 6px; border-color: rgba(255,255,255,0.18); background: transparent; color: var(--tx-2); }
+#cue-status button.secondary:hover { background: rgba(255,255,255,0.08); }
 #onboard.dialog .ob-dots, #onboard.dialog .ob-actions { display: none; }
 #onboard.card .ob-actions { display: none; }
 /* First-run card (CONTRACT §12.1): balance line, justification, primary CTA */
@@ -641,6 +647,7 @@ button:focus { outline: none; }
   max-height: calc(100vh - 16px); box-sizing: border-box; display: flex; flex-direction: column; }
 #onboard > * { flex-shrink: 0; }
 #onboard > .ob-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+#onboard > .ob-after { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .ob-dots { display: flex; gap: 6px; justify-content: center; margin-bottom: 20px; }
 .ob-dots span { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.20); transition: all 220ms ease; }
 .ob-dots span.on { background: var(--accent); width: 20px; border-radius: 4px; }
@@ -657,6 +664,18 @@ button:focus { outline: none; }
 .ob-body .hl { color: #9dc0ff; font-weight: 600; }
 .ob-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .ob-buttons:empty { display: none; }
+/* publik first (step 1): one line that says how cue runs, then the blue
+   "Sign in with publik" with a small "Use my own key instead" link under
+   it, then the cost and data-path fine print. */
+.ob-body .ob-lede { font-size: 16px; font-weight: 600; color: #fff; text-align: center; line-height: 1.4; }
+.ob-body .ob-sub { margin-top: 8px; text-align: center; color: var(--tx-2); font-size: 13px; }
+.ob-buttons button.ob-link { flex: 0 0 100%; min-width: 0; padding: 2px 6px; border: none; background: transparent; color: var(--tx-2); font-size: 12px; font-weight: 500; text-decoration: underline; }
+.ob-buttons button.ob-link:hover { background: transparent; color: #fff; }
+.ob-after { margin-top: 10px; text-align: left; color: var(--tx-mut); font-size: 11.5px; line-height: 1.45; -webkit-user-select: text; user-select: text; }
+.ob-after.hidden { display: none; }
+.ob-after p { margin: 0 0 6px; }
+.ob-after strong { color: var(--tx-2); font-weight: 600; }
+.ob-after a { color: #9dc0ff; text-decoration: underline; cursor: pointer; }
 .ob-buttons button { flex: 1; min-width: 150px; padding: 10px; border-radius: 10px; border: 1px solid rgba(60,131,245,0.40); background: rgba(60,131,245,0.14); color: #cfe0ff; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 140ms ease; }
 .ob-buttons button:hover { background: rgba(60,131,245,0.24); }
 .ob-actions { display: flex; align-items: center; margin-top: 22px; }

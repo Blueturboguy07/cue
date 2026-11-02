@@ -1,12 +1,14 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences } = require('electron');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { UtteranceBatcher } = require('./src/publik-stt-batcher');
 const { parseDocumentFile } = require('./src/resume');
-const { createLLM } = require('./src/llm');
+const { createLLM, normalizeProviderName } = require('./src/llm');
+const { checkOwnKey } = require('./src/own-key-check');
 const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 const { createStreamingSTT } = require('./src/stt-streaming');
@@ -917,11 +919,20 @@ async function runFeature(mode, userText) {
       clearTimeout(watchdog);
     }
     send('llm:done', {});
+    // The own key answered: it is not bad (any more).
+    clearOwnKeyFailed(settings.provider);
     // Streams settle after their headers, so the charge is reconciled from
     // GET /wallet shortly after the answer — one request per answer, debounced.
     if (settings.provider === publik.PUBLIK_PROVIDER) publikScheduleWalletRefresh();
   } catch (e) {
     recordEvent({ level: 'error', event: 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider } });
+    // A bad own key: plain words, "Switch to publik" first, "Fix my key"
+    // second; never the provider's raw 401.
+    if (e && e.ownKeyFailed) {
+      markOwnKeyFailed(e.ownKeyFailed.provider);
+      send('llm:error', publik.ownKeyFailedMessage({ providerName: e.ownKeyFailed.providerName, publikAvailable: publikBuild.available }));
+      return;
+    }
     const action = e && e.action ? e.action : null;
     send('llm:error', { message: e && e.message ? e.message : String(e), action });
     if (action) publikHandleErrorAction(action);
@@ -937,7 +948,18 @@ async function runFeature(mode, userText) {
 ipcMain.handle('settings:get', () => store.redactForRenderer(store.getSettings()));
 ipcMain.handle('settings:set', (_e, patch) => {
   sttDisabled = false;
+  const before = store.getSettings();
+  const beforeProvider = before.provider;
+  const beforeKey = (before.apiKeys || {})[beforeProvider];
   const next = store.setSettings(store.stripRendererPatch(patch));
+  // After "Fix my key" (or another provider): a refused key that is no
+  // longer selected stops counting, and a new own key gets the same free
+  // check as at startup.
+  const nextKey = (next.apiKeys || {})[next.provider];
+  if (next.provider !== beforeProvider || nextKey !== beforeKey) {
+    if (ownKeyFailure && !ownKeyFailedFor(next)) { ownKeyFailure = null; publikPush(); }
+    checkSelectedOwnKey();
+  }
   // Restart slide polling with the new interval when capturing (keeps slides).
   if (state.capturing) startSlideLoop();
   return store.redactForRenderer(next);
@@ -949,6 +971,54 @@ ipcMain.handle('settings:set', (_e, patch) => {
 // fed by the x-publik-* headers on every answer and reconciled from GET /wallet.
 let publikWalletTimer = null;
 let publikProvisioning = null;
+
+// -------- a bad own key (0.2.4/0.2.5 users with a home-made OpenAI key) --------
+// In memory only: the provider and a short hash of the key it refused, never
+// the key. It counts while the same provider and key are selected, so a new
+// key or another provider clears it by itself.
+let ownKeyFailure = null;
+function ownKeyHash(key) { return crypto.createHash('sha256').update(String(key || '')).digest('hex').slice(0, 16); }
+function ownKeyFailedFor(settings) {
+  if (!ownKeyFailure || !settings || settings.provider !== ownKeyFailure.provider) return null;
+  const key = (settings.apiKeys || {})[ownKeyFailure.provider];
+  if (!key || ownKeyHash(key) !== ownKeyFailure.keyHash) return null;
+  return { provider: ownKeyFailure.provider, providerName: normalizeProviderName(ownKeyFailure.provider) };
+}
+function markOwnKeyFailed(provider) {
+  const key = (store.getSettings().apiKeys || {})[provider];
+  if (!key || provider === publik.PUBLIK_PROVIDER) return;
+  ownKeyFailure = { provider, keyHash: ownKeyHash(key) };
+  publikPush();
+}
+function clearOwnKeyFailed(provider) {
+  if (!ownKeyFailure || ownKeyFailure.provider !== provider) return;
+  ownKeyFailure = null;
+  publikPush();
+}
+
+// Startup, no paid call: (1) a publik key that was revoked on the dashboard
+// while cue was closed shows Reconnect at once (GET /wallet marks it), not
+// "Connected" until the first question fails; (2) an own provider key is
+// checked with the provider's free "list models" call.
+function startupChecks() {
+  const s = store.getSettings();
+  if (publikBuild.available && s.apiKeys.publik && !s.publik.revoked) {
+    publikRefreshWallet().catch(() => {});
+  }
+  checkSelectedOwnKey();
+}
+function checkSelectedOwnKey() {
+  const s = store.getSettings();
+  const provider = s.provider;
+  const key = (s.apiKeys || {})[provider];
+  if (!provider || provider === publik.PUBLIK_PROVIDER || !key) return;
+  checkOwnKey({ provider, apiKey: key }).then((verdict) => {
+    recordEvent({ level: 'info', event: 'own_key_checked', msg: verdict, frame: 'checkSelectedOwnKey', context: { provider } });
+    // Only if the same key is still selected when the answer comes back.
+    const now = store.getSettings();
+    if (verdict === 'bad' && now.provider === provider && now.apiKeys[provider] === key) markOwnKeyFailed(provider);
+  }).catch(() => {});
+}
 
 function publikDevice() {
   let deviceName = '';
@@ -987,6 +1057,9 @@ function publikState() {
     // as opposed to a gateway sentence such as a revoke. A failed Reconnect
     // also sets `revoked`, and the failure is still the thing to say.
     setupFailed: !!(p.lastError && p.lastErrorKind),
+    // An own provider refused its key (on a question or at startup):
+    // { provider, providerName } or null. Drives "Switch to publik" first.
+    ownKeyFailed: ownKeyFailedFor(s),
     cardShown: !!p.cardShown,
     copy: publik.COPY,
     links: publik.LINKS
@@ -1481,6 +1554,7 @@ function launchApp() {
 
   createWindow();
   registerShortcuts();
+  startupChecks();
 }
 
 // -------- lifecycle --------

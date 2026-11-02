@@ -597,6 +597,24 @@ function notReadyMessage(p) {
 }
 
 /** Own provider not ready, in a build with publik: publik first, proper name. */
+/**
+ * An own provider refused the key (a 401, or Gemini's "API key not valid"),
+ * on a question or in the free startup check (src/own-key-check.js). A
+ * 0.2.4/0.2.5 user who pasted a bad key gets one plain sentence and publik
+ * first: "Switch to publik" is the blue button, "Fix my key" the second.
+ */
+function ownKeyFailedMessage({ providerName, publikAvailable = true } = {}) {
+  const name = providerName || 'API';
+  if (!publikAvailable) {
+    return { message: `Your ${name} key did not work. Check the key in Settings.`, action: { kind: 'fix-key', label: 'Fix my key' } };
+  }
+  return {
+    message: `Your ${name} key did not work. Switch to publik to use cue with no API key, or fix your key in Settings.`,
+    action: { kind: 'switch', label: 'Switch to publik' },
+    secondary: { kind: 'fix-key', label: 'Fix my key' }
+  };
+}
+
 function ownProviderNotReadyMessage({ providerName, missingKey, configurationError }) {
   if (missingKey) return `Switch to publik, or add your ${providerName} key in Settings.`;
   const rest = String(configurationError || `Complete the ${providerName} settings.`);
@@ -680,7 +698,7 @@ async function reconnectInstall({ store, refreshWallet, provision, state }) {
 }
 
 module.exports = {
-  reconnectInstall,
+  reconnectInstall, ownKeyFailedMessage,
   PUBLIK_PROVIDER, PROVIDER_LABEL, DEFAULT_BASE_URL, DEFAULT_MODELS, TIER_NAMES, LINKS, COPY, KEY_RE,
   loadBuildConfig, provision, provisionInstall, fetchWallet, revokeInstall, normalizeWallet, readGatewayHeaders,
   describeGatewayError, balanceLine, isSafePublikLink, formatMicros, formatResetTime, osName, pickModels,

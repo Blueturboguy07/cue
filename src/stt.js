@@ -120,22 +120,34 @@ function publikTranscription(settings) {
   return { apiKey: keys.publik, baseURL: base, model: PUBLIK_STT_MODEL };
 }
 
+// With publik as the provider, "Auto" transcription means publik API. An own
+// audio key (OpenAI, Groq, Gemini, Deepgram) is used only when the person
+// picked that provider on the Audio tab. Before 0.2.9 Auto tried an old own
+// OpenAI key first: a 0.2.4 user who switched to publik saw "Incorrect API
+// key" and got a split transcript (smoke test 2026-11-02, v0.2.8).
+function publikOwnsAutoAudio(settings) {
+  const s = settings || {};
+  return s.provider === PUBLIK_PROVIDER && (s.sttProvider || 'auto') === 'auto';
+}
+
 function createSTT(settings) {
   const keys = settings.apiKeys || {};
   const selectedProvider = settings.sttProvider || 'auto';
   const vocabPrompt = buildVocabPrompt(settings);
   const chain = [];
+  // 'auto' for the own-key providers below; off while publik owns Auto.
+  const ownAuto = selectedProvider === 'auto' && !publikOwnsAutoAudio(settings);
   // Each entry carries the model id it actually sends, so a failure can name
   // that id back to the user instead of a hardcoded one they never picked.
-  if ((selectedProvider === 'auto' || selectedProvider === 'openai') && keys.openai) {
+  if ((ownAuto || selectedProvider === 'openai') && keys.openai) {
     const model = settings.sttModel || 'whisper-1';
     chain.push({ p: 'openai', m: model, fn: (wav) => transcribeOpenAI(keys.openai, wav, model, undefined, vocabPrompt) });
   }
-  if ((selectedProvider === 'auto' || selectedProvider === 'groq') && keys.groq) {
+  if ((ownAuto || selectedProvider === 'groq') && keys.groq) {
     const model = 'whisper-large-v3-turbo';
     chain.push({ p: 'groq', m: model, fn: (wav) => transcribeOpenAI(keys.groq, wav, model, 'https://api.groq.com/openai/v1', vocabPrompt) });
   }
-  if ((selectedProvider === 'auto' || selectedProvider === 'gemini') && keys.gemini) {
+  if ((ownAuto || selectedProvider === 'gemini') && keys.gemini) {
     // transcribeGemini always tries the dedicated GEMINI_TRANSCRIBE_MODEL first
     // (falling back to CURRENT_GEMINI_DEFAULT only on a 404/429 cooldown); `m`
     // here is just what error messages/`stt.models` report, resolved the same
@@ -153,11 +165,10 @@ function createSTT(settings) {
   }
   if (keys.openai && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'openai'), 1)[0]);
   // publik API: the transcription path for a person who runs cue on publik
-  // and has no audio key of their own (smoke test 2026-11-02: such a Mac
-  // user got "No transcription key set" and no transcript). Last in 'auto',
-  // so an own OpenAI/Groq/Gemini key is used first; only while publik is the
-  // selected provider and its key is live, so a person who moved to another
-  // provider is never charged on publik for audio.
+  // (smoke test 2026-11-02: such a Mac user got "No transcription key set"
+  // and no transcript). In 'auto' it is the only entry (publikOwnsAutoAudio);
+  // only while publik is the selected provider and its key is live, so a
+  // person who moved to another provider is never charged on publik for audio.
   const publikStt = publikTranscription(settings);
   if (selectedProvider === 'auto' && publikStt) {
     chain.push({ p: 'publik', m: publikStt.model, fn: (wav) => transcribeOpenAI(publikStt.apiKey, wav, publikStt.model, publikStt.baseURL, vocabPrompt) });
@@ -210,4 +221,4 @@ function createSTT(settings) {
   };
 }
 
-module.exports = { createSTT, publikTranscription, PUBLIK_STT_MODEL, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };
+module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };
