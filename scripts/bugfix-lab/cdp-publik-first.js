@@ -24,7 +24,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Runs in the page: what is visible and on top right now.
 const READ = `(() => {
-  const vis = (el) => !!el && el.offsetParent !== null && !el.classList.contains('hidden');
+  const vis = (el) => { if (!el || el.classList.contains('hidden')) return false; for (let n = el; n; n = n.parentElement) { if (n.classList && n.classList.contains('hidden')) return false; if (getComputedStyle(n).display === 'none' || getComputedStyle(n).visibility === 'hidden') return false; } return el.getClientRects().length > 0; };
   const onTop = (el) => { if (!vis(el)) return false; const b = el.getBoundingClientRect(); const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return !!hit && (hit === el || el.contains(hit)); };
   const t = (sel) => { const e = document.querySelector(sel); return e ? e.textContent.trim().replace(/\\s+/g, ' ').slice(0, 300) : null; };
   const cta = document.querySelector('#setup-cta');
