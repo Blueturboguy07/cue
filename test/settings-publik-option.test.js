@@ -444,7 +444,9 @@ test('D8: right after linking with only the $0.05 starter: a neutral welcome and
   assert.equal(card.onlyFreeMoney({ wallet: { planId: 'none', packRemainingMicros: 0, starterRemainingMicros: 0 } }, 69150000), false);
   // The wallet's pack field reaches the renderer.
   assert.equal(pub.normalizeWallet({ claim_state: 'claimed', balance_micros: 50000, pack: { remaining_micros: 0 }, starter: { remaining_micros: 50000 }, plan: { id: 'none' } }).packRemainingMicros, 0);
-  assert.match(fnSrc('onPublikPrimary'), /primary\.kind === 'credit' \|\| primary\.kind === 'plan'\) \{ cue\.publikOpen\(primary\.url\); startLinkPoll\(\); \}/);
+  // openPublikLink = publikOpen + startLinkPoll (0.2.10).
+  assert.match(fnSrc('onPublikPrimary'), /primary\.kind === 'credit' \|\| primary\.kind === 'plan'\) openPublikLink\(primary\.url\);/);
+  assert.match(rendererSrc, /function openPublikLink\(url\) \{\n    cue\.publikOpen\(url\);\n    startLinkPoll\(\);\n  \}/);
 });
 
 test('D9: the onboarding dialog never grows past the 600 px window', () => {

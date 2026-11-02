@@ -1418,14 +1418,16 @@
     if (secondary) btn.classList.add('secondary');
     if (action.kind === 'link' && action.url) {
       btn.textContent = action.label || 'Open publikhq.com';
-      btn.addEventListener('click', () => cue.publikOpen(action.url));
+      btn.addEventListener('click', () => openPublikLink(action.url));
     } else if (action.kind === 'reconnect') {
       btn.textContent = action.label || 'Reconnect';
+      // The same path as the overlay Reconnect: a new key, the claim page,
+      // the link poll. Only when no claim page opens (already linked, or the
+      // mint failed) does the toast say what happened.
       btn.addEventListener('click', async () => {
         btn.disabled = true;
-        publikState = await cue.publikReconnect();
-        renderPublikBlock();
-        showReconnectResult(publikState);
+        if (!(await reconnectPublik())) showReconnectResult(publikState);
+        renderSetupCta();
       });
     } else if (action.kind === 'disclosure') {
       btn.textContent = 'Sign in with publik';
@@ -1520,6 +1522,25 @@
     return true;
   }
 
+  // Every Reconnect button (the overlay prompt, the Settings card, a toast
+  // or a failed question): a new key, then the claim page, then the link
+  // poll. True when the claim page opened. Before 0.2.10 the toast Reconnect
+  // only made the key: the person had to press a second button, and cue did
+  // not see the sign-in until the next answer (smoke test v0.2.9).
+  async function reconnectPublik() {
+    publikState = await cue.publikReconnect();
+    renderPublikBlock();
+    return openClaimLink();
+  }
+
+  // A publikhq.com link from a toast or the first-run card (the claim page,
+  // "Link this computer & pick a plan", "Link now"): cue watches the wallet
+  // after it opens, so a sign-in there shows here without another answer.
+  function openPublikLink(url) {
+    cue.publikOpen(url);
+    startLinkPoll();
+  }
+
   // The browser does the sign-in; cue learns about it from GET /wallet.
   let linkPollTimer = null;
   function startLinkPoll() {
@@ -1527,8 +1548,22 @@
     const until = Date.now() + 5 * 60 * 1000;
     linkPollTimer = setInterval(async () => {
       if (Date.now() > until || !publikState || !publikState.connected || publikState.claimState === 'claimed') { clearInterval(linkPollTimer); return; }
-      try { publikState = await cue.publikRefresh(); renderPublikBlock(); renderSetupCta(); } catch (_) { /* next tick */ }
+      try {
+        publikState = await cue.publikRefresh(); renderPublikBlock(); renderSetupCta();
+        // Not linked a tick ago (see the check above): say it when it lands.
+        showLinkedNotice(publikState);
+      } catch (_) { /* next tick */ }
     }, 4000);
+  }
+
+  // The moment the sign-in lands: the overlay says so with the balance,
+  // in place of any toast that still asked for the link or a Reconnect.
+  function showLinkedNotice(p) {
+    if (!p || !p.connected || p.revoked || p.claimState !== 'claimed') return false;
+    const view = window.cuePublikCard.cardView(p, 'publik');
+    if (!view.status) return false;
+    showStatus(/[.!?]$/.test(view.status) ? view.status : `${view.status}.`);
+    return true;
   }
 
   // "Sign in with publik": consent first (the disclosure dialog states the
@@ -1566,9 +1601,8 @@
     try {
       if (primary.kind === 'switch') await switchToPublik();
       else if (primary.kind === 'signin') await signInWithPublik();
-      else if (primary.kind === 'link') { cue.publikOpen(primary.url); startLinkPoll(); }
-      else if (primary.kind === 'credit' || primary.kind === 'plan') { cue.publikOpen(primary.url); startLinkPoll(); }
-      else if (primary.kind === 'reconnect') { publikState = await cue.publikReconnect(); await openClaimLink(); }
+      else if (primary.kind === 'link' || primary.kind === 'credit' || primary.kind === 'plan') openPublikLink(primary.url);
+      else if (primary.kind === 'reconnect') await reconnectPublik();
     } finally {
       btn.disabled = false;
       renderPublikBlock();
@@ -1659,7 +1693,7 @@
     if (kind === 'signin') await signInWithPublik();
     else if (kind === 'link') await openClaimLink();
     else if (kind === 'switch') await switchToPublik();
-    else if (kind === 'reconnect') { publikState = await cue.publikReconnect(); await openClaimLink(); }
+    else if (kind === 'reconnect') await reconnectPublik();
     else if (kind === 'byo') { openSettings(); selectByoProvider(); }
     else if (kind === 'fix-key') fixOwnKey();
     else if (kind === 'settings') openSettings();
@@ -2226,7 +2260,7 @@
     };
     const buttons = [];
     if (card.primary) {
-      buttons.push({ label: card.primary.label, primary: true, action: async () => { cue.publikOpen(card.primary.url); await done(); } });
+      buttons.push({ label: card.primary.label, primary: true, action: async () => { openPublikLink(card.primary.url); await done(); } });
     }
     buttons.push({ label: card.secondary.label, action: done });
     return {

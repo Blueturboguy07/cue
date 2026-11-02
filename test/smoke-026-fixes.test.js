@@ -230,6 +230,8 @@ test('publik not set up + a key typed in this visit: follows the typed key', asy
 
 test('renderer: Settings remembers the keys it opened with, and a toast Reconnect says what happened', () => {
   assert.match(rendererSrc, /function fillSettings\(\) \{\n    keysAtOpen = \{ \.\.\.\(settings\.apiKeys \|\| \{\}\) \};/);
-  assert.match(rendererSrc, /publikState = await cue\.publikReconnect\(\);\n        renderPublikBlock\(\);\n        showReconnectResult\(publikState\);/);
+  // 0.2.10: the toast Reconnect takes the overlay path (claim page + link
+  // poll); it says what happened only when no claim page opens.
+  assert.match(rendererSrc, /if \(!\(await reconnectPublik\(\)\)\) showReconnectResult\(publikState\);/);
   assert.match(rendererSrc, /cue\.on\('status', \(\{ message, action \}\) =>/);
 });
