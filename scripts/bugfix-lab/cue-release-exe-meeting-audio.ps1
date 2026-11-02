@@ -37,6 +37,10 @@ $toggles = (Select-String -Path (Join-Path $appDir 'renderer\renderer.js') -Patt
 Write-Host "renderer #provider-publik toggle lines: $toggles"
 $loopback = Select-String -Path (Join-Path $appDir 'main.js') -Pattern "audio: 'loopback'" | Select-Object -First 1
 Write-Host "main.js loopback handler: $($loopback.LineNumber): $($loopback.Line.Trim())"
+$batcher = Test-Path (Join-Path $appDir 'src\publik-stt-batcher.js')
+Write-Host "v0.2.7 fix files: publik-stt-batcher.js present=$batcher"
+$vision = (Select-String -Path (Join-Path $appDir 'src\llm.js') -Pattern 'publikVisionModel').Count
+Write-Host "v0.2.7 fix markers: llm.js publikVisionModel lines=$vision"
 
 $env:NODE_PATH = (Resolve-Path 'cdp-deps\node_modules').Path
 $outLog = "cue-main-process.log"
