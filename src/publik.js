@@ -211,6 +211,7 @@ function normalizeWallet(b) {
   const week = w.week && typeof w.week === 'object' ? w.week : {};
   const starter = w.starter && typeof w.starter === 'object' ? w.starter : {};
   const plan = w.plan && typeof w.plan === 'object' ? w.plan : {};
+  const pack = w.pack && typeof w.pack === 'object' ? w.pack : {};
   const claimState = w.claim_state === 'claimed' ? 'claimed' : 'anonymous';
   const claimUrl = safeLink(w.claim_url);
   const addCreditUrl = safeLink(w.add_credit_url);
@@ -219,6 +220,7 @@ function normalizeWallet(b) {
     balanceMicros: firstMicros(w.balance_micros, w.available_micros),
     starterRemainingMicros: micros(starter.remaining_micros),
     starterExpiresAt: typeof starter.expires_at === 'string' ? starter.expires_at : '',
+    packRemainingMicros: micros(pack.remaining_micros),
     planId: typeof plan.id === 'string' ? plan.id : 'none',
     planLabel: typeof plan.label === 'string' ? plan.label : '',
     weekUsedMicros: micros(week.used_micros),
@@ -528,6 +530,71 @@ function isInstallFinished(e) {
   return e.status === 410;
 }
 
+// ---- failures in plain words -------------------------------------------
+// A failed setup keeps the raw message in lastError (logs, tests) and its
+// kind next to it, so the app can say what happened without "fetch failed".
+
+/** 'network' | 'rate' | 'server' | 'http' for a provision() failure. */
+function failureKind(e) {
+  const status = Number(e && e.status) || 0;
+  if (status === 429 || (e && e.type === 'rate_limited')) return 'rate';
+  if (status >= 500) return 'server';
+  if (status) return 'http';
+  return 'network'; // fetch failed, DNS, refused, timed out (AbortError)
+}
+
+function failureFields(e, now = Date.now()) {
+  const retry = Number(e && e.retryAfter) || 0;
+  return { lastErrorKind: failureKind(e), lastErrorStatus: Number(e && e.status) || 0, lastErrorRetryAt: retry > 0 ? now + retry * 1000 : 0 };
+}
+
+/**
+ * The sentence a person reads after a failed setup. Never the raw gateway
+ * text for the common failures; the server's own sentence only for the rare
+ * ones it words for people (replay, unknown kinds from older settings files).
+ */
+function plainProblem(p, now = Date.now()) {
+  if (!p || !p.lastError) return '';
+  switch (p.lastErrorKind) {
+    case 'network': return 'cue could not reach publik. Check your internet connection, then try again.';
+    case 'rate': {
+      const left = p.lastErrorRetryAt ? Math.max(0, Math.ceil((p.lastErrorRetryAt - now) / 1000)) : 0;
+      const wait = formatRetryAfter(left);
+      return wait
+        ? `publik is limiting new setups from this network. Try again in ${wait}.`
+        : 'publik is limiting new setups from this network. Try again in a few minutes.';
+    }
+    case 'server': return 'publik had a problem on its side. Nothing was charged. Try again in a minute.';
+    case 'http': return `publik did not accept the setup (error ${p.lastErrorStatus || 'unknown'}). Try again, or use your own API key.`;
+    default: return p.lastError;
+  }
+}
+
+/**
+ * runFeature with publik selected and no working key: the message and its
+ * one button always agree.
+ */
+function notReadyMessage(p) {
+  if (!p || !p.disclosureAccepted) {
+    return { message: 'Sign in with publik to start. cue runs on your publik balance, so you need no API key.', action: { kind: 'disclosure' } };
+  }
+  // main.js passes its publikState() view, which carries the plain sentence
+  // as `problem` (the stored kind fields stay behind in the store).
+  const problem = typeof p.problem === 'string' ? p.problem : plainProblem(p);
+  if (problem) return { message: `Setup did not finish. ${problem}`, action: { kind: 'reconnect', label: 'Reconnect' } };
+  if (p.revoked || p.disconnected) {
+    return { message: 'publik is disconnected on this computer. Press Reconnect to set it up again. You need no API key.', action: { kind: 'reconnect', label: 'Reconnect' } };
+  }
+  return { message: 'cue is still connecting to publik. Press Reconnect if this does not clear in a moment.', action: { kind: 'reconnect', label: 'Reconnect' } };
+}
+
+/** Own provider not ready, in a build with publik: publik first, proper name. */
+function ownProviderNotReadyMessage({ providerName, missingKey, configurationError }) {
+  if (missingKey) return `Switch to publik, or add your ${providerName} key in Settings.`;
+  const rest = String(configurationError || `Complete the ${providerName} settings.`);
+  return `Switch to publik, or ${rest.charAt(0).toLowerCase()}${rest.slice(1)}`;
+}
+
 /**
  * The provisioning flow main.js runs after the disclosure is accepted (and on
  * Reconnect). `store` is the app's settings store: getSettings(), setPublik(),
@@ -558,21 +625,21 @@ async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, 
         log({ level: 'info', event: 'publik_install_reprovisioned', msg: finished, context: { status: e.status || null, type: e.type || '' } });
         continue;
       }
-      store.setPublik({ installId, lastError: e.message });
+      store.setPublik({ installId, lastError: e.message, ...failureFields(e) });
       log({ level: 'error', event: 'publik_provision_failed', msg: e.message, context: { status: e.status || null, type: e.type || '', freshInstall: mintedFresh } });
       return { ok: false, error: e };
     }
     if (r.replay) {
       if (!s.apiKeys.publik && !mintedFresh) { installId = randomUUID(); mintedFresh = true; continue; }
       const e = new Error(`${PROVIDER_LABEL} could not set up this computer. Reconnect to try again, ${BYO}`);
-      store.setPublik({ installId, lastError: e.message });
+      store.setPublik({ installId, lastError: e.message, lastErrorKind: 'replay', lastErrorRetryAt: 0 });
       log({ level: 'error', event: 'publik_provision_replayed', msg: 'replay without a key', context: {} });
       return { ok: false, error: e };
     }
     store.setPublik({
       apiKey: r.key, installId, keyId: r.keyId, baseUrl: r.baseUrl, claimUrl: r.claimUrl || '', claimCode: r.claimCode,
       claimState: r.claimState, starterMicros: r.starterMicros, balanceMicros: r.balanceMicros, balanceAt: Date.now(),
-      wallet: r.wallet, revoked: false, disconnected: false, lastError: '',
+      wallet: r.wallet, revoked: false, disconnected: false, lastError: '', lastErrorKind: '', lastErrorRetryAt: 0,
       // A new starter grant must be shown on the card before it is spent (§12.4).
       ...(r.starterMicros > 0 ? { cardShown: false } : {})
     });
@@ -610,5 +677,6 @@ module.exports = {
   loadBuildConfig, provision, provisionInstall, fetchWallet, revokeInstall, normalizeWallet, readGatewayHeaders,
   describeGatewayError, balanceLine, isSafePublikLink, formatMicros, formatResetTime, osName, pickModels,
   starterLine, ctaView, settingsCta, lowStarterNotice, statusLine, resolveOpenTarget, markCardSeen, isInstallFinished,
-  LOW_STARTER_FRACTION, newInstallId: randomUUID
+  LOW_STARTER_FRACTION, newInstallId: randomUUID,
+  failureKind, failureFields, plainProblem, notReadyMessage, ownProviderNotReadyMessage
 };

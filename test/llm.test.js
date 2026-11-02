@@ -233,7 +233,10 @@ test('routes DeepSeek to its OpenAI-compatible endpoint', async () => {
 test('reports a configuration error when the DeepSeek key is missing', () => {
   const llm = createLLM(deepseekSettings({ apiKeys: { deepseek: '' } }));
   assert.equal(llm.ready, false);
-  assert.match(llm.configurationError, /Add your deepseek API key/);
+  // The provider's proper name, never the lowercase id.
+  assert.equal(llm.configurationError, 'Add your DeepSeek key in Settings.');
+  assert.equal(llm.missingKey, true);
+  assert.equal(llm.providerName, 'DeepSeek');
 });
 
 // ---- Gemini 404/429 error mapping ------------------------------------------

@@ -12,6 +12,7 @@
   // Below this, a linked account is "low": the card's one button becomes
   // "Add a plan or pack". $0.50 is about a week at the usual spend.
   const LOW_BALANCE_MICROS = 500000;
+  const DASHBOARD = 'https://publikhq.com/dashboard/api';
 
   const PROVIDER_NAMES = {
     publik: 'publik', cerebras: 'Cerebras', openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini',
@@ -25,6 +26,7 @@
     switchTo: 'Switch to publik',
     reconnect: 'Reconnect',
     addCredit: 'Add a plan or pack',
+    pickPlan: 'Pick a plan',
     notConnected: 'Not connected.',
     notLinked: 'This computer is not linked to your publik account yet.',
     connecting: 'Connecting…',
@@ -59,12 +61,17 @@
    *   never set up               → "Sign in with publik" (opens the disclosure)
    *   set up, not linked         → "Sign in with publik" (opens the claim link)
    *   revoked / disconnected     → "Reconnect"
-   *   linked, balance low        → "Add a plan or pack"
-   *   linked, balance fine       → no primary; "Manage plan" stays secondary
+   *   linked, only the free link starter (or nothing, no plan, no pack)
+   *                              → "Pick a plan", neutral line, no warning
+   *   linked, paid money running low → "Add a plan or pack", warning
+   *   linked, balance fine       → no primary; "Manage plan" / "Pick a plan"
+   *                                and "Add a plan or pack" stay secondary
+   * Wallet fields used (GET /wallet via src/publik.js normalizeWallet):
+   * balance_micros, plan.id, pack.remaining_micros, starter.remaining_micros.
    */
   function cardView(p, provider) {
     if (!p || !p.available) return { show: false };
-    const view = { show: true, lede: COPY.lede, status: '', warn: false, primary: null, manage: null, disconnect: false };
+    const view = { show: true, lede: COPY.lede, status: '', warn: false, primary: null, manage: null, credit: null, disconnect: false };
     const live = !!(p.connected && !p.revoked);
     view.disconnect = live;
     if (provider && provider !== PUBLIK) {
@@ -72,7 +79,9 @@
       view.primary = { kind: 'switch', label: COPY.switchTo };
       return view;
     }
-    const statusText = p.status && p.status.text ? p.status.text : '';
+    // A failed setup reads in plain words (p.problem, src/publik.js
+    // plainProblem); the gateway's raw text never reaches the card.
+    const statusText = (p.lastError && p.problem) || (p.status && p.status.text ? p.status.text : '');
     if (p.connected && p.revoked) {
       view.status = statusText; view.warn = true;
       view.primary = { kind: 'reconnect', label: COPY.reconnect };
@@ -101,17 +110,42 @@
     }
     const w = p.wallet || {};
     const balance = balanceOf(p);
-    view.status = p.line || (balance !== null ? `Linked to your publik account · ${money(balance)} left` : 'Linked to your publik account');
-    const low = balance !== null && Number.isFinite(balance) && balance < LOW_BALANCE_MICROS;
-    if (low) {
-      const url = [p.addCreditUrl, w.addCreditUrl, p.topUpUrl, w.topUpUrl].find(isPublikLink) || 'https://publikhq.com/dashboard/api';
+    const known = balance !== null && Number.isFinite(balance);
+    const creditUrl = [p.addCreditUrl, w.addCreditUrl, p.topUpUrl, w.topUpUrl].find(isPublikLink) || DASHBOARD;
+    const plansUrl = [w.plansUrl, p.settingsCta && p.settingsCta.url].find(isPublikLink) || DASHBOARD;
+    view.status = p.line || (known ? `Linked to your publik account · ${money(balance)} left` : 'Linked to your publik account');
+    if (onlyFreeMoney(p, balance)) {
+      // A new account holds the one-time link starter. That is a welcome, not
+      // a warning.
+      view.status = balance > 0 ? `Linked. ${money(balance)} to try cue.` : 'Linked. Pick a plan to keep using cue.';
+      view.primary = { kind: 'plan', label: COPY.pickPlan, url: plansUrl };
+      return view;
+    }
+    if (known && balance < LOW_BALANCE_MICROS) {
       view.warn = true;
       view.status = `Low balance · ${money(balance)} left.`;
-      view.primary = { kind: 'credit', label: COPY.addCredit, url };
+      view.primary = { kind: 'credit', label: COPY.addCredit, url: creditUrl };
       return view;
     }
     if (p.settingsCta && isPublikLink(p.settingsCta.url)) view.manage = { label: p.settingsCta.label, url: p.settingsCta.url };
+    view.credit = { label: COPY.addCredit, url: creditUrl };
     return view;
+  }
+
+  /**
+   * True when a linked account has no paid money in it: no plan, no pack
+   * left, and everything that is left is the free starter (or nothing).
+   * A pack bought and fully spent also lands here (the wallet carries no
+   * "ever paid" field), which is fine: the line stays neutral either way.
+   */
+  function onlyFreeMoney(p, balance) {
+    const w = p.wallet || {};
+    if (balance === null || !Number.isFinite(balance)) return false;
+    if (w.planId && w.planId !== 'none') return false;
+    if ((Number(w.packRemainingMicros) || 0) > 0) return false;
+    if (balance <= 0) return true;
+    const starter = w.starterRemainingMicros === null || w.starterRemainingMicros === undefined ? null : Number(w.starterRemainingMicros);
+    return starter !== null && Number.isFinite(starter) && balance <= starter;
   }
 
   /** True when the selected provider can answer a question now. */
@@ -146,7 +180,8 @@
         return { title: 'publik is disconnected', body: 'Reconnect to keep using cue. You need no API key.', primary: { kind: 'reconnect', label: COPY.reconnect }, secondary: null };
       }
       if (settings.provider === PUBLIK && p.disclosureAccepted && p.lastError) {
-        return { title: 'cue could not connect to publik', body: p.lastError, primary: { kind: 'reconnect', label: COPY.reconnect }, secondary: { kind: 'byo', label: 'Use my own API key' } };
+        // Plain words only (p.problem); the raw gateway text stays in logs.
+        return { title: 'Setup did not finish', body: p.problem || 'Press Reconnect to try again.', primary: { kind: 'reconnect', label: COPY.reconnect }, secondary: { kind: 'byo', label: 'Use my own API key' } };
       }
       return {
         title: 'Sign in to start',
@@ -158,5 +193,5 @@
     return { title: 'Connect an AI model', body: 'Add an API key in Settings to start.', primary: { kind: 'settings', label: 'Open Settings' }, secondary: null };
   }
 
-  return { PUBLIK, LOW_BALANCE_MICROS, PROVIDER_NAMES, COPY, cardView, providerReady, setupPrompt, money };
+  return { PUBLIK, LOW_BALANCE_MICROS, PROVIDER_NAMES, COPY, cardView, onlyFreeMoney, providerReady, setupPrompt, money };
 }));

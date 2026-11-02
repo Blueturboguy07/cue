@@ -636,13 +636,20 @@ button:focus { outline: none; }
 /* ============================ Onboarding / tutorial ============================ */
 #onboard-scrim { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(0,0,0,0.45); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 #onboard-scrim.hidden { display: none; }
-#onboard { width: min(470px, 93vw); padding: 26px 28px 18px; text-align: center; animation: overlayIn 240ms cubic-bezier(0.22,1,0.36,1); }
+#onboard { width: min(470px, 93vw); padding: 22px 28px 16px; text-align: center; animation: overlayIn 240ms cubic-bezier(0.22,1,0.36,1);
+  /* The window is 600 px tall: the dialog never grows past it; the text scrolls instead of the buttons being cut off. */
+  max-height: calc(100vh - 16px); box-sizing: border-box; display: flex; flex-direction: column; }
+#onboard > * { flex-shrink: 0; }
+#onboard > .ob-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .ob-dots { display: flex; gap: 6px; justify-content: center; margin-bottom: 20px; }
 .ob-dots span { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.20); transition: all 220ms ease; }
 .ob-dots span.on { background: var(--accent); width: 20px; border-radius: 4px; }
-.ob-icon { display: flex; justify-content: center; margin-bottom: 14px; font-size: 34px; line-height: 1; }
+.ob-icon { display: flex; justify-content: center; margin-bottom: 12px; font-size: 34px; line-height: 1; }
 .ob-title { font-size: 20px; font-weight: 700; color: var(--tx-1); margin-bottom: 10px; letter-spacing: -0.01em; }
-.ob-body { font-size: 14px; line-height: 1.6; color: var(--tx-2); text-align: left; -webkit-user-select: text; user-select: text; }
+.ob-body { font-size: 14px; line-height: 1.5; color: var(--tx-2); text-align: left; -webkit-user-select: text; user-select: text; }
+.ob-error.hidden { display: none; }
+.ob-error { text-align: left; margin-top: 10px; padding: 8px 10px; border-radius: 10px; background: rgba(245,158,11,0.10); border: 1px solid rgba(245,158,11,0.35); color: #fcd3a5; font-size: 12.5px; line-height: 1.45; }
+.ob-error strong { color: #fde0b8; }
 .ob-body strong { color: #fff; font-weight: 600; }
 .ob-body .kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 6px; background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.16); font-size: 12px; font-weight: 600; color: #fff; }
 .ob-body ul { padding-left: 18px; margin: 8px 0; }

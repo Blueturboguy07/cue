@@ -478,6 +478,7 @@ function createLLM(settings) {
   let apiKey = keys[provider];
   let baseURL = '';
   let configurationError = '';
+  let missingKey = false;
   const tier = settings.smart ? 'smart' : 'fast';
   const models = settings.models || {};
   let model = (models[provider] || {})[tier];
@@ -519,7 +520,8 @@ function createLLM(settings) {
     }
   } else if (provider !== 'ollama' && !apiKey) {
     // Ollama is a local server: the field holds a URL, and no key is required.
-    configurationError = `Add your ${provider} API key in Settings.`;
+    configurationError = `Add your ${normalizeProviderName(provider)} key in Settings.`;
+    missingKey = true;
   }
 
   // Azure needs a second credential: the resource endpoint.
@@ -540,6 +542,8 @@ function createLLM(settings) {
     provider, model, visionModel, apiKey, baseURL,
     ready,
     configurationError,
+    missingKey,
+    providerName: normalizeProviderName(provider),
     async stream(params) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
       const useModel = params && params.imageDataUrl ? visionModel : model;

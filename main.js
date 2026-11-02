@@ -828,18 +828,17 @@ async function runFeature(mode, userText) {
       const message = llm.configurationError || ('Complete the ' + settings.provider + ' provider settings. Model: ' + (llm.model || 'unset') + '.');
       if (settings.provider === publik.PUBLIK_PROVIDER) {
         // No key yet: either the disclosure was never accepted (open it — the
-        // mint happens only on "Continue"), or the install was revoked or the
-        // last mint failed (offer Reconnect). The app never silently spends.
-        const action = !settings.publik.disclosureAccepted
-          ? { kind: 'disclosure' }
-          : { kind: 'reconnect', label: 'Reconnect' };
-        send('llm:error', { message, action });
+        // mint happens only on "Sign in with publik"), or the install was
+        // revoked or the last mint failed (offer Reconnect, and say why in
+        // plain words). The message and its one button always agree. The app
+        // never silently spends.
+        send('llm:error', publik.notReadyMessage(publikState()));
         return;
       }
-      // An own provider with no key, in a build that has publik: point at
-      // publik first, with one button that switches.
+      // An own provider with no key, in a build that has publik: publik
+      // first, the provider's proper name, one button that switches.
       send('llm:error', publikBuild.available
-        ? { message: `${message} Or switch to publik: cue then runs on your publik balance and needs no API key.`, action: { kind: 'switch' } }
+        ? { message: publik.ownProviderNotReadyMessage({ providerName: llm.providerName, missingKey: llm.missingKey, configurationError: message }), action: { kind: 'switch' } }
         : { message });
       return;
     }
@@ -982,6 +981,8 @@ function publikState() {
     disclosureAccepted: p.disclosureAccepted || 0,
     disclosureVersion: publikBuild.disclosureVersion,
     lastError: p.lastError || '',
+    // The failure in plain words (never "fetch failed"); the raw text stays in lastError.
+    problem: publik.plainProblem(p),
     cardShown: !!p.cardShown,
     copy: publik.COPY,
     links: publik.LINKS

@@ -273,10 +273,12 @@ test('first run with nothing connected: the overlay names publik, not a key', ()
   // Revoked: Reconnect.
   assert.equal(card.setupPrompt(settings, { ...ANON, connected: false, disconnected: true }).primary.label, 'Reconnect');
   // The mint failed (for example a rate limit): say so, and offer Reconnect.
-  const failed = card.setupPrompt(settings, { ...BASE, disclosureAccepted: 1, lastError: 'Too many provisioning requests from this network.' });
-  assert.equal(failed.title, 'cue could not connect to publik');
-  assert.equal(failed.body, 'Too many provisioning requests from this network.');
+  const failed = card.setupPrompt(settings, { ...BASE, disclosureAccepted: 1, lastError: 'Too many provisioning requests from this network.', problem: 'publik is limiting new setups from this network. Try again in 41 minutes.' });
+  assert.equal(failed.title, 'Setup did not finish');
+  assert.equal(failed.body, 'publik is limiting new setups from this network. Try again in 41 minutes.');
   assert.equal(failed.primary.label, 'Reconnect');
+  // The raw gateway text never becomes the body, even without a plain sentence.
+  assert.doesNotMatch(card.setupPrompt(settings, { ...BASE, disclosureAccepted: 1, lastError: 'fetch failed' }).body, /fetch failed/);
   // Set up but not linked, $0.00: still "Sign in with publik" (the claim link).
   assert.deepEqual(card.setupPrompt(settings, ANON).primary, { kind: 'link', label: 'Sign in with publik' });
   assert.equal(card.setupPrompt(settings, ANON).title, 'Finish signing in');
@@ -300,7 +302,8 @@ test('every "add a key" message points at publik first', () => {
   const llm = fs.readFileSync(path.join(root, 'src', 'llm.js'), 'utf8');
   assert.match(llm, /configurationError = 'Sign in with publik to start\./);
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-  assert.match(main, /publikBuild\.available\n\s+\? \{ message: `\$\{message\} Or switch to publik: cue then runs on your publik balance and needs no API key\.`, action: \{ kind: 'switch' \} \}/);
+  assert.match(main, /publikBuild\.available\n\s+\? \{ message: publik\.ownProviderNotReadyMessage\(\{ providerName: llm\.providerName, missingKey: llm\.missingKey, configurationError: message \}\), action: \{ kind: 'switch' \} \}/);
+  assert.match(main, /send\('llm:error', publik\.notReadyMessage\(publikState\(\)\)\);/);
   assert.doesNotMatch(main, /No transcription key set/);
   assert.match(main, /Transcription is off\. Switch to publik in Settings to transcribe with no API key\./);
   assert.match(main, /Pick Local in Settings › Audio to transcribe on this computer with no key/);
@@ -314,4 +317,138 @@ test('every "add a key" message points at publik first', () => {
 test('index.html loads publik-card.js before renderer.js (same file on Windows and Mac)', () => {
   assert.ok(html.indexOf('<script src="publik-card.js"></script>') > -1);
   assert.ok(html.indexOf('publik-card.js') < html.indexOf('renderer.js'));
+});
+
+// ---- round 2 (blind verifier on 93fd2ee) ----------------------------------
+
+const pub = require('../src/publik');
+
+test('D1: linked with a healthy balance: no blue button, "Add a plan or pack" back as a secondary', () => {
+  const v = card.cardView({ ...LINKED, addCreditUrl: 'https://publikhq.com/dashboard/api?add=1' }, 'publik');
+  assert.equal(v.primary, null);
+  assert.equal(v.warn, false);
+  assert.deepEqual(v.credit, { label: 'Add a plan or pack', url: 'https://publikhq.com/dashboard/api?add=1' });
+  assert.deepEqual(v.manage, { label: 'Manage plan', url: 'https://publikhq.com/dashboard/api' });
+  assert.match(html, /<button id="publik-add-credit" class="s-action hidden">Add a plan or pack<\/button>/);
+  const $ = renderWith({ ...LINKED, addCreditUrl: 'https://publikhq.com/dashboard/api?add=1' }, { provider: 'publik', apiKeys: {} });
+  assert.equal($('#publik-primary').classList.contains('hidden'), true);
+  assert.equal($('#publik-add-credit').classList.contains('hidden'), false);
+  assert.equal($('#publik-add-credit').textContent, 'Add a plan or pack');
+});
+
+test('D2: own provider with no key: publik first, proper provider name', () => {
+  assert.equal(pub.ownProviderNotReadyMessage({ providerName: 'OpenAI', missingKey: true, configurationError: 'Add your OpenAI key in Settings.' }),
+    'Switch to publik, or add your OpenAI key in Settings.');
+  assert.equal(pub.ownProviderNotReadyMessage({ providerName: 'Azure AI Foundry', missingKey: false, configurationError: 'Add your Azure AI Foundry endpoint in Settings.' }),
+    'Switch to publik, or add your Azure AI Foundry endpoint in Settings.');
+  const { createLLM } = require('../src/llm');
+  const llm = createLLM({ provider: 'openai', apiKeys: { openai: '' }, models: { openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' } } });
+  assert.equal(llm.configurationError, 'Add your OpenAI key in Settings.');
+  assert.equal(pub.ownProviderNotReadyMessage(llm).startsWith('Switch to publik, or add your OpenAI key'), true);
+});
+
+test('D3: after a failed setup the message and the button agree', () => {
+  const failed = pub.notReadyMessage({ disclosureAccepted: 1, lastError: 'fetch failed', lastErrorKind: 'network' });
+  assert.equal(failed.action.label, 'Reconnect');
+  assert.equal(failed.message, 'Setup did not finish. cue could not reach publik. Check your internet connection, then try again.');
+  assert.doesNotMatch(failed.message, /Sign in with publik|fetch failed/);
+  // The shape main.js really passes: its publikState() view (problem, no kind fields).
+  const viewShaped = pub.notReadyMessage({ disclosureAccepted: 1, lastError: 'fetch failed', problem: 'cue could not reach publik. Check your internet connection, then try again.' });
+  assert.equal(viewShaped.message, 'Setup did not finish. cue could not reach publik. Check your internet connection, then try again.');
+  const fresh = pub.notReadyMessage({ disclosureAccepted: 0 });
+  assert.equal(fresh.action.kind, 'disclosure');
+  assert.match(fresh.message, /^Sign in with publik/);
+  assert.match(fnSrc('publikActionButton'), /'disclosure'\) \{\n\s+btn\.textContent = 'Sign in with publik';/);
+  const gone = pub.notReadyMessage({ disclosureAccepted: 1, disconnected: true });
+  assert.equal(gone.action.label, 'Reconnect');
+  assert.match(gone.message, /Press Reconnect/);
+});
+
+test('D4: onboarding stays on the publik step with the reason and "Try again" when the mint fails', () => {
+  const step = rendererSrc.slice(rendererSrc.indexOf('function publikStep()'), rendererSrc.indexOf('function publikCardStep()'));
+  assert.match(step, /if \(!publikState\.connected \|\| publikState\.revoked\) \{\n\s+obPublikError = publikState\.problem \|\| 'Setup did not finish\.';\n\s+step\.buttons\[0\]\.label = 'Try again';\n\s+renderOnboard\(\);\n\s+return;/);
+  assert.match(step, /error: \(\) => \(obPublikError \? `<strong>Setup did not finish\.<\/strong> \$\{esc\(obPublikError\)\}` : ''\),/);
+  // Shown outside the scrolling text, so it is always in view.
+  assert.match(html, /<div class="ob-body" id="ob-body"><\/div>\s*<!--[^>]*-->\s*<div class="ob-error hidden" id="ob-error" role="alert"><\/div>\s*<div class="ob-buttons" id="ob-buttons"><\/div>/);
+  assert.match(fnSrc('renderOnboard'), /\$\('#ob-error'\)\.classList\.toggle\('hidden', !stepError\);/);
+  // The failure return comes before any move to the next step.
+  assert.ok(step.indexOf("label = 'Try again'") < step.indexOf('obIndex++'));
+});
+
+test('D5: common failures read in plain words, with the real wait from Retry-After', () => {
+  const now = Date.parse('2026-11-02T08:00:00Z');
+  assert.equal(pub.failureKind(Object.assign(new TypeError('fetch failed'), {})), 'network');
+  assert.equal(pub.failureKind({ name: 'AbortError', message: 'This operation was aborted' }), 'network');
+  assert.equal(pub.failureKind({ status: 429, type: 'rate_limited' }), 'rate');
+  assert.equal(pub.failureKind({ status: 503 }), 'server');
+  assert.equal(pub.failureKind({ status: 401 }), 'http');
+  assert.deepEqual(pub.failureFields({ status: 429, retryAfter: 2460 }, now), { lastErrorKind: 'rate', lastErrorStatus: 429, lastErrorRetryAt: now + 2460000 });
+  assert.equal(pub.plainProblem({ lastError: 'fetch failed', lastErrorKind: 'network' }, now), 'cue could not reach publik. Check your internet connection, then try again.');
+  assert.equal(pub.plainProblem({ lastError: 'Too many provisioning requests from this network.', lastErrorKind: 'rate', lastErrorRetryAt: now + 2460000 }, now),
+    'publik is limiting new setups from this network. Try again in 41 minutes.');
+  assert.equal(pub.plainProblem({ lastError: 'x', lastErrorKind: 'rate', lastErrorRetryAt: 0 }, now), 'publik is limiting new setups from this network. Try again in a few minutes.');
+  assert.match(pub.plainProblem({ lastError: 'upstream 502', lastErrorKind: 'server' }, now), /^publik had a problem on its side\. Nothing was charged\./);
+  for (const kind of ['network', 'rate', 'server', 'http']) {
+    assert.doesNotMatch(pub.plainProblem({ lastError: 'fetch failed', lastErrorKind: kind, lastErrorStatus: 400 }, now), /fetch failed/);
+  }
+  // The card shows the plain sentence, never the raw one.
+  const v = card.cardView({ ...BASE, disclosureAccepted: 1, lastError: 'fetch failed', problem: 'cue could not reach publik. Check your internet connection, then try again.', status: { text: 'fetch failed', warn: true } }, 'publik');
+  assert.equal(v.status, 'cue could not reach publik. Check your internet connection, then try again.');
+  assert.deepEqual(v.primary, { kind: 'reconnect', label: 'Reconnect' });
+  // main.js hands the plain sentence to the renderer.
+  assert.match(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), /problem: publik\.plainProblem\(p\),/);
+});
+
+test('D5: provisionInstall records the kind and the Retry-After wait of a refused mint', async () => {
+  const data = { apiKeys: { publik: '' }, publik: { installId: '', disclosureAccepted: 1, revoked: false, lastError: '' } };
+  const store = { getSettings: () => data, setPublik: (patch) => { Object.assign(data.publik, patch); }, setSettings: () => {} };
+  const fetchImpl = async () => ({ ok: false, status: 429, headers: { get: (h) => (h.toLowerCase() === 'retry-after' ? '2460' : null) }, json: async () => ({ error: { type: 'rate_limited', message: 'Too many provisioning requests from this network.' } }) });
+  const r = await pub.provisionInstall({ build: { available: true, appToken: 't', appSlug: 'cue', baseUrl: 'https://publikhq.com/api/v1', disclosureVersion: 1 }, store, fetchImpl });
+  assert.equal(r.ok, false);
+  assert.equal(data.publik.lastErrorKind, 'rate');
+  assert.ok(data.publik.lastErrorRetryAt > Date.now() + 2400000);
+  assert.match(pub.plainProblem(data.publik), /Try again in 41 minutes\./);
+});
+
+test('D7: the example conversation never sits under the sign-in prompt', () => {
+  assert.match(fnSrc('showExample'), /classList\.add\('is-example'\)/);
+  const cta = fnSrc('renderSetupCta');
+  assert.match(cta, /messages\.querySelectorAll\('\.is-example'\)\.forEach\(\(node\) => node\.remove\(\)\);/);
+  assert.match(cta, /if \(el\) \{ el\.remove\(\); if \(!messages\.children\.length\) showExample\(\); \}/);
+});
+
+test('D8: right after linking with only the $0.05 starter: a neutral welcome and "Pick a plan"', () => {
+  const starterOnly = {
+    ...LINKED, balanceMicros: 50000, line: 'Linked to your publik account · $0.05 left',
+    wallet: { claimState: 'claimed', balanceMicros: 50000, planId: 'none', packRemainingMicros: 0, starterRemainingMicros: 50000, plansUrl: 'https://publikhq.com/developers#plans' },
+    settingsCta: { label: 'Pick a plan', url: 'https://publikhq.com/dashboard/api' }
+  };
+  const v = card.cardView(starterOnly, 'publik');
+  assert.equal(v.warn, false);
+  assert.equal(v.status, 'Linked. $0.05 to try cue.');
+  assert.deepEqual(v.primary, { kind: 'plan', label: 'Pick a plan', url: 'https://publikhq.com/developers#plans' });
+  // Partly used starter: still a welcome.
+  assert.equal(card.cardView({ ...starterOnly, balanceMicros: 31000, wallet: { ...starterOnly.wallet, balanceMicros: 31000, starterRemainingMicros: 31000 } }, 'publik').status, 'Linked. $0.03 to try cue.');
+  // Free money gone, nothing paid: neutral, still "Pick a plan".
+  const zero = card.cardView({ ...starterOnly, balanceMicros: 0, wallet: { ...starterOnly.wallet, balanceMicros: 0, starterRemainingMicros: 0 } }, 'publik');
+  assert.equal(zero.warn, false);
+  assert.equal(zero.primary.label, 'Pick a plan');
+  // Paid money running low keeps the warning: a plan, or pack money left.
+  const plan = card.cardView({ ...starterOnly, wallet: { ...starterOnly.wallet, planId: 'basic' } }, 'publik');
+  assert.equal(plan.warn, true);
+  assert.equal(plan.status, 'Low balance · $0.05 left.');
+  assert.equal(plan.primary.label, 'Add a plan or pack');
+  const pack = card.cardView({ ...starterOnly, balanceMicros: 120000, wallet: { ...starterOnly.wallet, balanceMicros: 120000, packRemainingMicros: 70000 } }, 'publik');
+  assert.equal(pack.warn, true);
+  // More than the starter left with no plan (other money): not "to try".
+  assert.equal(card.onlyFreeMoney({ wallet: { planId: 'none', packRemainingMicros: 0, starterRemainingMicros: 0 } }, 69150000), false);
+  // The wallet's pack field reaches the renderer.
+  assert.equal(pub.normalizeWallet({ claim_state: 'claimed', balance_micros: 50000, pack: { remaining_micros: 0 }, starter: { remaining_micros: 50000 }, plan: { id: 'none' } }).packRemainingMicros, 0);
+  assert.match(fnSrc('onPublikPrimary'), /primary\.kind === 'credit' \|\| primary\.kind === 'plan'\) \{ cue\.publikOpen\(primary\.url\); startLinkPoll\(\); \}/);
+});
+
+test('D9: the onboarding dialog never grows past the 600 px window', () => {
+  const css = fs.readFileSync(path.join(root, 'renderer', 'styles.css'), 'utf8');
+  assert.match(css, /#onboard \{[^}]*max-height: calc\(100vh - 16px\); box-sizing: border-box; display: flex; flex-direction: column; \}/);
+  assert.match(css, /#onboard > \.ob-body \{ flex: 0 1 auto; min-height: 0; overflow-y: auto; \}/);
 });

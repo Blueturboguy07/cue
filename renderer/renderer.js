@@ -1529,7 +1529,7 @@
       if (primary.kind === 'switch') await switchToPublik();
       else if (primary.kind === 'signin') await signInWithPublik();
       else if (primary.kind === 'link') { cue.publikOpen(primary.url); startLinkPoll(); }
-      else if (primary.kind === 'credit') { cue.publikOpen(primary.url); startLinkPoll(); }
+      else if (primary.kind === 'credit' || primary.kind === 'plan') { cue.publikOpen(primary.url); startLinkPoll(); }
       else if (primary.kind === 'reconnect') { publikState = await cue.publikReconnect(); await openClaimLink(); }
     } finally {
       btn.disabled = false;
@@ -1568,11 +1568,14 @@
     show('#publik-primary', !!view.primary);
     $('#publik-manage').textContent = view.manage ? view.manage.label : '';
     show('#publik-manage', !!view.manage);
+    $('#publik-add-credit').textContent = view.credit ? view.credit.label : '';
+    show('#publik-add-credit', !!view.credit);
     show('#publik-disconnect', view.disconnect);
     if (settings.provider === 'publik') $('#s-status').textContent = statusText();
   }
   $('#publik-primary').addEventListener('click', () => { void onPublikPrimary(); });
   $('#publik-manage').addEventListener('click', () => { const v = window.cuePublikCard.cardView(publikState, settings.provider); if (v.manage) cue.publikOpen(v.manage.url); });
+  $('#publik-add-credit').addEventListener('click', () => { const v = window.cuePublikCard.cardView(publikState, settings.provider); if (v.credit) { cue.publikOpen(v.credit.url); startLinkPoll(); } });
   $('#publik-pricing').addEventListener('click', () => cue.publikOpen(publikState ? publikState.links.pricing : ''));
   $('#publik-disconnect').addEventListener('click', async () => { publikState = await cue.publikDisconnect(); renderPublikBlock(); renderSetupCta(); });
   cue.on('publik:state', (state) => { publikState = state; renderPublikBlock(); renderSetupCta(); maybeShowLowStarter(state); });
@@ -1584,7 +1587,13 @@
     if (!settings || !publikState) return false;
     const prompt = window.cuePublikCard.setupPrompt(settings, publikState);
     let el = document.getElementById('setup-cta');
-    if (!prompt) { if (el) el.remove(); return false; }
+    if (!prompt) {
+      if (el) { el.remove(); if (!messages.children.length) showExample(); }
+      return false;
+    }
+    // The example conversation never sits under the prompt: it would read as
+    // if cue were already answering.
+    messages.querySelectorAll('.is-example').forEach((node) => node.remove());
     if (!el) {
       el = document.createElement('div');
       el.id = 'setup-cta';
@@ -1970,6 +1979,8 @@
     ai.className = 'ai-text';
     ai.textContent = '“A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.”';
     messages.appendChild(ai);
+    // Marked so the sign-in prompt can take its place (renderSetupCta).
+    messages.querySelectorAll('.user-bubble, .ai-text').forEach((el) => el.classList.add('is-example'));
   }
 
   // ---- global keys -------------------------------------------------------
@@ -2098,17 +2109,29 @@
   // First-run disclosure (R21 §4.3): two disclosures — cost and data path —
   // and a visible "use my own key" branch. Copy comes from main (one source).
   // Only "Continue" mints a key; Next/Skip never provision.
+  // A failed setup keeps the person on this step with the reason in plain
+  // words and "Try again", instead of moving on to "You're all set".
+  let obPublikError = '';
   function publikStep() {
     const c = publikState.copy.disclosure;
-    return {
+    const step = {
       icon: '🪙',
       title: c.title,
       body: () => `${esc(c.intro)}<br><br><strong>Cost.</strong> ${esc(c.cost)}<br><br><strong>Where your prompts go.</strong> ${esc(c.dataPath)}` +
         `<span class="ob-fine">${esc(c.terms)} <a id="ob-publik-terms">publik API terms</a></span>`,
+      error: () => (obPublikError ? `<strong>Setup did not finish.</strong> ${esc(obPublikError)}` : ''),
       buttons: [
         { label: c.accept, primary: true, action: async () => {
           const btns = $('#ob-buttons').querySelectorAll('button'); btns.forEach((b) => { b.disabled = true; });
           publikState = await cue.publikAcceptDisclosure(); await adoptPublikSelection();
+          if (!publikState.connected || publikState.revoked) {
+            obPublikError = publikState.problem || 'Setup did not finish.';
+            step.buttons[0].label = 'Try again';
+            renderOnboard();
+            return;
+          }
+          obPublikError = '';
+          step.buttons[0].label = c.accept;
           // "Sign in with publik": straight to the claim link on publikhq.com,
           // which links this computer to the account. The card is marked seen
           // there, as its own primary button does.
@@ -2121,6 +2144,7 @@
         { label: c.decline, action: () => { if (obDialog) hideOnboardDialog(); else finishOnboard(); openSettings(); selectByoProvider(); } }
       ]
     };
+    return step;
   }
   // The first-run card (CONTRACT §12.1), in this order: (a) the balance line
   // from the mint response, (b) the one-sentence justification, (c) the
@@ -2188,6 +2212,9 @@
     $('#ob-icon').textContent = step.icon;
     $('#ob-title').textContent = step.title;
     $('#ob-body').innerHTML = typeof step.body === 'function' ? step.body() : step.body;
+    const stepError = typeof step.error === 'function' ? step.error() : '';
+    $('#ob-error').innerHTML = stepError;
+    $('#ob-error').classList.toggle('hidden', !stepError);
     const termsLink = $('#ob-publik-terms');
     if (termsLink) termsLink.addEventListener('click', () => cue.publikOpen(publikState.links.terms));
     const btns = $('#ob-buttons'); btns.innerHTML = '';
