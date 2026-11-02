@@ -452,3 +452,42 @@ test('D9: the onboarding dialog never grows past the 600 px window', () => {
   assert.match(css, /#onboard \{[^}]*max-height: calc\(100vh - 16px\); box-sizing: border-box; display: flex; flex-direction: column; \}/);
   assert.match(css, /#onboard > \.ob-body \{ flex: 0 1 auto; min-height: 0; overflow-y: auto; \}/);
 });
+
+// After the 0.2.7 rebase: the toast after a Reconnect press (renderer
+// showReconnectResult) reads p.status.text, so the status line must be plain
+// words too, never the raw "fetch failed".
+test('D5 + 0.2.7: statusLine says a failed Reconnect in plain words, gateway sentences pass through', () => {
+  const pub = require('../src/publik');
+  const failed = pub.statusLine({ connected: true, revoked: true, disclosureAccepted: true, lastError: 'fetch failed', lastErrorKind: 'network' });
+  assert.equal(failed.warn, true);
+  assert.match(failed.text, /^cue could not reach publik\./);
+  assert.doesNotMatch(failed.text, /fetch failed/);
+  const notSet = pub.statusLine({ connected: false, disclosureAccepted: true, lastError: 'fetch failed', lastErrorKind: 'network' });
+  assert.match(notSet.text, /^cue could not reach publik\./);
+  const gateway = 'publik API is disconnected. This computer was removed from your publik account.';
+  assert.equal(pub.statusLine({ connected: true, revoked: true, lastError: gateway }).text, gateway);
+});
+
+// Live check after the 0.2.7 rebase: a Reconnect press that cannot reach
+// publik sets `revoked` (0.2.7 reconnectInstall) and then fails the mint.
+// The overlay, the ask message and the toast must still name the failure.
+test('0.2.7 Reconnect that fails: every place says the failure in plain words, not "disconnected"', () => {
+  const pub = require('../src/publik');
+  const card = require('../renderer/publik-card');
+  const problem = 'cue could not reach publik. Check your internet connection, then try again.';
+  const view = { available: true, connected: false, revoked: true, disclosureAccepted: 1, lastError: 'fetch failed', problem, setupFailed: true };
+  const prompt = card.setupPrompt({ provider: 'publik', apiKeys: {} }, view);
+  assert.equal(prompt.title, 'Setup did not finish');
+  assert.equal(prompt.body, problem);
+  assert.equal(prompt.primary.label, 'Reconnect');
+  assert.equal(pub.notReadyMessage(view).message, `Setup did not finish. ${problem}`);
+  assert.equal(pub.statusLine(view).text, problem);
+  assert.equal(card.cardView(view, 'publik').status, problem);
+  // A dashboard revoke (a gateway sentence, no failed setup) still reads as disconnected.
+  const revoked = { available: true, connected: false, revoked: true, disclosureAccepted: 1, lastError: 'publik API is disconnected. This computer was removed from your publik account.', problem: 'publik API is disconnected. This computer was removed from your publik account.', setupFailed: false };
+  assert.equal(card.setupPrompt({ provider: 'publik', apiKeys: {} }, revoked).title, 'publik is disconnected');
+  assert.match(pub.notReadyMessage(revoked).message, /^publik is disconnected on this computer/);
+  // main.js hands the flag over in its view.
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  assert.match(main, /setupFailed: !!\(p\.lastError && p\.lastErrorKind\),/);
+});

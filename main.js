@@ -983,6 +983,10 @@ function publikState() {
     lastError: p.lastError || '',
     // The failure in plain words (never "fetch failed"); the raw text stays in lastError.
     problem: publik.plainProblem(p),
+    // True when the last mint failed (offline, rate limited, server error),
+    // as opposed to a gateway sentence such as a revoke. A failed Reconnect
+    // also sets `revoked`, and the failure is still the thing to say.
+    setupFailed: !!(p.lastError && p.lastErrorKind),
     cardShown: !!p.cardShown,
     copy: publik.COPY,
     links: publik.LINKS

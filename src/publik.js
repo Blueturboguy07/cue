@@ -491,11 +491,14 @@ function lowStarterNotice(p) {
 function statusLine(p) {
   const warn = (text) => ({ text, warn: true });
   if (!p) return { text: '', warn: false };
-  if (p.connected && p.revoked) return warn(p.lastError || `${PROVIDER_LABEL} key was revoked. Reconnect to set this computer up again.`);
+  // A failed setup reads in plain words (plainProblem); a gateway sentence
+  // with no failure kind passes through unchanged.
+  const said = p.lastError ? ((typeof p.problem === 'string' && p.problem) || plainProblem(p) || p.lastError) : '';
+  if (p.connected && p.revoked) return warn(said || `${PROVIDER_LABEL} key was revoked. Reconnect to set this computer up again.`);
   if (p.connected) return { text: `Connected · key ${p.keyId} · ${p.line || 'Ready'}`, warn: false };
-  if (p.disconnected) return warn(p.lastError || `${PROVIDER_LABEL} is disconnected. This computer was removed from your publik account.`);
+  if (p.disconnected) return warn(said || `${PROVIDER_LABEL} is disconnected. This computer was removed from your publik account.`);
   if (!p.disclosureAccepted) return { text: 'Not set up yet — no key needed to set it up.', warn: false };
-  if (p.lastError) return warn(p.lastError);
+  if (p.lastError) return warn(said);
   return { text: 'Connecting…', warn: false };
 }
 
@@ -581,7 +584,12 @@ function notReadyMessage(p) {
   // main.js passes its publikState() view, which carries the plain sentence
   // as `problem` (the stored kind fields stay behind in the store).
   const problem = typeof p.problem === 'string' ? p.problem : plainProblem(p);
-  if (problem) return { message: `Setup did not finish. ${problem}`, action: { kind: 'reconnect', label: 'Reconnect' } };
+  // Reconnect marks the key revoked before it mints, so a failed mint after
+  // a Reconnect press is still "Setup did not finish", not "disconnected".
+  const setupFailed = !!(p.lastError && (p.setupFailed || p.lastErrorKind));
+  if (problem && (setupFailed || !(p.revoked || p.disconnected))) {
+    return { message: `Setup did not finish. ${problem}`, action: { kind: 'reconnect', label: 'Reconnect' } };
+  }
   if (p.revoked || p.disconnected) {
     return { message: 'publik is disconnected on this computer. Press Reconnect to set it up again. You need no API key.', action: { kind: 'reconnect', label: 'Reconnect' } };
   }

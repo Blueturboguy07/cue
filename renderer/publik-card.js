@@ -176,7 +176,10 @@
     }
     if (providerReady(settings, p)) return null;
     if (p && p.available) {
-      if (settings.provider === PUBLIK && p.disclosureAccepted && (p.revoked || p.disconnected)) {
+      // Reconnect marks the key revoked before it mints, so a failed mint
+      // after a Reconnect press (p.setupFailed) is still "did not finish".
+      const gone = !!(p.revoked || p.disconnected);
+      if (settings.provider === PUBLIK && p.disclosureAccepted && gone && !p.setupFailed) {
         return { title: 'publik is disconnected', body: 'Reconnect to keep using cue. You need no API key.', primary: { kind: 'reconnect', label: COPY.reconnect }, secondary: null };
       }
       if (settings.provider === PUBLIK && p.disclosureAccepted && p.lastError) {
