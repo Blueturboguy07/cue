@@ -43,7 +43,7 @@ const COPY = {
     intro: 'cue needs an AI model to work. By default it runs on publik API, so you need no key of your own.',
     cost: 'Every request is priced per use at 50% of the model\'s published list price, from your publik balance. A new computer starts at $0.00. Linking this computer to your publik account gives $0.05 of free use, once. Most people spend under $2 a month. You can see every charge in the app and at publikhq.com.',
     dataPath: 'Your prompts, screenshots and, while cue listens, your audio go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time in Settings.',
-    accept: 'Continue with publik API',
+    accept: 'Sign in with publik',
     decline: 'Use my own key instead',
     terms: 'By continuing you agree to the publik API terms.'
   },

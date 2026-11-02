@@ -386,12 +386,15 @@ function createWindow() {
 // only shows when publik is not set up (or its key was revoked) or another
 // provider without an audio key is selected.
 function noTranscriptionMessage(settings) {
-  const tail = 'Screen/LeetCode features work without it.';
+  const tail = 'Screen and coding features work without it.';
   if (settings.provider === publik.PUBLIK_PROVIDER) {
     return `Listening needs publik API to be connected. Set it up or press Reconnect in Settings, or choose Local transcription. ${tail}`;
   }
-  const publikHint = publikBuild.available ? ', switch to publik API' : '';
-  return `No transcription key set. Add an OpenAI (Whisper) or Groq key in Settings${publikHint}, or choose Local transcription to enable listening. ${tail}`;
+  // publik first: it transcribes with no key of the person's own.
+  if (publikBuild.available) {
+    return `Transcription is off. Switch to publik in Settings to transcribe with no API key. You can also pick Local in Settings › Audio, or add an OpenAI or Groq key. ${tail}`;
+  }
+  return `Transcription is off. Pick Local in Settings › Audio to transcribe on this computer with no key, or add an OpenAI or Groq key. ${tail}`;
 }
 
 async function flushChannel(channel) {
@@ -833,7 +836,11 @@ async function runFeature(mode, userText) {
         send('llm:error', { message, action });
         return;
       }
-      send('llm:error', { message });
+      // An own provider with no key, in a build that has publik: point at
+      // publik first, with one button that switches.
+      send('llm:error', publikBuild.available
+        ? { message: `${message} Or switch to publik: cue then runs on your publik balance and needs no API key.`, action: { kind: 'switch' } }
+        : { message });
       return;
     }
     // Never a silent starter (CONTRACT §12.4): the first-run card — balance,

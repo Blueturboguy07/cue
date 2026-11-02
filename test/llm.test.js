@@ -476,10 +476,13 @@ test('publik: cleared model fields fall back to the per-tier aliases', () => {
   assert.equal(createLLM(publikSettings({ smart: true, models: { publik: { fast: '', smart: '' } } })).model, 'publik-balanced');
 });
 
-test('publik: missing key → not ready, "not set up", no request', () => {
+test('publik: missing key → not ready, "Sign in with publik", no request', () => {
   const llm = createLLM(publikSettings({ apiKeys: { publik: '' } }));
   assert.equal(llm.ready, false);
-  assert.match(llm.configurationError, /publik API is not set up/);
+  // The first thing a person reads names publik and its button, never a key to add.
+  assert.match(llm.configurationError, /^Sign in with publik/);
+  assert.match(llm.configurationError, /no API key/);
+  assert.doesNotMatch(llm.configurationError, /Add your|paste/i);
   assert.equal(capturedClientOptions, null);
 });
 

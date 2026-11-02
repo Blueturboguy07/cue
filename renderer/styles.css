@@ -587,6 +587,26 @@ button:focus { outline: none; }
 .ob-buttons button.ob-cta:hover { filter: brightness(1.08); background: var(--accent); }
 .publik-card .s-action.primary { border-color: transparent; background: var(--accent); color: #fff; }
 .publik-card .s-action.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); color: #fff; }
+/* publik first: the card leads the first tab, one big button */
+.publik-lede { color: #fff; font-size: 15px; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; }
+.publik-card .s-action.publik-primary { align-self: stretch; padding: 10px 14px; font-size: 14px; font-weight: 600; border-radius: 10px; }
+.publik-secondary { margin-top: 2px; }
+/* "Use your own API key instead": closed by default at the bottom */
+.byo-section { margin-top: 10px; border-top: 1px solid var(--bd-hair); padding-top: 10px; }
+.byo-section > summary { cursor: pointer; color: var(--tx-2); font-size: 13px; font-weight: 600; list-style: none; }
+.byo-section > summary::-webkit-details-marker { display: none; }
+.byo-section > summary::before { content: '▸ '; color: var(--tx-mut); }
+.byo-section[open] > summary::before { content: '▾ '; }
+.byo-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+/* First-run prompt in the overlay while nothing can answer */
+.setup-cta { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 10px; padding: 14px 16px; border-radius: 14px; border: 1px solid rgba(60,131,245,0.35); background: rgba(60,131,245,0.10); animation: fadeUp 200ms ease both; }
+.setup-title { color: #fff; font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+.setup-body { color: var(--tx-2); font-size: 13.5px; line-height: 1.4; }
+.setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
+.setup-primary { border: none; background: var(--accent); color: #fff; font: 600 14px var(--font); padding: 9px 18px; border-radius: var(--r-pill); cursor: pointer; }
+.setup-primary:hover { filter: brightness(1.08); }
+.setup-secondary { border: none; background: transparent; color: var(--tx-mut); font: 500 12.5px var(--font); padding: 4px 2px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.setup-secondary:hover { color: var(--tx-2); }
 .publik-why { margin: 0; }
 .publik-why summary { cursor: pointer; color: #9dc0ff; font-size: 12px; font-weight: 600; list-style: none; }
 .publik-why summary::-webkit-details-marker { display: none; }
@@ -636,6 +656,7 @@ button:focus { outline: none; }
 .ob-ghost { border: none; background: transparent; color: var(--tx-mut); font-size: 13px; font-weight: 500; cursor: pointer; padding: 8px 10px; border-radius: 8px; }
 .ob-ghost:hover { color: #fff; background: rgba(255,255,255,0.06); }
 .ob-primary { border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; padding: 9px 22px; border-radius: 999px; cursor: pointer; transition: filter 140ms ease; }
+.ob-primary.quiet { background: transparent; color: var(--tx-2); border: 1px solid var(--bd-strong); }
 .ob-primary:hover { filter: brightness(1.08); }
 
 /* ============================ Two-column panel layout ============================ */

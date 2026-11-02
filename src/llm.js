@@ -505,7 +505,7 @@ function createLLM(settings) {
     } catch (error) {
       configurationError = error.message;
     }
-    if (!apiKey) configurationError = `${publik.PROVIDER_LABEL} is not set up on this computer yet.`;
+    if (!apiKey) configurationError = 'Sign in with publik to start. cue runs on your publik balance, so you need no API key.';
   } else if (provider === CUSTOM_PROVIDER) {
     try {
       const clientOptions = createCompatibleClientOptions(apiKey, settings.baseUrl);

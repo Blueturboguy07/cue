@@ -8,7 +8,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const FILES = ['src/publik.js', 'src/llm.js', 'src/store.js', 'main.js', 'renderer/renderer.js', 'renderer/index.html'];
+const FILES = ['src/publik.js', 'src/llm.js', 'src/store.js', 'main.js', 'renderer/renderer.js', 'renderer/index.html', 'renderer/publik-card.js'];
 const FORBIDDEN = [
   /OpenAI API access/i,
   /ChatGPT credits?/i,
@@ -31,7 +31,8 @@ test('the provider is labelled "publik API", never "Custom" or a vendor name', (
   const publik = require('../src/publik');
   assert.equal(publik.PROVIDER_LABEL, 'publik API');
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
-  assert.match(html, /data-provider="publik"[^>]*>publik API/);
+  // Settings opens on a tab named for publik; the brand is lowercase.
+  assert.match(html, /id="s-tab-main"[^>]*>🪙 publik</);
   const { formatProviderErrorMessage } = require('../src/llm');
   const err = Object.assign(new Error('x'), { status: 404 });
   assert.match(String(formatProviderErrorMessage(err, 'publik', 'm').message), /publik API/);

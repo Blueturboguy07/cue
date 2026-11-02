@@ -320,9 +320,16 @@ test('the settings card paints publik:state.status and keeps no status copy of i
   const start = src.indexOf('function renderPublikBlock()');
   assert.ok(start > -1, 'renderPublikBlock not found');
   const body = src.slice(start, src.indexOf('\n  }\n', start));
-  assert.match(body, /p\.status/);
-  assert.doesNotMatch(body, /key was revoked/, 'the revoked copy lives in src/publik.js statusLine()');
-  assert.doesNotMatch(body, /is disconnected\./, 'the disconnected copy lives in src/publik.js statusLine()');
+  // renderPublikBlock paints the card view; the card view takes the revoked
+  // and disconnected sentences from publik:state.status (statusLine).
+  assert.match(body, /cardView\(p, settings\.provider\)/);
+  assert.match(body, /view\.status/);
+  const card = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'publik-card.js'), 'utf8');
+  assert.match(card, /p\.status/);
+  for (const text of [body, card]) {
+    assert.doesNotMatch(text, /key was revoked/, 'the revoked copy lives in src/publik.js statusLine()');
+    assert.doesNotMatch(text, /is disconnected\./, 'the disconnected copy lives in src/publik.js statusLine()');
+  }
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert.match(main, /view\.status = publik\.statusLine\(view\)/);
 });
