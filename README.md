@@ -208,9 +208,17 @@ The panel is see-through and click-through — the empty space around it never b
 
 ---
 
+## Web questions and pages
+
+Type `/search current Node.js LTS release` in Ask anything to answer with fresh web evidence, or `/fetch https://nodejs.org/en/about/previous-releases` to summarize a public page. Cue retrieves evidence through [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp), then streams an answer with source URLs using your selected chat model. This is explicit retrieval followed by an answer, not an autonomous browsing loop.
+
+Parallel is the default web provider and needs no search account or API key. Search uses Fast mode. Set **Settings → Style → Web search → Disabled** to prevent web requests. Ordinary questions and shortcuts do not search. Your chat provider still needs its usual configuration.
+
+Only the text after `/search`, or the URL after `/fetch`, is sent to Parallel, together with an opaque conversation ID. Screen captures, audio, transcript, résumé and meeting memory are excluded from these web commands. Web evidence and the question go to your selected chat provider. **Clear transcript** cancels a pending lookup and starts a new web conversation. A lookup times out after 12 seconds; service limits or errors are shown without silently switching providers. Fetch accepts a single public HTTP(S) URL without embedded credentials; local addresses are unsupported.
+
 ## How it works (under the hood)
 
-cue is an [Electron](https://www.electronjs.org/) app. Everything runs locally except the calls to your chosen AI provider.
+cue is an [Electron](https://www.electronjs.org/) app. Everything runs locally except calls to your chosen AI provider and explicit web lookups through Parallel.
 
 **The three inputs are kept completely separate:**
 - **Screen** — captured with Electron's `desktopCapturer` (full-resolution screenshots, taken only when a feature needs one).
@@ -288,6 +296,7 @@ Run `xattr -cr /Applications/cue.app` in Terminal once (see Install → Option A
 - In Local transcription mode, microphone and meeting audio stay on your computer. In cloud transcription modes, audio is sent only to the selected speech provider.
 - Audio utterances and the current transcript stay in memory; Cue does not write captured audio to disk. Downloaded local model files remain on disk until you delete them.
 - Screenshots are sent to your selected chat provider only when a feature needs the screen.
+- Explicit `/search` queries and `/fetch` URLs go to Parallel; returned web evidence goes to your chat provider. Disable web search in Settings → Style to prevent these lookups.
 
 ## Contributing
 
