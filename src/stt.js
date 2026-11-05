@@ -127,6 +127,64 @@ function retryAfterHeaderMs(e) {
   return s > 0 ? Math.round(s * 1000) : 0;
 }
 
+// A piece that starts at a cut (the talk before it goes on): its prompt is
+// only the end of the text before it, as what was said just before, with
+// the vocabulary left out, and a final "." made a ",". With no context,
+// whisper guessed the first words of the piece ("My lead" -> "MyLED",
+// verify of eee01af). Measured on the verifier's `long` speech (whisper-1,
+// the same audio pieces, 2026-11-05):
+//   - "Who reviewed the fix? My lead reviewed it": vocabulary only "MyLED"
+//     2/2; vocabulary + context "Myled" 5/5 (context before or after the
+//     list); no prompt "Myled"; context only "My lead" 3/3.
+//   - "what interested you about this role,": context ending "team." gave
+//     "What interest did you about this role?" 4/4 (a new question); ending
+//     "team," gave "what interested you" 2/2; with no final mark, wrong.
+// whisper ends every piece as a sentence, so a "." before a cut is most often
+// a comma; "?" and "!" are kept. Short (at most CONTEXT_CHARS, whole words),
+// so the prompt stays small, and it is never the vocabulary list that read
+// back as "CodePipeline" over silence.
+const CONTEXT_CHARS = 160;
+
+function contextTail(context) {
+  const text = String(context || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= CONTEXT_CHARS) return text;
+  const cut = text.slice(-CONTEXT_CHARS);
+  const space = cut.indexOf(' ');
+  return space < 0 ? cut : cut.slice(space + 1);
+}
+
+function promptWithContext(vocabPrompt, context) {
+  const tail = contextTail(context);
+  if (!tail) return vocabPrompt;
+  if (/[?!]["')\]]*$/.test(tail)) return tail;
+  return tail.replace(/[\s.,;:\u2026]+$/, '') + ',';
+}
+
+// whisper sometimes repeats the end of its prompt before the new words; drop
+// such a repeat (3 or more words that end the context) from the start. A
+// text that is only such a repeat is the prompt read back (over silence or
+// noise), not speech: it becomes no text.
+function stripContextEcho(text, context) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  const ctx = contextTail(context).split(/\s+/).filter(Boolean);
+  const norm = (w) => w.toLowerCase().replace(/[^a-z0-9']/g, '');
+  for (let n = Math.min(ctx.length, words.length); n >= 3; n--) {
+    let same = true;
+    for (let i = 0; i < n && same; i++) same = norm(words[i]) === norm(ctx[ctx.length - n + i]) && norm(words[i]) !== '';
+    if (same) return words.slice(n).join(' ');
+  }
+  return String(text || '').trim();
+}
+
+// The text of a piece that starts at a cut is its own turn: when the text
+// before it ended a sentence, it starts with a capital ("describe a
+// situation" after "...about deadlines." and a "," prompt).
+function continuedText(text, context) {
+  if (!text || !/[.?!]["')\]]*$/.test(String(context || '').trim())) return text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** { apiKey, baseURL, model } when publik can transcribe for this person, else null. */
 function publikTranscription(settings) {
   const s = settings || {};
@@ -188,7 +246,11 @@ function createSTT(settings) {
   // person who moved to another provider is never charged on publik for audio.
   const publikStt = publikTranscription(settings);
   if (selectedProvider === 'auto' && publikStt) {
-    chain.push({ p: 'publik', m: publikStt.model, fn: (wav) => transcribeOpenAI(publikStt.apiKey, wav, publikStt.model, publikStt.baseURL, vocabPrompt, PUBLIK_STT_CLIENT) });
+    chain.push({ p: 'publik', m: publikStt.model, fn: async (wav, opts) => {
+      const context = opts && opts.context;
+      const text = await transcribeOpenAI(publikStt.apiKey, wav, publikStt.model, publikStt.baseURL, promptWithContext(vocabPrompt, context), PUBLIK_STT_CLIENT);
+      return context ? continuedText(stripContextEcho(text, context), context) : text;
+    } });
   }
 
   let disabledUntil = 0;
@@ -198,7 +260,9 @@ function createSTT(settings) {
     available: chain.length > 0,
     providers: chain.map((c) => c.p),
     models: chain.map((c) => c.m),
-    async transcribe(pcm) {
+    // opts.context: the text just before this piece when it starts at a cut
+    // (publik only; see promptWithContext).
+    async transcribe(pcm, opts = {}) {
       if (!chain.length || !pcm || pcm.length < 3200) return { text: '' };
       const now = Date.now();
       if (disabledUntil && now < disabledUntil) return { text: '', error: { provider: lastProvider, message: `Temporary ${lastProvider || 'provider'} quota or rate-limit; waiting 30s before retrying.` } };
@@ -206,7 +270,7 @@ function createSTT(settings) {
       let lastErr = null;
       for (const c of chain) {
         try {
-          const text = await c.fn(wav);
+          const text = await c.fn(wav, opts);
           disabledUntil = 0;
           lastProvider = c.p;
           if (looksLikeHallucination(text)) return { text: '', provider: c.p };
@@ -240,4 +304,4 @@ function createSTT(settings) {
   };
 }
 
-module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, PUBLIK_STT_CLIENT, retryAfterHeaderMs, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };
+module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, PUBLIK_STT_CLIENT, retryAfterHeaderMs, promptWithContext, stripContextEcho, continuedText, CONTEXT_CHARS, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };

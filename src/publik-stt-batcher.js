@@ -29,15 +29,25 @@
 //   - It ends at a pause: `pauseMs` of silence once it holds `minMs` of
 //     audio, or `endMs` at any length (a short "Yes." followed by silence).
 //     `tailMs` of the pause is kept.
-//   - Once it holds `softMs`, it is cut at its next gap of `softPauseMs` (a
-//     clause pause).
+//   - Once it holds `softMs`, it is cut at a gap of `softPauseMs` (a clause
+//     pause).
 //   - Its first gap of `softPauseMs` (where a sentence may have ended) waits
-//     at most `softDeadlineMs`: then the utterance is cut at its latest such
-//     gap. So a sentence that ends in quick turns, with no long pause after
-//     it, reaches whisper within about 10 s of its end.
+//     at most `softDeadlineMs`: then the utterance is cut. So a sentence that
+//     ends in quick turns, with no long pause after it, reaches whisper
+//     within about 10 s of its end.
+//   - Which gap (verify of eee01af): the LONGEST gap so far with at least
+//     `minHeadMs` before it (of equal gaps, the later one); with none that
+//     far in, the latest gap. The latest gap was often a comma inside a long
+//     sentence, and whisper changed the words at that cut ("what interested
+//     you about this role," -> "What interest did you about this role?");
+//     a longer gap is more often a sentence end, and 4 s of words before it
+//     give whisper context.
 //   - Such a cut is made only when the speech goes on for `confirmMs` after
 //     the gap. When the sentence ends sooner, it is sent whole: a short tail
 //     ("and what you learned from it.") alone is where whisper invents words.
+//   - A piece that starts at a cut is marked (`continuesCut()`): main.js
+//     sends it with the text before it as whisper context, so its first
+//     words are read in context ("My lead" had become "MyLED").
 //   - It never grows past `maxMs`. At the cap it is cut at the longest gap in
 //     its last `lookbackMs` (else, with no gap at all, at the quietest frame
 //     there). So talk with no gap at all is transcribed within about 15 s.
@@ -70,6 +80,7 @@ const DEFAULTS = {
   softPauseMs: 180,   // a 200 ms gap holds at least 6 whole 30 ms frames
   softDeadlineMs: 6500,
   confirmMs: 1200,    // a cut waits for this much speech after its gap
+  minHeadMs: 4000,    // a piece made by a cut holds at least this much
   maxMs: 14000,       // with ~1 s of whisper time: text within 15 s with no gap at all
   lookbackMs: 5000,
   preRollMs: 210,
@@ -104,6 +115,7 @@ class UtteranceBatcher {
     this.softPauseFrames = Math.max(1, Math.floor(o.softPauseMs / FRAME_MS));
     this.softDeadlineFrames = msToFrames(o.softDeadlineMs);
     this.confirmFrames = Math.max(0, Math.round(o.confirmMs / FRAME_MS));
+    this.minHeadFrames = msToFrames(o.minHeadMs);
     this.maxFrames = msToFrames(o.maxMs);
     this.lookbackFrames = msToFrames(o.lookbackMs);
     this.preRollFrames = msToFrames(o.preRollMs);
@@ -115,6 +127,7 @@ class UtteranceBatcher {
     this.now = o.now || (() => Date.now());
     this.lastSentAt = -Infinity;
     this.retried = new WeakSet(); // pieces already given their one more try
+    this.continued = new WeakSet(); // pieces that start at a cut (the sentence before goes on)
     this.reset();
   }
 
@@ -147,6 +160,7 @@ class UtteranceBatcher {
       let buf = first.buf;
       if (!first.retry) {
         while (this.ready.length && !this.ready[0].retry && buf.length + this.ready[0].buf.length <= this.maxBytes) buf = Buffer.concat([buf, this.ready.shift().buf]);
+        if (buf !== first.buf && this.continued.has(first.buf)) this.continued.add(buf);
       }
       out.push(buf);
     }
@@ -176,9 +190,9 @@ class UtteranceBatcher {
     this.pre = [];          // silent frames before speech (pre-roll)
     this.utter = [];        // frames of the current utterance: { buf, rms, voiced }
     this.trailing = 0;      // silent frames at the end of `utter`
-    this.firstGap = -1;     // index in `utter` where its first clause gap starts
-    this.lastGap = null;    // its latest clause gap: { start, length }
+    this.gaps = [];         // clause gaps in `utter`, oldest first: { start, length }
     this.pendingCut = null; // a cut waiting for confirmFrames: { at, finalAt }
+    this.utterContinues = false; // `utter` starts at a cut, not after a pause
     this.ready = [];        // finished pieces waiting for minGapMs: { buf, retry, notBefore }
     this.levels = new Float32Array(this.floorFrames); // recent frame RMS, for the noise floor
     this.levelCount = 0;
@@ -221,9 +235,9 @@ class UtteranceBatcher {
       this.utter = this.pre.concat(f);
       this.pre = [];
       this.trailing = 0;
-      this.firstGap = -1;
-      this.lastGap = null;
+      this.gaps = [];
       this.pendingCut = null;
+      this.utterContinues = false;
       return;
     }
     this.utter.push(f);
@@ -233,8 +247,8 @@ class UtteranceBatcher {
       if (gap >= this.softPauseFrames) {
         const start = this.utter.length - 1 - gap;
         this._noteGap(start, gap);
-        // A clause gap once the utterance holds softMs: cut in its middle.
-        if (start >= this.softFrames && !this.pendingCut) this._planCut(start, gap);
+        // A clause gap once the utterance holds softMs: time for a cut.
+        if (start >= this.softFrames && !this.pendingCut) this._planCut();
       }
     } else this.trailing++;
 
@@ -249,15 +263,13 @@ class UtteranceBatcher {
       this._emit(this.utter.slice(0, keep));
       this.utter = [];
       this.trailing = 0;
-      this.firstGap = -1;
-      this.lastGap = null;
+      this.gaps = [];
       this.pendingCut = null;
+      this.utterContinues = false;
       this.pre = rest.slice(-this.preRollFrames);
       return;
     }
-    if (!this.pendingCut && this.firstGap >= 0 && len - this.firstGap >= this.softDeadlineFrames) {
-      this._planCut(this.lastGap.start, this.lastGap.length);
-    }
+    if (!this.pendingCut && this.gaps.length && len - this.gaps[0].start >= this.softDeadlineFrames) this._planCut();
     // A planned cut is made once the speech has gone on for confirmFrames
     // after its gap, at a voiced frame (a pause in progress may still turn
     // out to be the end of the sentence).
@@ -268,15 +280,22 @@ class UtteranceBatcher {
     if (len >= this.maxFrames) this._forcedCut();
   }
 
-  // Plan a cut in the middle of the gap at [start, start + length).
-  _planCut(start, length) {
-    this.pendingCut = { at: start + Math.floor(length / 2), finalAt: start + length + this.confirmFrames };
+  // Plan a cut in the middle of the best clause gap so far: the longest one
+  // that leaves at least minHeadMs before it (the most likely end of a
+  // sentence, so a cut seldom splits one), the latest of equals; with none
+  // that far in, the latest gap. Every gap so far is at or after the first
+  // one, so the latency bound of the deadline holds whichever is taken.
+  _planCut() {
+    let best = null;
+    for (const g of this.gaps) if (g.start >= this.minHeadFrames && (!best || g.length >= best.length)) best = g;
+    if (!best) best = this.gaps[this.gaps.length - 1];
+    if (!best) return;
+    this.pendingCut = { at: best.start + Math.floor(best.length / 2), finalAt: best.start + best.length + this.confirmFrames };
   }
 
   _noteGap(start, length) {
     if (start <= 0) return; // silence before any speech is not a gap
-    if (this.firstGap < 0) this.firstGap = start;
-    this.lastGap = { start, length };
+    this.gaps.push({ start, length });
   }
 
   // Send utter[0, cut) and hold the rest as the start of the next utterance.
@@ -287,9 +306,9 @@ class UtteranceBatcher {
     const held = this.utter.slice(cut);
     this._emit(this.utter.slice(0, cut));
     this.utter = held;
+    this.utterContinues = true;
     // Find the clause gaps and the trailing silence again in what is held.
-    this.firstGap = -1;
-    this.lastGap = null;
+    this.gaps = [];
     let run = 0;
     let seenVoice = false;
     for (let i = 0; i < held.length; i++) {
@@ -328,7 +347,20 @@ class UtteranceBatcher {
   _emit(frames) {
     const voiced = frames.filter((f) => f.voiced).length;
     if (voiced < this.minSpeechFrames) return; // a click, not speech
-    this.ready.push({ buf: Buffer.concat(frames.map((f) => f.buf)), retry: false, notBefore: 0 });
+    const buf = Buffer.concat(frames.map((f) => f.buf));
+    if (this.utterContinues) this.continued.add(buf);
+    this.ready.push({ buf, retry: false, notBefore: 0 });
+  }
+
+  /** True when `pcm` (a piece this batcher returned) starts at a cut: the
+   *  text before it belongs to the same sentence, so whisper is given it. */
+  continuesCut(pcm) {
+    return Boolean(pcm) && this.continued.has(pcm);
+  }
+
+  /** True when `pcm` was already given its one more try. */
+  wasRetried(pcm) {
+    return Boolean(pcm) && this.retried.has(pcm);
   }
 
   _release() {
@@ -341,6 +373,7 @@ class UtteranceBatcher {
     let out = first.buf;
     if (!first.retry) {
       while (this.ready.length && !this.ready[0].retry && out.length + this.ready[0].buf.length <= this.maxBytes) out = Buffer.concat([out, this.ready.shift().buf]);
+      if (out !== first.buf && this.continued.has(first.buf)) this.continued.add(out);
     }
     this.lastSentAt = t;
     return out;
