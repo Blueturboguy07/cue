@@ -2,7 +2,7 @@
 
 # cue
 
-**An open-source AI copilot that floats over your screen — sees what you see, hears your meetings, and stays hidden from screen shares.**
+**An open-source AI copilot that floats over your screen — sees what you see, hears your meetings, and offers screen-share privacy controls.**
 
 A free, self-hosted alternative to Cluely. Bring your own AI key (OpenAI · Anthropic · Google Gemini · Azure AI Foundry . OpenAI-compatible endpoints).
 
@@ -13,7 +13,7 @@ A free, self-hosted alternative to Cluely. Bring your own AI key (OpenAI · Anth
 ---
 
 > [!IMPORTANT]
-> **Please read this first.** cue tries to stay out of screen recordings/shares, but this is **best-effort, not guaranteed** — on macOS 15.4+ Apple can let modern capture tools see it anyway, on Windows 10 builds older than 2004 it degrades to a black box instead of true exclusion, and a phone camera always can. Using a hidden assistant during a **proctored exam, job interview, or recorded meeting** may break that platform's rules and, in some places, consent laws. cue is built for legitimate uses — your own notes, studying, accessibility, and practice. **You are responsible for how you use it.**
+> **Please read this first.** Capture exclusion is **best-effort, not guaranteed**. The persistent privacy notice reports whether Cue requested protection, disabled it, could not support it, or encountered an error. A successful OS request does not verify what another person receives. Protection is skipped on Linux, older Windows builds, and remote or unknown Windows sessions. Native dialogs, OS privacy indicators, external browser windows and physical cameras are separate surfaces. Verify the received share with your actual setup, and use Cue only where permitted.
 
 ---
 
@@ -30,7 +30,7 @@ cue floats a small glass panel on top of everything. It takes **three separate i
 | **Solve a coding problem** | `⌘` `H` (macOS) or `Ctrl` `H` (Windows) | your screen only |
 | **Smart** toggle | pill in the box | switches to a smarter (slower) model |
 
-It's a copilot for **live meetings** ("what do I say to that?") and **coding problems** (screenshot → full solution), and it's designed to be **invisible in screen shares** so it stays your private assistant.
+It's a copilot for **live meetings** ("what do I say to that?") and **coding problems** (screenshot → full solution), with explicit capture, sharing-status and privacy-pause controls.
 
 ### Platform support
 
@@ -39,7 +39,7 @@ It's a copilot for **live meetings** ("what do I say to that?") and **coding pro
 | Screen + coding help | ✅ | ✅ |
 | Your mic (the **You** channel) | ✅ | ✅ |
 | Meeting audio (the **Them** channel) | ✅ macOS 14.4+ | ✅ |
-| Hidden from screen shares | ⚠️ best-effort, weaker on macOS 15.4+ | ✅ `WDA_EXCLUDEFROMCAPTURE` |
+| Capture exclusion | ⚠️ requested, receiver unverified | ⚠️ requested only in supported local console sessions; receiver unverified |
 | Permissions to grant | Microphone **and** Screen Recording | Microphone only |
 
 > [!NOTE]
@@ -184,15 +184,11 @@ Ending a session stops input capture, invalidates pending media/model starts, an
 
 In **Settings**, paste your résumé or professional background into **Résumé / professional background**. cue uses it as the factual reference for career-related answers and says when the résumé does not provide a detail. You can clear it anytime.
 
-### Step 3 — The Zoom setting (only needed for Zoom)
+### Step 3 — Verify the received screen share
 
-cue is hidden from most screen-share tools automatically — **Google Meet, Microsoft Teams, and QuickTime need nothing.** **Zoom** has a specific setting that decides whether it respects cue's "don't capture me" flag:
+Check Cue's persistent protection notice before showing sensitive content. Verify the actual feed on a separate receiving device for the sharing application and mode you use. Sender previews and Cue's own screenshots do not establish receiver exclusion.
 
-> **Zoom → Settings → Share Screen → Advanced → Screen capture mode → choose "Advanced capture with window filtering."**
-
-<div align="center"><img src="docs/zoom-setting.png" width="560" alt="Zoom screen capture mode setting" /></div>
-
-**Why:** the *"...with window filtering"* modes tell Zoom to leave out windows that mark themselves as private — which is exactly what cue does. The **"Advanced capture without window filtering"** mode grabs the raw screen and **will show cue**, so avoid it.
+For Zoom configurations that offer **Advanced capture with window filtering**, filtering can affect which windows appear. That setting does not certify Cue's exclusion. Meet, Teams, QuickTime and other capture paths also require their own validation. See [capture-platform-research.md](docs/capture-platform-research.md) for the audit's limits and receiver matrix.
 
 ---
 
@@ -206,7 +202,7 @@ cue is hidden from most screen-share tools automatically — **Google Meet, Micr
 - **Start session / End session** (top bar) — start or stop **listening** to a meeting. The green dot means it's live.
 - **Type a question** in the box and press `↵` to ask about your screen or conversation.
 - **Smart** — flip it on for a smarter, more thorough model; off for fast and cheap.
-- **Hide** collapses the panel to just the top bar. Drag cue around by the **top pill**. Quit with `⌘` `⇧` `X` on macOS or `Ctrl` `Shift` `X` on Windows.
+- **Collapse / Expand** changes only the panel layout. **Hide window** hides owned windows while listening and requests continue; restore with **Ctrl/⌘ + Shift + Space**. Hide is disabled if that shortcut cannot be registered. **Privacy pause** stops capture, pending starts, active provider work, automatic notes and model downloads, and hides owned windows when recovery is available. Restore brings back the UI while it remains paused; press **Resume** explicitly, then start listening again when ready. The pause setting persists across restart. Cancellation cannot retract data already delivered to a provider. Drag cue around by the **top pill**. Quit with `⌘` `⇧` `X` on macOS or `Ctrl` `Shift` `X` on Windows.
 
 The panel is see-through and click-through — the empty space around it never blocks the app behind it.
 
@@ -225,12 +221,13 @@ Both audio streams are transcribed by the independently selected speech provider
 
 When Local transcription is selected, Cue runs one persistent `whisper-server` sidecar bound to `127.0.0.1` on a temporary port with a random request path. Voice activity detection creates bounded in-memory utterances with pre-roll, and both channels share a serialized inference queue because one Whisper context must not process concurrent requests. Stop immediately ends new audio capture, drains the current queue for a bounded period, then terminates the sidecar.
 
-**The invisibility** is a single window flag — `setContentProtection(true)` — which the OS enforces:
+**Capture exclusion** uses `setContentProtection(true)` for supported windows. Both the main and permissions windows start hidden; the same policy is applied before loading, and each window waits for its privacy notice before first show. Navigation and new-window requests from these renderers are denied.
 
-- **macOS:** sets `NSWindowSharingNone`, asking the window server to exclude cue from capture streams. On macOS 15.4+ Apple lets some capture tools ignore it, which is why it's best-effort (see the disclaimer at the top).
-- **Windows:** sets `WDA_EXCLUDEFROMCAPTURE` via `SetWindowDisplayAffinity`, and the compositor drops the window from every capture path. Windows 10 builds before 2004 fall back to `WDA_MONITOR`, which renders a black box rather than truly excluding.
+- **macOS:** Cue requests exclusion, but modern capture backends can ignore it.
+- **Windows:** Cue requests exclusion on build 19041+ only when `SESSIONNAME` is exactly `Console`. Older, remote and unknown sessions skip the request; Cue does not claim a black-box fallback there.
+- **Linux:** the request is unsupported and the notice says so.
 
-It's the same mechanism DRM apps and Zoom's own toolbar use. It is **not** a GPU trick or a special overlay layer. Set `CUE_NO_PROTECT=1` to disable it while debugging.
+`CUE_NO_PROTECT=1` (also `true`, `yes`, or `on`, case-insensitive) explicitly disables the request and remains visible in the notice. `0`, `false`, `no`, and `off` do not disable it. No state is labelled receiver-verified. Privacy pause also denies integration prompts without bringing a hidden window or a native fallback dialog forward.
 
 ```
 main process ──┬─ overlay window (frameless, transparent, always-on-top, content-protected)

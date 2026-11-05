@@ -22,6 +22,21 @@ Validation: `npm test` passes **382/382 tests**, including the existing local-so
 
 This is partial remediation of F04/F06, not an application-wide local-only policy or a complete privacy pause. Explicitly enabled automatic notes can start after End session. Cancellation cannot retract already delivered requests. Capture-backend and receiver behavior remain unverified. F01–F03, integration revocation (F10), outbound HTTPS/local-only enforcement (F08/F06), storage and IPC hardening remain open. The next group should address protection state, hidden window construction, owned secondary windows, and a distinct privacy pause.
 
+## Implementation update — 2026-11-02, increment 2
+
+Implemented the next four controls:
+
+1. **F01 — Truthful protection status:** one window-policy owner records `requested`, `disabled`, `unsupported`, or `error` with bounded reason codes. Debug overrides are parsed explicitly; `CUE_NO_PROTECT=0` no longer disables the request. Linux, older Windows builds, remote/unknown Windows sessions and API errors stay distinct. Every state reports `verified:false`. Both pages have a persistent notice, and README capture guarantees have been corrected.
+2. **F02/F03 — Shared hidden startup:** both constructors use `show:false`. Protection and navigation/popup restrictions are installed before loading. A window is shown only after load completion and acknowledgement that its privacy notice is ready. Per-load tokens reject stale acknowledgements across reload/crash, including while deliberately hidden. Recreated windows get their own state. OS-owned dialogs, indicators and external browser surfaces remain outside this policy.
+3. **F04 — Collapse and Hide:** Collapse/Expand describes the existing layout action. Hide window is separate and leaves listening running. Ctrl/⌘+Shift+Space hides/restores owned windows; hiding is disabled if recovery cannot be registered. Passive startup/consent handling cannot undo a deliberate Hide.
+4. **F04/F06 — Privacy pause:** a main-process gate blocks new capture and feature requests before cancelling active work. Pause aborts pending capture/model starts, chat, STT, slides, notes, gateway requests and model downloads; it suppresses notes and queued retries. Integrations cannot prompt or obtain slide captions across the pause boundary, and outstanding consent handlers are removed. Paused state persists through settings and requires explicit Resume; restoring the UI never restarts listening or cancelled requests. If recovery is unavailable, Pause still stops work and leaves the controls visible. A settings-write failure cannot prevent runtime cancellation.
+
+Regression coverage includes both owned-window lifecycles, the platform/override/error matrix, stale readiness and initialization responses, rejected IPC senders/subframes, a 1,000-reload hidden-window stress loop, pause/restore/resume races, note suppression, pending consent, active downloads, and cancellation during gateway response-body reads. All fixtures are synthetic; no meeting content or real credentials are sent to providers.
+
+Validation: `npm test` passes **420/420 tests** with local socket access, including all 382 tests from the first increment. JavaScript syntax checks, `git diff --check`, and the existing microphone double-start harness pass. These checks exercise application policy and lifecycle behavior, not receiver-side capture exclusion.
+
+Strict sharing mode, a safe dedicated surface for choosing whether to continue without protection, integration-session revocation (F10), application-wide outbound/local-only policy, storage migration and broader IPC/sandbox hardening remain open. This increment does not certify capture exclusion or local-only behavior. Live receiver capture and production egress validation have not been performed. Already delivered requests cannot be retracted.
+
 ## Scope and confidence
 
 Reviewed the main process, preload bridge, renderer windows and audio lifecycle, screen/slide capture, chat and speech-provider routing, meeting persistence, Publik provisioning, AppLink transport/consent/diagnostics, Whisper sidecar/downloads, packaging identity and relevant build/debug workflows. Searched first-party runtime code for additional network, capture, notification, clipboard, process, storage, and navigation surfaces.

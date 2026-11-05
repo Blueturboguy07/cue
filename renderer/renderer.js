@@ -558,7 +558,7 @@
     const btn = $('#hide-btn');
     btn.classList.toggle('collapsed', collapsed);
     const label = btn.querySelector('.tb-hide-label');
-    const text = collapsed ? 'Show' : 'Hide';
+    const text = collapsed ? 'Expand' : 'Collapse';
     if (label) label.textContent = text;
     btn.title = text;
     btn.setAttribute('aria-label', text);
@@ -1059,6 +1059,13 @@
   }
 
   // ---- events from main --------------------------------------------------
+  cue.on('privacy:state', ({ paused }) => {
+    if (!paused) return;
+    captureRequest++;
+    captureDesired = false;
+    setSessionButton(false);
+    stopMic(); stopSystemAudio();
+  });
   cue.on('meeting-audio:state', ({ enabled }) => {
     if (settings) settings.meetingAudio = enabled;
     if (!enabled) stopSystemAudio();
@@ -1870,7 +1877,7 @@
     // The window trails the cursor while dragging; going click-through then would drop the release.
     if (draggingWindow) return;
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#privacy-notice, #toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
@@ -1910,6 +1917,11 @@
     consentScrim.classList.add('hidden');
   }
 
+  cue.on('applink:consent-cancelled', ({ id }) => {
+    if (pendingConsentId !== id) return;
+    pendingConsentId = null;
+    consentScrim.classList.add('hidden');
+  });
   cue.on('applink:consent-request', (request) => {
     pendingConsentId = request.id;
     $('#cs-title').textContent = request.message;
@@ -2142,6 +2154,6 @@
       setSessionButton(captureDesired);
       if (st.active) { startMic(); startSystemAudio(); }
     }
-    if (!settings.onboarded) showOnboard();
+    if (!settings.onboarded && !settings.privacyPaused) showOnboard();
   })();
 })();

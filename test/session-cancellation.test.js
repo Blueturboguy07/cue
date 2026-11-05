@@ -195,7 +195,7 @@ for (const event of ['did-start-loading', 'render-process-gone', 'closed']) {
       BrowserWindow: Window,
       screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
     } });
-    vm.runInContext('createWindow();', h.context);
+    vm.runInContext('win = null; createWindow();', h.context);
     await h.setCapturing(true);
     const signal = h.captureController.signal;
     callbacks.get(event)({}, { reason: 'synthetic-crash' });

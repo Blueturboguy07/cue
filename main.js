@@ -4,6 +4,7 @@ const os = require('os');
 const store = require('./src/store');
 const { createCaptureController } = require('./src/capture-controller');
 const { abortable } = require('./src/abort');
+const { createWindowPrivacy } = require('./src/window-privacy');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
 const { parseDocumentFile } = require('./src/resume');
@@ -72,30 +73,21 @@ function getWindowsBuild() {
   return parts[2] || 0; // third segment is the build number
 }
 const WIN_BUILD = getWindowsBuild();
-const WIN_SUPPORTS_CONTENT_PROTECTION = !isWindows || WIN_BUILD >= 19041;
+const WIN_SUPPORTS_CONTENT_PROTECTION = isWindows && WIN_BUILD >= 19041;
 
-// WDA_EXCLUDEFROMCAPTURE (win.setContentProtection(true)) is documented to
-// exclude a window's content from third-party capture surfaces (BitBlt,
-// PrintWindow, DXGI Desktop Duplication, screen recording / screen share)
-// WITHOUT touching the live composited image on an ordinary, physically
-// scanned-out desktop session — the user still sees the window fine. But on
-// a Windows session whose own visible surface is ITSELF a remoted or
-// composited pipeline — a Remote Desktop (RDP) connection, a Windows 365 /
-// Cloud PC session, most VM consoles, a CI runner's virtual desktop — the
-// same flag has been observed to make the window render nothing at all, to
-// the user as much as to any capture tool (see
-// cue-windows-overlay-not-visible-for-mic-grant: PrintWindow(PW_RENDERFULLCONTENT)
-// sampled zero color variance, and a full-desktop screenshot showed the
-// always-on-top window occluding nothing, only ever reproduced with
-// protection on and never with it off). Windows sets the SESSIONNAME
-// environment variable to exactly "Console" for a locally-attached
-// interactive session; every remoted session gets a different value
-// (e.g. "RDP-Tcp#3"), and a non-interactive/service context has none at
-// all. Anything other than a confirmed local console session is treated as
-// unsafe to protect: a window the user can see (even if a screen-share
-// viewer also could) is strictly better than a window that is invisible to
-// everyone, including the user trying to grant it microphone access.
-const WIN_IS_LOCAL_CONSOLE_SESSION = !isWindows || process.env.SESSIONNAME === 'Console';
+// Preserve the conservative remote-session behavior: applying protection in
+// these sessions previously made Cue invisible to the local user too.
+const windowPrivacy = createWindowPrivacy({
+  platform: process.platform, winBuild: WIN_BUILD,
+  sessionName: process.env.SESSIONNAME, noProtect: process.env.CUE_NO_PROTECT
+});
+let privacyEpoch = new AbortController();
+let privacyTransition = Promise.resolve();
+let privacyRevision = 0;
+if (store.getSettings().privacyPaused === true) {
+  windowPrivacy.setPaused(true);
+  privacyEpoch.abort();
+}
 
 let permWin = null;
 // Windows never blocks startup on an unresolved permission (see app.whenReady()
@@ -132,9 +124,11 @@ const RMS_GATE = 180;
 let flushTimer = null;
 let whisperModelManager = null;
 let localWhisperTranscriber = null;
+let stoppingWhisperTranscriber = null;
 let activeWhisperModelId = null;
 const captureController = createCaptureController({ start: startCapturing, stop: stopCapturing });
 function setCapturing(active) {
+  if (active === true && windowPrivacy.paused) return Promise.resolve(false);
   if (active === false) cancelFeature();
   return captureController.set(active);
 }
@@ -187,7 +181,74 @@ function pushTranscript(turn) {
   return true;
 }
 
-function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
+function send(channel, data) {
+  if (win && !win.isDestroyed()) { try { win.webContents.send(channel, data); } catch (_) {} }
+}
+
+function requireOwnedWindow(event) {
+  const owned = [win, permWin].find((window) => window && !window.isDestroyed() && window.webContents === event?.sender);
+  if (!owned || ('senderFrame' in event && event.senderFrame !== owned.webContents.mainFrame)) {
+    throw new Error('This action requires a Cue window.');
+  }
+  return owned;
+}
+
+function requireUnpaused() {
+  if (windowPrivacy.paused) throw new Error('Privacy pause is active. Resume explicitly to continue.');
+}
+
+function pauseSession() {
+  ++privacyRevision;
+  if (windowPrivacy.paused) return privacyTransition;
+  windowPrivacy.setPaused(true);
+  privacyEpoch.abort();
+  meetingMemory?.cancelNotes();
+  stoppingWhisperTranscriber?.forceStop().catch(() => {});
+  cancelFeature();
+  cancelBatch('you'); cancelBatch('them');
+  stopSlideLoop(); stopFlushLoop(); stopStreamingSTT();
+  clearTimeout(publikWalletTimer);
+  privacyTransition = setCapturing(false).catch(() => {});
+  send('capture:state', { active: false, streaming: false, mode: 'off' });
+  windowPrivacy.hide();
+  if (whisperModelManager?.activeDownload) {
+    try { whisperModelManager.cancelDownload(whisperModelManager.activeDownload.modelId); } catch (_) {}
+  }
+  try { store.setSettings({ privacyPaused: true }); } catch (_) {}
+  return privacyTransition;
+}
+
+async function resumeSession() {
+  if (!windowPrivacy.paused) return;
+  const revision = ++privacyRevision;
+  await privacyTransition;
+  if (revision !== privacyRevision) return;
+  privacyEpoch = new AbortController();
+  try { store.setSettings({ privacyPaused: false }); } catch (_) {}
+  windowPrivacy.setPaused(false);
+  windowPrivacy.restore();
+}
+
+ipcMain.handle('privacy:state', (event) => {
+  requireOwnedWindow(event);
+  return windowPrivacy.info(event.sender);
+});
+ipcMain.on('window:ready', (event, token) => {
+  try { requireOwnedWindow(event); } catch (_) { return; }
+  windowPrivacy.ready(event.sender, token);
+});
+ipcMain.handle('window:hide', (event) => {
+  requireOwnedWindow(event);
+  if (!windowPrivacy.hide()) throw new Error('The restore shortcut is unavailable; Cue will stay visible.');
+});
+ipcMain.handle('privacy:pause', async (event) => {
+  requireOwnedWindow(event);
+  await pauseSession();
+});
+ipcMain.handle('privacy:resume', async (event) => {
+  requireOwnedWindow(event);
+  await resumeSession();
+});
 
 function getWhisperRuntime() {
   return locateWhisperRuntime({
@@ -201,6 +262,7 @@ function getWhisperRuntime() {
 }
 
 function publishTranscript(channel, text) {
+  if (windowPrivacy.paused) return;
   if (!text || !text.trim()) return;
   const turn = { channel, text: text.trim(), ts: Date.now() };
   if (!pushTranscript(turn)) return;
@@ -286,6 +348,7 @@ function saveWindowPosition() {
 }
 
 function createWindow() {
+  if (win && !win.isDestroyed()) { windowPrivacy.show(win); return; }
   const { workArea } = screen.getPrimaryDisplay();
   const W = SIDE_W + MAIN_W + SIDE_W, H = 600;
 
@@ -304,6 +367,7 @@ function createWindow() {
   }
 
   const winOptions = {
+    show: false,
     width: W,
     height: H,
     x: startX - SIDE_W,
@@ -341,29 +405,9 @@ function createWindow() {
   }
 
   win = new BrowserWindow(winOptions);
+  const ownedWindow = win;
 
-  // Fix 2: Only call setContentProtection if the OS supports it, and only on
-  // a session where it will not blank the window out for the user themself
-  // (see WIN_IS_LOCAL_CONSOLE_SESSION above — RDP/VM/Cloud-PC-style sessions
-  // render a WDA_EXCLUDEFROMCAPTURE window fully invisible, not just hidden
-  // from capture). On older builds, or a non-local-console Windows session,
-  // we skip it silently and send a warning to the renderer instead.
-  const shouldProtect = !process.env.CUE_NO_PROTECT && WIN_IS_LOCAL_CONSOLE_SESSION;
-  if (shouldProtect) {
-    if (isLinux) {
-      // setContentProtection has no effect on Linux (no windowing-system-level
-      // capture-exclusion primitive it can map to) — skip the no-op call and
-      // say so, rather than pretending the window is hidden from screen shares.
-      console.log('[cue] Running on Linux: native screen protection (setContentProtection) is not supported and has been skipped.');
-    } else if (WIN_SUPPORTS_CONTENT_PROTECTION) {
-      win.setContentProtection(true);
-    } else {
-      // Will notify the renderer after it loads
-      console.log(`[cue] Windows build ${WIN_BUILD} < 19041 — setContentProtection not supported. Window may appear in screen shares.`);
-    }
-  } else if (isWindows && !WIN_IS_LOCAL_CONSOLE_SESSION && !process.env.CUE_NO_PROTECT) {
-    console.log(`[cue] Windows session is not a local console session (SESSIONNAME=${process.env.SESSIONNAME}) — skipping setContentProtection so the window stays visible to you. Window may appear in screen shares.`);
-  }
+  windowPrivacy.register(win, 'main');
 
   win.setAlwaysOnTop(true, 'screen-saver', 1);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -380,7 +424,6 @@ function createWindow() {
   win.setTitle('Microsoft Edge Update'); // set before load
 
   win.webContents.on('did-finish-load', () => {
-    win.showInactive();
     win.setTitle('Microsoft Edge Update');
     if (restoredTurns.length) {
       // A meeting was in progress when cue last exited: put its transcript back
@@ -391,19 +434,6 @@ function createWindow() {
       const ageMin = Math.max(1, Math.round((Date.now() - turns[turns.length - 1].ts) / 60000));
       send('status', { message: `Resumed your meeting from ${ageMin} min ago (${turns.length} turns restored).` });
     }
-    // Warn about missing content protection on old Windows builds
-    if (isWindows && shouldProtect && !WIN_SUPPORTS_CONTENT_PROTECTION) {
-      send('status', {
-        message: `Heads up: your Windows version (build ${WIN_BUILD}) does not support screen-share hiding. Upgrade to Windows 10 build 19041+ or Windows 11 to enable invisibility in screen shares.`
-      });
-    }
-    // Warn when protection was skipped because this is not a local console
-    // session (RDP / Cloud PC / VM console) — see WIN_IS_LOCAL_CONSOLE_SESSION.
-    if (isWindows && !process.env.CUE_NO_PROTECT && !WIN_IS_LOCAL_CONSOLE_SESSION) {
-      send('status', {
-        message: 'Heads up: screen-share hiding is off for this session (remote desktop / cloud PC / VM sessions can render the window invisible to you as well when it is on). The window will be visible in screen shares here.'
-      });
-    }
   });
   win.webContents.on('render-process-gone', (_e, d) => {
     setCapturing(false).catch(() => {});
@@ -411,7 +441,10 @@ function createWindow() {
     recordEvent({ level: 'fatal', event: 'renderer_gone', code: d && d.reason, msg: 'renderer process ended: ' + JSON.stringify(d), frame: 'BrowserWindow' });
   });
   win.webContents.on('did-start-loading', () => { setCapturing(false).catch(() => {}); });
-  win.on('closed', () => { setCapturing(false).catch(() => {}); });
+  win.on('closed', () => {
+    if (win === ownedWindow) win = null;
+    setCapturing(false).catch(() => {});
+  });
 }
 
 // -------- STT flushing (batch mode fallback) --------
@@ -728,6 +761,7 @@ function routeAudio(channel, pcmBuffer) {
 // and use cue's own Screen-Recording grant — no separate helper binary to authorize.
 async function startCapturing(signal) {
   signal.throwIfAborted();
+  if (windowPrivacy.paused) return false;
   sttDisabled = false; // reset on re-enable
   const settings = store.getSettings();
   if ((settings.sttProvider || 'auto') === 'local') {
@@ -790,7 +824,7 @@ async function stopCapturing() {
     meetingMemory.cancelNotes();
     // Write/refresh the notes for this meeting in the background so the
     // summary survives even if cue is closed before the meeting formally ends.
-    meetingMemory.refreshNotes().then((notes) => {
+    if (!windowPrivacy.paused) meetingMemory.refreshNotes().then((notes) => {
       if (notes) send('status', { message: `Meeting notes saved (${transcript.length} turns).` });
     }).catch(() => {});
   }
@@ -800,15 +834,17 @@ async function stopCapturing() {
   ringBuffers.you.clear(); ringBuffers.them.clear();
   const stoppingLocalTranscriber = localWhisperTranscriber;
   localWhisperTranscriber = null;
+  stoppingWhisperTranscriber = stoppingLocalTranscriber;
   send('capture:state', { active: false, streaming: false, mode: stoppingLocalTranscriber ? 'local' : 'off' });
   if (stoppingLocalTranscriber) {
     send('stt:status', { provider: 'local', status: 'stopping' });
     try {
-      if (wasCapturing) await stoppingLocalTranscriber.stop();
+      if (wasCapturing && !windowPrivacy.paused) await stoppingLocalTranscriber.stop();
       else await stoppingLocalTranscriber.forceStop();
     } catch (error) {
       console.log('[local-whisper] stop error', error && error.message);
     } finally {
+      if (stoppingWhisperTranscriber === stoppingLocalTranscriber) stoppingWhisperTranscriber = null;
       activeWhisperModelId = null;
     }
   }
@@ -817,6 +853,7 @@ async function stopCapturing() {
 
 // -------- feature runner --------
 async function runFeature(mode, userText) {
+  if (windowPrivacy.paused) return;
   if (state.busy) return;
   const def = MODES[mode];
   if (!def) return;
@@ -1008,13 +1045,17 @@ function publikState() {
 function publikPush() { send('publik:state', publikState()); }
 
 async function publikProvision() {
+  if (windowPrivacy.paused) return publikState();
+  const signal = privacyEpoch.signal;
   if (publikProvisioning) return publikProvisioning;
   publikProvisioning = publik.provisionInstall({
     build: publikBuild,
     store,
     device: publikDevice(),
+    signal,
     log: (e) => recordEvent({ level: e.level, event: e.event, msg: e.msg, frame: 'publikProvision', context: e.context || {} })
   }).then((r) => {
+    if (signal.aborted) return publikState();
     if (r.ok && r.minted) store.setPublik({ disconnected: false });
     publikPush();
     return publikState();
@@ -1046,15 +1087,19 @@ function publikNoteHeaders(headers) {
 }
 
 async function publikRefreshWallet() {
+  if (windowPrivacy.paused) return publikState();
+  const signal = privacyEpoch.signal;
   const s = store.getSettings();
   if (!s.apiKeys.publik) return publikState();
   try {
-    const w = await publik.fetchWallet({ baseUrl: s.publik.baseUrl || publikBuild.baseUrl, apiKey: s.apiKeys.publik });
+    const w = await publik.fetchWallet({ baseUrl: s.publik.baseUrl || publikBuild.baseUrl, apiKey: s.apiKeys.publik, signal });
+    signal.throwIfAborted();
     store.setPublik({
       wallet: w, balanceMicros: w.balanceMicros, balanceAt: Date.now(), claimState: w.claimState,
       claimUrl: w.claimUrl || (w.claimState === 'claimed' ? '' : s.publik.claimUrl), revoked: false, disconnected: false, lastError: ''
     });
   } catch (e) {
+    if (signal.aborted) return publikState();
     if (e.status === 401) publikHandleRevoked(e);
     else recordEvent({ level: 'warn', event: 'publik_wallet_failed', msg: e.message, frame: 'publikRefreshWallet', context: { status: e.status || null } });
   }
@@ -1062,6 +1107,7 @@ async function publikRefreshWallet() {
   return publikState();
 }
 function publikScheduleWalletRefresh() {
+  if (windowPrivacy.paused) return;
   clearTimeout(publikWalletTimer);
   publikWalletTimer = setTimeout(() => { publikRefreshWallet().catch(() => {}); }, 1500);
 }
@@ -1086,12 +1132,14 @@ ipcMain.handle('publik:state', () => publikState());
 ipcMain.handle('publik:accept-disclosure', async () => {
   // Consent precedes mint: this is the only path that calls POST /installs
   // for a fresh install. It also selects publik if the user had moved away.
+  requireUnpaused();
   if (!publikBuild.available) return publikState();
   store.setPublik({ disclosureAccepted: publikBuild.disclosureVersion });
   store.setSettings({ provider: publik.PUBLIK_PROVIDER });
   return publikProvision();
 });
 ipcMain.handle('publik:reconnect', async () => {
+  requireUnpaused();
   const s = store.getSettings();
   if (!s.publik.disclosureAccepted) return publikState();
   if (s.apiKeys.publik && !s.publik.revoked) return publikRefreshWallet();
@@ -1101,8 +1149,9 @@ ipcMain.handle('publik:reconnect', async () => {
 ipcMain.handle('publik:refresh', () => publikRefreshWallet());
 ipcMain.handle('publik:disconnect', async () => {
   const s = store.getSettings();
-  if (s.apiKeys.publik) {
-    try { await publik.revokeInstall({ baseUrl: s.publik.baseUrl || publikBuild.baseUrl, apiKey: s.apiKeys.publik }); } catch (e) { /* the key is dropped locally regardless */ }
+  if (s.apiKeys.publik && !windowPrivacy.paused) {
+    const signal = privacyEpoch.signal;
+    try { await publik.revokeInstall({ baseUrl: s.publik.baseUrl || publikBuild.baseUrl, apiKey: s.apiKeys.publik, signal }); } catch (e) { /* the key is dropped locally regardless */ }
   }
   store.setPublik({ apiKey: '', keyId: '', revoked: false, disconnected: true, balanceMicros: null, wallet: null, lastError: '' });
   publikPush();
@@ -1120,16 +1169,18 @@ ipcMain.handle('publik:card-seen', () => {
 // only. A link off that origin is dropped (the stored claim link stands in
 // when it is safe); nothing else is ever handed to the system browser.
 ipcMain.on('publik:open', (_e, url) => {
+  if (windowPrivacy.paused) return;
   const s = store.getSettings();
   const target = publik.resolveOpenTarget(url, s.publik.claimUrl);
   if (!target) { recordEvent({ level: 'warn', event: 'publik_open_dropped', msg: '', frame: 'publik:open', context: {} }); return; }
   shell.openExternal(target).catch(() => {});
 });
 ipcMain.handle('capture:set', (_event, active) => setCapturing(active));
-ipcMain.handle('capture:toggle', () => captureController.toggle());
+ipcMain.handle('capture:toggle', () => setCapturing(!captureController.desired));
 ipcMain.handle('capture:state', () => ({ active: state.capturing, desired: captureController.desired }));
 ipcMain.handle('whisper:models', () => getWhisperOverview());
 ipcMain.handle('whisper:model-download', async (_event, modelId) => {
+  requireUnpaused();
   if (!whisperModelManager) throw new Error('The local Whisper model manager is not ready.');
   const result = await whisperModelManager.download(modelId, (progress) => send('whisper:download-progress', progress));
   send('whisper:models-changed', { modelId });
@@ -1149,6 +1200,8 @@ ipcMain.handle('whisper:model-delete', async (_event, modelId) => {
   return result;
 });
 ipcMain.handle('whisper:model-import', async (_event, modelId) => {
+  requireUnpaused();
+  const signal = privacyEpoch.signal;
   if (!whisperModelManager) throw new Error('The local Whisper model manager is not ready.');
   requireWhisperModel(modelId);
   if (activeWhisperModelId === modelId) {
@@ -1159,6 +1212,7 @@ ipcMain.handle('whisper:model-import', async (_event, modelId) => {
     properties: ['openFile'],
     filters: [{ name: 'whisper.cpp model', extensions: ['bin'] }]
   });
+  signal.throwIfAborted();
   if (selection.canceled || !selection.filePaths[0]) return { cancelled: true };
   const result = await whisperModelManager.importModel(modelId, selection.filePaths[0]);
   send('whisper:models-changed', { modelId });
@@ -1167,7 +1221,8 @@ ipcMain.handle('whisper:model-import', async (_event, modelId) => {
 ipcMain.handle('platform:info', () => ({
   platform: process.platform,
   winBuild: WIN_BUILD,
-  winSupportsContentProtection: WIN_SUPPORTS_CONTENT_PROTECTION
+  winSupportsContentProtection: WIN_SUPPORTS_CONTENT_PROTECTION,
+  protection: windowPrivacy.info(win?.webContents).protection
 }));
 ipcMain.handle('transcript:clear', () => {
   if (meetingMemory) {
@@ -1220,7 +1275,7 @@ function stopWindowDrag() {
   clearInterval(windowDrag);
   windowDrag = null;
 }
-ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
+ipcMain.on('open-pane', (_e, url) => { if (windowPrivacy.paused) return; shell.openExternal(url).catch(() => {}); });
 ipcMain.on('app:quit', () => app.quit());
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // -------- resume / job-description file import --------
@@ -1228,13 +1283,17 @@ ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 // The parsed text is RETURNED to the renderer, which drops it into the existing
 // #resume-text / #job-description textareas so settings keep a single source of truth.
 async function pickAndParseDocument() {
+  requireUnpaused();
+  const signal = privacyEpoch.signal;
   const res = await dialog.showOpenDialog(win, {
     properties: ['openFile'],
     filters: [{ name: 'Resume / Job description', extensions: ['pdf', 'docx'] }]
   });
+  signal.throwIfAborted();
   if (res.canceled || !res.filePaths.length) return null;
   const filePath = res.filePaths[0];
   const text = await parseDocumentFile(filePath);
+  signal.throwIfAborted();
   return { fileName: path.basename(filePath), text };
 }
 ipcMain.handle('profile:pickDocument', async () => {
@@ -1273,12 +1332,22 @@ function registerShortcuts() {
   shortcutState.assist = globalShortcut.register('CommandOrControl+Shift+Return', () => runFeature('assist', ''));
   shortcutState.leetcode = globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
   shortcutState.hide = globalShortcut.register('CommandOrControl+Shift+/', () => send('hide:toggle', {}));
+  registerRestoreShortcut();
   shortcutState.quit = globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
   for (const [name, wasRegistered] of Object.entries(shortcutState)) {
     if (!wasRegistered) {
       recordEvent({ level: 'warn', event: 'shortcut_unavailable', msg: 'another application holds the ' + name + ' shortcut', frame: 'registerShortcuts', context: { shortcut: name } });
     }
   }
+}
+
+function registerRestoreShortcut() {
+  if (shortcutState.restore) return;
+  shortcutState.restore = globalShortcut.register('CommandOrControl+Shift+Space', () => {
+    if (windowPrivacy.hidden) windowPrivacy.restore();
+    else windowPrivacy.hide();
+  });
+  windowPrivacy.setRecoverable(shortcutState.restore);
 }
 
 // -------- permissions --------
@@ -1289,6 +1358,7 @@ function registerShortcuts() {
 // non-zero pixel data, macOS is giving us real screen content, i.e. granted.
 async function verifyScreenAccess() {
   const sysStatus = systemPreferences.getMediaAccessStatus('screen');
+  if (windowPrivacy.paused) return sysStatus;
   if (sysStatus === 'granted') return 'granted';
 
   // Fallback: try an actual capture and check the thumbnail for real pixels.
@@ -1323,6 +1393,7 @@ async function getPermissionStatus() {
 }
 
 async function requestPermissions() {
+  requireUnpaused();
   if (process.platform !== 'darwin' && process.platform !== 'win32') return true;
 
   if (process.platform === 'darwin') {
@@ -1349,9 +1420,11 @@ async function requestPermissions() {
 }
 
 function createPermissionsWindow() {
+  if (permWin && !permWin.isDestroyed()) { windowPrivacy.show(permWin); return; }
   const { workArea } = screen.getPrimaryDisplay();
   const W = 500, H = 540;
   permWin = new BrowserWindow({
+    show: false,
     width: W,
     height: H,
     x: Math.round(workArea.x + (workArea.width - W) / 2),
@@ -1369,8 +1442,10 @@ function createPermissionsWindow() {
       sandbox: false,
     }
   });
+  windowPrivacy.register(permWin, 'permissions');
+  const permissionsWindow = permWin;
+  permWin.on('closed', () => { if (permWin === permissionsWindow) permWin = null; });
   permWin.loadFile(path.join(__dirname, 'renderer', 'permissions.html'));
-  permWin.webContents.on('did-finish-load', () => permWin.show());
 }
 
 // -------- launch (called after permissions are confirmed) --------
@@ -1381,7 +1456,7 @@ function launchApp() {
     // and bring the existing main window forward instead of building a second
     // one on top of it.
     if (permWin && !permWin.isDestroyed()) { permWin.close(); permWin = null; }
-    if (win && !win.isDestroyed()) { win.showInactive(); }
+    if (win && !win.isDestroyed()) { windowPrivacy.show(win); }
     return;
   }
   appLaunched = true;
@@ -1400,14 +1475,14 @@ function launchApp() {
   meetingMemory = createMeetingMemory({
     store: createMeetingStore({ file: path.join(app.getPath('userData'), 'meetings.json'), debounceMs: 1500 }),
     llmFactory: () => createLLM(store.getSettings()),
-    getNotesDestination: () => notesDestination(store.getSettings()),
+    getNotesDestination: () => windowPrivacy.paused ? null : notesDestination(store.getSettings()),
     log: (msg) => console.log('[meetings]', msg)
   });
   restoredTurns = meetingMemory.resumeOpen();
   if (restoredTurns.length) transcript.push(...restoredTurns.slice(-MAX_TRANSCRIPT_TURNS));
   meetingMemory.catchUp().then((n) => { if (n) console.log(`[meetings] wrote notes for ${n} earlier meeting(s)`); }).catch(() => {});
 
-  const allowMedia = (permission) => permission === 'media' || permission === 'microphone' || permission === 'audioCapture' || permission === 'display-capture' || permission === 'screen';
+  const allowMedia = (permission) => !windowPrivacy.paused && ['media', 'microphone', 'audioCapture', 'display-capture', 'screen'].includes(permission);
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowMedia(permission)));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowMedia(permission));
 
@@ -1466,6 +1541,8 @@ function launchApp() {
     // Looked up rather than captured: the window is recreated on 'activate',
     // so a reference taken at startup goes stale.
     getWindow: () => win,
+    canPrompt: () => windowPrivacy.canPrompt(win),
+    privacySignal: () => privacyEpoch.signal,
   });
 
   createWindow();
@@ -1474,9 +1551,16 @@ function launchApp() {
 
 // -------- lifecycle --------
 app.whenReady().then(async () => {
+  registerRestoreShortcut();
   app.setName('MicrosoftEdgeUpdate');
   if (isWindows) {
     process.title = 'MicrosoftEdgeUpdate';
+  }
+
+  if (windowPrivacy.paused) {
+    launchApp();
+    app.on('activate', () => windowPrivacy.restore());
+    return;
   }
 
   if (isMac) {
@@ -1502,12 +1586,14 @@ app.whenReady().then(async () => {
   }
 
   launchApp();
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); windowPrivacy.restore(); });
 });
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
-  const quittingTranscriber = localWhisperTranscriber;
+  privacyEpoch.abort();
+  clearTimeout(publikWalletTimer);
+  const quittingTranscriber = localWhisperTranscriber || stoppingWhisperTranscriber;
   // Keep the meeting open for an explicit, consented resumption.
   meetingMemory?.cancelNotes();
   if (meetingMemory) meetingMemory.flush();

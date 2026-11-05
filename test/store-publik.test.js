@@ -188,3 +188,11 @@ test('a failed save is reported via lastSaveError instead of being silently swal
   assert.ok(store.lastSaveError());
   assert.match(String(store.lastSaveError().message), /ENOENT/);
 });
+
+test('privacy pause persists, and renderer settings cannot silently resume it', () => {
+  const { store, dir } = loadStore();
+  store.setSettings({ privacyPaused: true });
+  const reopened = openStoreAt(dir).store;
+  assert.equal(reopened.getSettings().privacyPaused, true);
+  assert.deepEqual(reopened.stripRendererPatch({ privacyPaused: false, opacity: 0.7 }), { opacity: 0.7 });
+});

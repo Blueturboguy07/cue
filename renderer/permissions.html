@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
   <title>cue — Permissions</title>
+  <link rel="stylesheet" href="privacy.css" />
   <style>
     :root {
       --accent: #3C83F5;
@@ -184,6 +185,7 @@
 <body>
   <div id="perm-root">
     <div class="perm-card">
+      <div id="privacy-notice" class="privacy-notice" role="status">Checking screen-share protection…</div>
       <div class="perm-icon">🔐</div>
       <div class="perm-title">cue needs your permission</div>
       <div class="perm-desc">
@@ -312,5 +314,6 @@
       checkPermissions();
     })();
   </script>
+  <script src="privacy.js"></script>
 </body>
 </html>

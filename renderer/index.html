@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
   <title>cue</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="privacy.css" />
 </head>
 <body>
   <div id="app">
@@ -17,12 +18,14 @@
       <button class="tb-logo" id="logo-btn" title="How to use cue" aria-label="How to use cue"></button>
       <button class="tb-settings" id="tb-settings-btn" title="Settings" aria-label="Settings"></button>
       <div class="tb-divider"></div>
-      <button class="tb-hide" id="hide-btn" title="Hide" aria-label="Hide"><span class="chev"></span><span class="tb-hide-label">Hide</span></button>
+      <button class="tb-hide" id="hide-btn" title="Collapse" aria-label="Collapse"><span class="chev"></span><span class="tb-hide-label">Collapse</span></button>
       <div class="tb-divider"></div>
       <button class="tb-stop" id="stop-btn" title="Start session" aria-label="Start session">
         <span class="ic"></span><span class="tb-stop-label">Start session</span>
       </button>
       <div class="tb-divider"></div>
+      <button class="tb-hide" id="window-hide-btn" title="Hide window; restore with Ctrl/⌘+Shift+Space">Hide window</button>
+      <button class="tb-stop" id="pause-btn" title="Stop capture and requests; resume explicitly">Privacy pause</button>
       <div class="tb-opacity-wrap">
         <button class="tb-opacity" id="opacity-btn" title="Opacity" aria-label="Opacity" aria-expanded="false">
           <span class="ic"></span>
@@ -38,6 +41,8 @@
       <div class="tb-divider"></div>
       <button class="tb-quit" id="quit-btn" title="Quit cue" aria-label="Quit cue"></button>
     </div>
+
+    <div id="privacy-notice" class="privacy-notice" role="status">Checking screen-share protection…</div>
 
     <!-- Main assistant panel -->
     <div id="panel-wrap">
@@ -338,5 +343,6 @@
 
   <script src="icons.js"></script>
   <script src="renderer.js"></script>
+  <script src="privacy.js"></script>
 </body>
 </html>

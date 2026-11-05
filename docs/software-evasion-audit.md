@@ -1,6 +1,6 @@
 # Software Evasion Audit: Cue (v0.2.5)
 
-> Implementation update (2026-10-31): the first group of five changes follows the source-confirmed privacy priorities in [off-device-privacy-audit.md](off-device-privacy-audit.md#implementation-update--2026-10-31-increment-1): audio consent, capture lifecycle cleanup, shared session transitions, request cancellation, and recipient-bound opt-in notes. The historical percentages and platform detection claims below are estimates, not measured protection guarantees; this increment does not validate them. See the privacy audit for remaining work and receiver-test requirements.
+> Implementation update (2026-11-02): two groups of privacy controls are implemented. The second adds truthful protection status, shared hidden startup, distinct Collapse/Hide controls and an explicit privacy pause. See [off-device-privacy-audit.md](off-device-privacy-audit.md#implementation-update--2026-11-02-increment-2) for code-level results and remaining work. The historical percentages and detection claims below are estimates, not measured guarantees; these changes do not validate them.
 
 Based on an audit of the current codebase (`cue`, version 0.2.5), the project is architected as an **out-of-process, passive AI teleprompter/overlay** (Era 5 in the evasion timeline).
 

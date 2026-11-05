@@ -281,7 +281,7 @@ test('an obsolete Stop reply cannot stop a newer integration activation', async 
 test('a stale startup snapshot cannot revive input after a Stop event', async () => {
   const h = buttonHarness(), snapshot = deferred();
   h.context.cue.captureState = () => snapshot.promise;
-  const code = source.slice(source.indexOf('    const stateRequest = captureRequest;'), source.indexOf('    if (!settings.onboarded) showOnboard();'));
+  const code = source.slice(source.indexOf('    const stateRequest = captureRequest;'), source.indexOf('    if (!settings.onboarded'));
   const pending = vm.runInContext('(async () => {\n' + code + '\n})()', h.context);
   h.events.get('capture:state')({ active: false });
   snapshot.resolve({ active: true, desired: true });
