@@ -55,8 +55,18 @@
 //     as the start of the next utterance: no word is cut off and none is
 //     sent twice.
 //   - Fewer than `minSpeechMs` of voiced frames (a click) is dropped.
-//   - One channel sends at most one request per `minGapMs`; utterances that
-//     wait are merged (up to `maxMs`) and sent together.
+//   - One channel sends at most one request per `minGapMs`, and none while
+//     its last request is in flight; main.js still feeds the audio in
+//     (`feed()`) while it waits, so the pauses are found as they happen.
+//     Pieces that wait are joined (up to `maxMs`) where one goes on from a
+//     cut in the one before it: that is one stretch of talk. A piece after
+//     a pause goes alone, in order (0.2.12 smoke: a quiet "Right." or "No."
+//     after a 2 s pause, joined to the sentence before it while a slow
+//     request was in flight, was dropped by whisper). Only when the channel
+//     is behind (the first waiting piece has waited `catchUpMs`) do the
+//     pieces after it go with it, so the text catches up when whisper stays
+//     slow; even then a short reply (less than `shortReplyMs` of voiced
+//     frames) is never joined to another piece.
 //   - A piece whose request failed for a passing reason (busy, server error,
 //     timeout) can be queued once more with `retry()`; it goes out first,
 //     alone, after its delay.
@@ -87,6 +97,8 @@ const DEFAULTS = {
   tailMs: 300,
   minSpeechMs: 120,   // "No." spoken quietly; a click is under 100 ms
   minGapMs: 2500,
+  catchUpMs: 3000,     // a piece that waited this long takes the pieces after it along
+  shortReplyMs: 700,   // "No.", "Right.", "Okay." (300-600 ms voiced): always alone
   tickMs: 900         // a window with no audio at all counts as this much silence
 };
 const DEFAULT_MAX_MS = DEFAULTS.maxMs;
@@ -124,6 +136,8 @@ class UtteranceBatcher {
     this.tickFrames = msToFrames(o.tickMs);
     this.maxBytes = this.maxFrames * FRAME_BYTES;
     this.minGapMs = o.minGapMs;
+    this.catchUpMs = o.catchUpMs;
+    this.shortReplyFrames = msToFrames(o.shortReplyMs);
     this.now = o.now || (() => Date.now());
     this.lastSentAt = -Infinity;
     this.retried = new WeakSet(); // pieces already given their one more try
@@ -143,6 +157,15 @@ class UtteranceBatcher {
   }
 
   /**
+   * One flush tick while this channel's request is still in flight: the
+   * window goes into the segmenter now, so each pause is found where it
+   * is; nothing is released.
+   */
+  feed(pcm) {
+    this._take(pcm);
+  }
+
+  /**
    * The session stopped: `pcm` is the audio that arrived since the last
    * tick (or null). Ends the utterance in progress and returns everything
    * held, oldest first, as pieces of at most `maxMs` (no wait for
@@ -156,15 +179,7 @@ class UtteranceBatcher {
       this._emit(this.utter.slice(0, keep));
     }
     const out = [];
-    while (this.ready.length) {
-      const first = this.ready.shift();
-      let buf = first.buf;
-      if (!first.retry) {
-        while (this.ready.length && !this.ready[0].retry && buf.length + this.ready[0].buf.length <= this.maxBytes) buf = Buffer.concat([buf, this.ready.shift().buf]);
-        if (buf !== first.buf && this.continued.has(first.buf)) this.continued.add(buf);
-      }
-      out.push(buf);
-    }
+    while (this.ready.length) out.push(this._next());
     this.reset();
     return out;
   }
@@ -196,7 +211,7 @@ class UtteranceBatcher {
     this.gaps = [];         // clause gaps in `utter`, oldest first: { start, length }
     this.pendingCut = null; // a cut waiting for confirmFrames: { at, finalAt }
     this.utterContinues = false; // `utter` starts at a cut, not after a pause
-    this.ready = [];        // finished pieces waiting for minGapMs: { buf, retry, notBefore }
+    this.ready = [];        // finished pieces waiting for minGapMs: { buf, retry, notBefore, at, voiced }
     this.levels = new Float32Array(this.floorFrames); // recent frame RMS, for the noise floor
     this.levelCount = 0;
   }
@@ -352,7 +367,7 @@ class UtteranceBatcher {
     if (voiced < this.minSpeechFrames) return; // a click, not speech
     const buf = Buffer.concat(frames.map((f) => f.buf));
     if (this.utterContinues) this.continued.add(buf);
-    this.ready.push({ buf, retry: false, notBefore: 0 });
+    this.ready.push({ buf, retry: false, notBefore: 0, at: this.now(), voiced });
   }
 
   /** True when `pcm` (a piece this batcher returned) starts at a cut: the
@@ -378,13 +393,34 @@ class UtteranceBatcher {
     if (t - this.lastSentAt < this.minGapMs) return null;
     const first = this.ready[0];
     if (first.retry && t < first.notBefore) return null; // keeps the order: nothing passes it
-    this.ready.shift();
-    let out = first.buf;
-    if (!first.retry) {
-      while (this.ready.length && !this.ready[0].retry && out.length + this.ready[0].buf.length <= this.maxBytes) out = Buffer.concat([out, this.ready.shift().buf]);
-      if (out !== first.buf && this.continued.has(first.buf)) this.continued.add(out);
-    }
     this.lastSentAt = t;
+    return this._next();
+  }
+
+  // The first waiting piece, with the pieces that go on from a cut in it
+  // (one stretch of talk, up to maxBytes). A retry goes alone. A piece
+  // after a pause waits for its own request, unless the channel is behind:
+  // then it goes with the piece before it, if neither is a short reply.
+  _next() {
+    const first = this.ready.shift();
+    if (first.retry) return first.buf;
+    const behind = this.now() - first.at >= this.catchUpMs;
+    const short = (piece) => piece.voiced < this.shortReplyFrames;
+    const parts = [first.buf];
+    let bytes = first.buf.length;
+    let last = first;
+    while (this.ready.length) {
+      const next = this.ready[0];
+      if (next.retry || bytes + next.buf.length > this.maxBytes) break;
+      if (!this.continued.has(next.buf) && (!behind || short(last) || short(next))) break;
+      this.ready.shift();
+      parts.push(next.buf);
+      bytes += next.buf.length;
+      last = next;
+    }
+    if (parts.length === 1) return first.buf;
+    const out = Buffer.concat(parts);
+    if (this.continued.has(first.buf)) this.continued.add(out);
     return out;
   }
 }

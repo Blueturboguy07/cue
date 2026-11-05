@@ -126,7 +126,7 @@ test('3: Stop, then Start before the text came back: the text is kept (transcrip
   assert.ok(h.events.indexOf('turn: the old last words') < h.events.indexOf('notes'), 'in the notes');
   assert.equal(h.requests.length, 1, 'the held piece is not sent in the new session');
   assert.equal(h.notices.length, 1);
-  assert.match(h.notices[0], /^The last \d+ s before Stop were not transcribed \(a new session started first\)\.$/);
+  assert.match(h.notices[0], /^The last \d+ s before Stop were not transcribed because a new session started first\.$/);
 });
 
 test('3: when the new session shows text first, the old text that comes back later is not shown (the order holds); the notice gives the reason', async () => {
@@ -140,5 +140,5 @@ test('3: when the new session shows text first, the old text that comes back lat
   await done;
   assert.deepEqual(h.turns.map((x) => x.text), ['new words']);
   assert.equal(h.notices.length, 1);
-  assert.match(h.notices[0], /^The last \d+ s before Stop were not transcribed \(a new session started first\)\.$/);
+  assert.match(h.notices[0], /^The last \d+ s before Stop were not transcribed because a new session started first\.$/);
 });

@@ -165,7 +165,7 @@ test('N2: when the one more try fails too, a notice says the last words were not
   await done;
   assert.equal(h.requests.length, 3);
   assert.equal(h.notices.length, 1);
-  assert.match(h.notices[0], /^The last \d+ s before Stop were not transcribed \(publik answered 503\)\.$/);
+  assert.match(h.notices[0], /^The last \d+ s before Stop were not transcribed because publik API had a server error\.$/);
   assert.deepEqual(h.events.slice(-2), [`status: ${h.notices[0]}`, 'notes']);
   h.start();
   S.reseed(74);
@@ -189,7 +189,7 @@ test('N3: 429 with Retry-After 15 s just before Stop, then a plain 429: the stop
   assert.ok(h.requests[2].at - h.requests[1].at >= 5000, 'after a plain 429 the next request waits 5 s');
   assert.deepEqual(h.turns.map((x) => x.text), ['the held sentence'], 'the last words are transcribed');
   assert.equal(h.notices.length, 1);
-  assert.match(h.notices[0], /^The last \d+ s before Stop were not transcribed \(publik answered 429\)\.$/);
+  assert.match(h.notices[0], /^The last \d+ s before Stop were not transcribed because publik API was busy\.$/);
   assert.ok(!h.notices.some((n) => /waiting 30s/.test(n)), 'no "waiting 30s before retrying" while nothing waits');
   assert.equal(h.events[h.events.length - 1], 'notes');
 });

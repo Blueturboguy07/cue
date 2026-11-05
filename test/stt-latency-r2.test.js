@@ -185,7 +185,7 @@ test('main.js: a second failure of the same piece is said once ("not transcribed
   await h.feed(Buffer.concat([S.pause(900), S.speech(3000), S.pause(2700)]), { thenTicks: 10 });
   assert.equal(h.requests.length, 2);
   assert.equal(h.notices.length, 1);
-  assert.match(h.notices[0], /^\d+ s of the meeting were not transcribed \(publik answered 429\)\. Listening goes on\.$/);
+  assert.match(h.notices[0], /^\d+ s of the meeting were not transcribed because publik API was busy. Listening goes on\.$/);
   S.reseed(9);
   await h.feed(Buffer.concat([S.speech(3000), S.pause(2700)]), { thenTicks: 4 });
   assert.equal(h.requests.length, 3, 'the next sentence is sent');
@@ -209,7 +209,8 @@ test('main.js: at the stop, the sentence still being spoken is sent as a final p
   const src = readSource('main.js');
   const stop = src.slice(src.indexOf('  state.capturing = false;\n  stopFlushLoop();'));
   assert.ok(stop.indexOf('sendHeldAudio(takeHeldAudio())') > -1 && stop.indexOf('sendHeldAudio(takeHeldAudio())') < stop.indexOf('publikSttBatchers.you.reset()'), 'taken before the reset');
-  assert.match(stop, /lastWords\.then\(\(\) => memory\.refreshNotes\(\)\)/, 'the notes wait for the last words');
+  assert.match(stop, /notesAfterStop\(meetingMemory, lastWords\)/);
+  assert.match(src, /function notesAfterStop\(memory, lastWords\) \{\n  const stop = \+\+notesStatusFor;\n  return lastWords\.then\(\(\) => memory\.refreshNotes\(\)\)/, 'the notes wait for the last words');
 });
 
 test('stt.js: publik transcription answers within 30 s or fails (no 10 min hang), with no SDK retries; Retry-After is read', () => {

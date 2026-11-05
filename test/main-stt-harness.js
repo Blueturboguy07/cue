@@ -18,7 +18,7 @@ const settle = async () => { for (let i = 0; i < 3; i++) await new Promise((r) =
 
 // By name, so the same tests also run on an older main.js (one without
 // startSttSession) to show what they catch there.
-const NAMES = ['flushChannel', 'isPassingSttError', 'sttRetryDelayMs', 'lostAudioMessage', 'reportLostAudio',
+const NAMES = ['flushChannel', 'isPassingSttError', 'sttRetryDelayMs', 'lostAudioReason', 'lostAudioMessage', 'reportLostAudio',
   'transcribePiece', 'startSttSession', 'takeHeldAudio', 'sendHeldAudio'];
 function fnByName(src, name) {
   const m = new RegExp(`^(async )?function ${name}\\(.*$`, 'm').exec(src);
