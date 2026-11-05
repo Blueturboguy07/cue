@@ -8,6 +8,7 @@ const { createSTT } = require('./src/stt');
 const { UtteranceBatcher } = require('./src/publik-stt-batcher');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM, normalizeProviderName } = require('./src/llm');
+const { giveUpTimer } = require('./src/give-up');
 const { checkOwnKey } = require('./src/own-key-check');
 const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
@@ -585,10 +586,9 @@ async function captionSlide(imageDataUrl, transcriptSlice) {
   const settings = store.getSettings();
   const llm = createLLM(settings);
   if (!llm.ready) throw new Error(llm.configurationError || 'Complete the provider settings.');
-  let watchdog = null;
-  const stalled = new Promise((_res, reject) => {
-    watchdog = setTimeout(() => reject(new Error('slide caption timed out')), STREAM_INACTIVITY_MS);
-  });
+  // A fixed 25 s total limit (never re-armed). When it gives up, the request
+  // is cancelled too, so a long think is not billed for a caption nobody sees.
+  const guard = giveUpTimer(STREAM_INACTIVITY_MS, 'slide caption timed out');
   try {
     return await Promise.race([
       llm.stream({
@@ -599,12 +599,13 @@ async function captionSlide(imageDataUrl, transcriptSlice) {
         // A caption cut at the cap is trimmed and ends with "…", never with
         // the chat answer's "(Cut off: …)" note.
         lengthCut: 'ellipsis',
+        signal: guard.signal,
         onToken: () => {}
       }),
-      stalled
+      guard.expired
     ]);
   } finally {
-    clearTimeout(watchdog);
+    guard.clear();
   }
 }
 
@@ -898,15 +899,10 @@ async function runFeature(mode, userText) {
 
     // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
     // leaving state.busy = true and wedging every later question until an app restart.
-    let watchdog = null;
-    let rearm = () => {};
-    const stalled = new Promise((_res, reject) => {
-      rearm = () => {
-        clearTimeout(watchdog);
-        watchdog = setTimeout(() => reject(new Error('the model stopped responding (timed out). Please try again.')), STREAM_INACTIVITY_MS);
-      };
-      rearm();
-    });
+    // When it gives up, the HTTP request is cancelled too (guard.signal), so the
+    // provider stops generating and billing an answer cue no longer shows.
+    const guard = giveUpTimer(STREAM_INACTIVITY_MS, 'the model stopped responding (timed out). Please try again.');
+    const rearm = guard.rearm;
     // A reasoning model streams its thinking before any text: that is
     // activity too, so a long think is not called a stalled stream. While it
     // only thinks, the renderer shows "Thinking…" (never the reasoning text).
@@ -930,13 +926,14 @@ async function runFeature(mode, userText) {
           imageDataUrl,
           onToken: (t) => { if (streamSettled) return; answerStarted = true; rearm(); send('llm:token', { text: t }); },
           onActivity: noteActivity,
+          signal: guard.signal,
           onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined
         }),
-        stalled
+        guard.expired
       ]);
     } finally {
       streamSettled = true;
-      clearTimeout(watchdog);
+      guard.clear();
     }
     send('llm:done', {});
     // The own key answered: it is not bad (any more).

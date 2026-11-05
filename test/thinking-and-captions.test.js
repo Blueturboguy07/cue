@@ -7,8 +7,6 @@
 //    the chat answer's "(Cut off: …)" note. The 25 s total timer stays.
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const fs = require('fs');
-const path = require('path');
 const vm = require('vm');
 const Module = require('node:module');
 
@@ -28,10 +26,10 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
 test.after(() => { Module._load = originalModuleLoad; });
 
 const { createLLM } = require('../src/llm');
-const root = path.join(__dirname, '..');
-const mainSrc = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-const rendererSrc = fs.readFileSync(path.join(root, 'renderer', 'renderer.js'), 'utf8');
-const preloadSrc = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
+const { readSource, fnFrom } = require('./source-text'); // CRLF-safe (Windows checkouts)
+const mainSrc = readSource('main.js');
+const rendererSrc = readSource('renderer/renderer.js');
+const preloadSrc = readSource('preload.js');
 
 const settings = {
   provider: 'publik', smart: false,
@@ -45,15 +43,6 @@ const finish = (reason) => ({ choices: [{ delta: {}, finish_reason: reason }] })
 const IMAGE = 'data:image/jpeg;base64,AAAA';
 
 test.beforeEach(() => { created = null; chunks = [text('ok'), finish('stop')]; });
-
-function fnFrom(src, head) {
-  const start = src.indexOf(head);
-  assert.ok(start > -1, `${head} not found`);
-  const indent = head.match(/^\s*/)[0];
-  const end = src.indexOf(`\n${indent}}\n`, start);
-  assert.ok(end > -1, `end of ${head} not found`);
-  return src.slice(start, end + indent.length + 3);
-}
 
 // ---- 1. "Thinking…" ---------------------------------------------------------
 
@@ -157,7 +146,7 @@ test('renderer: llm:thinking shows the placeholder and keeps the busy failsafe a
   assert.ok(start > -1, 'llm:thinking handler not found');
   const handler = rendererSrc.slice(start, rendererSrc.indexOf("cue.on('", start + 10));
   assert.match(handler, /showThinking\(\);/);
-  assert.match(handler, /if \(busy\) setBusy\(true\);/);
+  assert.match(handler, /onAnswerActivity\(\);/);
 });
 
 // ---- 2. slide captions ------------------------------------------------------
@@ -168,7 +157,8 @@ test('a slide caption cut at its cap is trimmed and ends with "…", with no cut
   const caption = await createLLM(settings).stream({ system: 's', turns: [{ role: 'user', text: 'q' }], imageDataUrl: IMAGE, maxTokens: 300, lengthCut: 'ellipsis', onToken: (t) => got.push(t) });
   assert.equal(caption, 'Q3 revenue grew 12%…');
   assert.ok(!got.join('').includes('Cut off'));
-  assert.equal(created.max_tokens, 300 + 2048);
+  assert.equal(created.model, 'publik-balanced');
+  assert.equal(created.max_tokens, 300 + 4096);
 });
 
 test('a whole slide caption is unchanged', async () => {
@@ -181,6 +171,6 @@ test('main: captionSlide asks for the "…" cut and keeps its fixed 25 s total t
   const fn = fnFrom(mainSrc, 'async function captionSlide(imageDataUrl, transcriptSlice) {');
   assert.match(fn, /lengthCut: 'ellipsis',/);
   assert.match(fn, /maxTokens: 300,/);
-  assert.match(fn, /setTimeout\(\(\) => reject\(new Error\('slide caption timed out'\)\), STREAM_INACTIVITY_MS\)/);
-  assert.ok(!/onActivity/.test(fn), 'the caption timer is a total limit: nothing re-arms it');
+  assert.match(fn, /giveUpTimer\(STREAM_INACTIVITY_MS, 'slide caption timed out'\)/);
+  assert.ok(!/onActivity|rearm/.test(fn), 'the caption timer is a total limit: nothing re-arms it');
 });

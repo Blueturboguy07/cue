@@ -7,8 +7,6 @@
 // and cue showed a blank bubble or "timed out" after 25 s.
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const fs = require('fs');
-const path = require('path');
 const Module = require('node:module');
 
 let created = null;     // the request cue sent
@@ -27,7 +25,7 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
 test.after(() => { Module._load = originalModuleLoad; });
 
 const { createLLM } = require('../src/llm');
-const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+const mainSrc = require('./source-text').readSource('main.js'); // CRLF-safe (Windows checkouts)
 
 const PUBLIK_KEY = 'pk_test_abcdefghijkl_abcdefghijklmnopqrstuvwxyz012345';
 function publikSettings(overrides = {}) {
@@ -62,10 +60,10 @@ test('publik fast tier: the 700-token answer budget gets 2,048 tokens of thinkin
   assert.equal(created.max_tokens, 700 + 2048);
 });
 
-test('publik fast tier with a screenshot (publik-balanced): the same room, so a screen answer is not all thinking', async () => {
+test('publik fast tier with a screenshot (publik-balanced): 4,096 of thinking room, so a screen answer is not all thinking', async () => {
   await ask(publikSettings(), { imageDataUrl: IMAGE });
   assert.equal(created.model, 'publik-balanced');
-  assert.equal(created.max_tokens, 700 + 2048);
+  assert.equal(created.max_tokens, 700 + 4096);
 });
 
 test('publik Smart: 1,400 visible tokens plus 4,096 of thinking room', async () => {
@@ -76,7 +74,7 @@ test('publik Smart: 1,400 visible tokens plus 4,096 of thinking room', async () 
 
 test('publik slide caption: its own 300-token budget also gets the thinking room', async () => {
   await ask(publikSettings(), { imageDataUrl: IMAGE, maxTokens: 300 });
-  assert.equal(created.max_tokens, 300 + 2048);
+  assert.equal(created.max_tokens, 300 + 4096);
 });
 
 test('an own OpenAI key keeps its cap: the headroom is for publik\'s reasoning tiers only', async () => {

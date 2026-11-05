@@ -146,9 +146,20 @@
     busy = v;
     $('#send-btn').classList.toggle('busy', v);
     clearTimeout(busyFailsafe);
-    // Failsafe: main has a 25s stream watchdog that always sends llm:done/llm:error, but if a
-    // terminal event is ever lost the whole UI stays frozen — self-clear after a generous window.
-    if (v) busyFailsafe = setTimeout(() => { busy = false; $('#send-btn').classList.toggle('busy', false); }, 40000);
+    if (v) armBusyFailsafe();
+  }
+
+  // Failsafe: main has a 25s stream watchdog that always sends llm:done/llm:error, but if a
+  // terminal event is ever lost the whole UI stays frozen — self-clear after a generous window.
+  // The window counts from the last sign of life (thinking or answer text), so a long answer
+  // that is still streaming is never cleared under it.
+  function armBusyFailsafe() {
+    clearTimeout(busyFailsafe);
+    busyFailsafe = setTimeout(() => { busy = false; $('#send-btn').classList.toggle('busy', false); }, 40000);
+  }
+
+  function onAnswerActivity() {
+    if (busy) armBusyFailsafe();
   }
 
   // ---- transcript helpers ------------------------------------------------
@@ -1217,9 +1228,12 @@
   });
   cue.on('llm:thinking', () => {
     showThinking();
-    if (busy) setBusy(true); // a long think is not a lost answer: keep the failsafe away
+    onAnswerActivity(); // a long think is not a lost answer: keep the failsafe away
   });
-  cue.on('llm:token', ({ text }) => appendToken(text));
+  cue.on('llm:token', ({ text }) => {
+    appendToken(text);
+    onAnswerActivity(); // nor is a long answer that is still streaming
+  });
   cue.on('llm:done', () => { finalizeAi(); setBusy(false); });
   cue.on('llm:error', ({ message, action, secondary }) => {
     if (!aiEl) startAi(true);

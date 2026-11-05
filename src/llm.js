@@ -308,7 +308,12 @@ function readChunk(part, onActivity) {
   return { text, finish: (choice && choice.finish_reason) || '' };
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse, lengthCut }) {
+// SDK request options that carry cue's cancel signal (none: SDK defaults).
+function requestOptions(signal) {
+  return signal ? { signal } : undefined;
+}
+
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse, lengthCut, signal }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
@@ -325,7 +330,9 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
       messages.push({ role: t.role, content: t.text });
     }
   });
-  const pending = client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens });
+  // signal: when cue stops waiting (watchdog, caption timer), the request is
+  // cancelled too, so the provider stops generating and billing it.
+  const pending = client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens }, requestOptions(signal));
   let stream;
   if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
     // The gateway stamps x-publik-* headers at admission; hand the raw
@@ -357,7 +364,7 @@ function normalizeAzureBaseURL(raw) {
   return u;
 }
 
-async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, endpoint, lengthCut }) {
+async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, endpoint, lengthCut, signal }) {
   const url = normalizeAzureBaseURL(endpoint);
   if (!url) throw new Error('Missing Azure endpoint. Add your Azure AI Foundry or Azure OpenAI endpoint in Settings.');
   const messages = [{ role: 'system', content: system }];
@@ -387,7 +394,7 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
     };
     client = new OpenAI({ baseURL: url, apiKey, fetch: azureFetch });
   }
-  const stream = await client.chat.completions.create({ model, messages, stream: true, max_completion_tokens: maxTokens });
+  const stream = await client.chat.completions.create({ model, messages, stream: true, max_completion_tokens: maxTokens }, requestOptions(signal));
   let full = '';
   let finish = '';
   for await (const part of stream) {
@@ -398,7 +405,7 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
   return settleAnswer(full, finish, onToken, lengthCut);
 }
 
-async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, signal }) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
   const messages = turns.map((t, i) => {
@@ -412,7 +419,7 @@ async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, max
     }
     return { role: t.role, content: t.text };
   });
-  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true });
+  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true }, requestOptions(signal));
   let full = '';
   for await (const ev of stream) {
     if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') { full += ev.delta.text; onToken(ev.delta.text); }
@@ -439,7 +446,7 @@ function geminiGenerationConfig({ system, maxTokens, thinking }) {
   return config;
 }
 
-async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, thinking, onToken }) {
+async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, thinking, onToken, signal }) {
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
   const contents = turns.map((t, i) => {
@@ -452,6 +459,7 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
     return { role: t.role === 'assistant' ? 'model' : 'user', parts };
   });
   const config = geminiGenerationConfig({ system, maxTokens, thinking });
+  if (signal) config.abortSignal = signal;
   let stream;
   try {
     stream = await ai.models.generateContentStream({ model, contents, config });
@@ -470,7 +478,7 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
   return full;
 }
 
-async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, signal }) {
   const baseUrl = apiKey || 'http://localhost:11434';
   const url = `${baseUrl.replace(/\/$/, '')}/api/chat`;
 
@@ -494,7 +502,8 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
     response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: true })
+      body: JSON.stringify({ model, messages, stream: true }),
+      ...(signal ? { signal } : {})
     });
   } catch (err) {
     throw new Error(`Ollama fetch failed: ${err.message}. Is Ollama running at ${baseUrl}?`);
@@ -542,11 +551,14 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
 // screenshot answer in five was cut at 700 (prod audit 2026-11-04). As with
 // Gemini above, the cap gets headroom for thoughts, so maxTokens stays the
 // visible budget. Prod reasoning on these models: publik-fast p99 628 and max
-// 960 tokens; publik-balanced p95 1,013 and p99 2,691. The user pays for the
-// tokens used, not for the cap.
+// 960 tokens; publik-balanced p95 1,013 and p99 2,691. So publik-fast gets
+// 2,048 tokens of room, and every other publik call (publik-balanced: Smart,
+// and screenshot questions on the fast tier) gets 4,096. The user pays for
+// the tokens used, not for the cap.
 const PUBLIK_THINKING_HEADROOM = { fast: 2048, smart: 4096 };
-function publikOutputCap(visibleTokens, smart) {
-  return visibleTokens + (smart ? PUBLIK_THINKING_HEADROOM.smart : PUBLIK_THINKING_HEADROOM.fast);
+function publikOutputCap(visibleTokens, model) {
+  const room = model === publik.DEFAULT_MODELS.fast ? PUBLIK_THINKING_HEADROOM.fast : PUBLIK_THINKING_HEADROOM.smart;
+  return visibleTokens + room;
 }
 
 // The publik model a screenshot question uses. On the smart tier that is the
@@ -637,7 +649,10 @@ function createLLM(settings) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
       const useModel = params && params.imageDataUrl ? visionModel : model;
       const args = { apiKey, baseURL, endpoint, model: useModel, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
-      if (provider === PUBLIK_PROVIDER) args.maxTokens = publikOutputCap(args.maxTokens, !!settings.smart);
+      // An explicit maxTokens: undefined (or any non-number) falls back to the
+      // default cap; it must never reach the request as NaN.
+      if (!(Number.isFinite(args.maxTokens) && args.maxTokens > 0)) args.maxTokens = maxTokens;
+      if (provider === PUBLIK_PROVIDER) args.maxTokens = publikOutputCap(args.maxTokens, useModel);
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
