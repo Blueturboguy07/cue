@@ -18,7 +18,9 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
           completions: {
             create: (completionRequest) => {
               capturedCompletionRequest = completionRequest;
-              const data = [{ choices: [{ delta: { content: 'ok' } }] }];
+              // A real stream ends with a finish chunk; one without it is
+              // incomplete (test/content-filter.test.js).
+              const data = [{ choices: [{ delta: { content: 'ok' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }];
               if (fakeCreateError) return Promise.reject(fakeCreateError);
               if (!fakeResponseHeaders) return Promise.resolve(data);
               const headers = fakeResponseHeaders;
@@ -463,7 +465,10 @@ test('publik: routes through the publik base URL with the minted key, never the 
   assert.equal(llm.ready, true);
   assert.equal(llm.model, 'publik-fast');
   await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
-  assert.deepEqual(capturedClientOptions, { apiKey: PUBLIK_KEY, baseURL: 'https://publikhq.com/api/v1' });
+  // fetch: the pass-through that notes the stream's "data: [DONE]" (src/llm.js doneWatcher).
+  const { fetch: watchedFetch, ...clientOptions } = capturedClientOptions;
+  assert.deepEqual(clientOptions, { apiKey: PUBLIK_KEY, baseURL: 'https://publikhq.com/api/v1' });
+  assert.equal(typeof watchedFetch, 'function');
   assert.equal(capturedCompletionRequest.model, 'publik-fast');
 });
 

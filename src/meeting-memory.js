@@ -27,6 +27,8 @@ function createMeetingMemory(opts) {
   const { store, llmFactory } = opts;
   const now = opts.now || Date.now;
   const log = opts.log || (() => {});
+  // Called when a refused answer is asked once more on another model (src/llm.js).
+  const onRetry = typeof opts.onRetry === 'function' ? opts.onRetry : undefined;
   const cfg = { ...DEFAULTS, ...opts };
   let current = null;        // the meeting the live transcript is being written to
   let notesTurnCount = 0;    // transcript length when notes were last written for `current`
@@ -61,7 +63,8 @@ function createMeetingMemory(opts) {
         // Stored notes never carry the chat answer's "(Cut off: …)" note: a
         // cut is trimmed and ends with "…", as slide captions do.
         lengthCut: 'ellipsis',
-        onToken: () => {}
+        onToken: () => {},
+        onRetry
       });
       const notes = parseNotes(text);
       if (!notes.summary) return null;
