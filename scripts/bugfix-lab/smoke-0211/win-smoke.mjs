@@ -50,7 +50,7 @@ mkdirSync(OUT, { recursive: true });
 if (mode === 'a') {
   const r = await K.launchCue({
     exe: EXE, profile: PROFILE, port: PORT, iport: IPORT, stubGdm: false, macHome: false,
-    cfg: { testPng: join(HERE, 'test-slide.png'), stubScreenAll: false, stubScreenLarge: true, stubScreencapture: false, denyMic: true, denyDisplayMedia: false, observeLLM: true, captureExternal: true },
+    cfg: { testPng: join(HERE, 'test-slide.png'), stubScreenAll: false, stubScreenLarge: true, stubScreencapture: false, denyMic: false, denyDisplayMedia: false, observeLLM: true, captureExternal: true },
   });
   log('launched pid ' + r.pid + ', hooks ' + JSON.stringify(r.hooks));
   let page = null;
