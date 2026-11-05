@@ -130,10 +130,11 @@ test('the refusal glued mid-word inside one delta (with a period) is dropped too
   assert.doesNotMatch(shown, /rejected/);
 });
 
-test('a refusal sentence that ends with "stop" (no content_filter) still counts as refused', async () => {
+test('a clean stop is a whole answer: text then the refusal words, with "stop", is shown as sent (round 2, D1)', async () => {
   replies = [[text('Wax vapour burns. '), text(REFUSAL), finish('stop')]];
-  const { result } = await ask(publikSettings());
-  assert.equal(result, 'Wax vapour burns. ' + FILTER_NOTE);
+  const { result, shown } = await ask(publikSettings());
+  assert.equal(result, 'Wax vapour burns. ' + REFUSAL);
+  assert.equal(shown, result);
 });
 
 test('content_filter after a partial answer with no refusal sentence: the partial gets the safety-filter note', async () => {
@@ -187,7 +188,7 @@ test('a refusal message quoted inside an answer is content: it is shown and the 
 test('the other known provider refusals at the end are dropped too (DeepSeek, Qwen, Zhipu)', async () => {
   replies = [[text('Part of it.Content Exists Risk'), finish('content_filter')]];
   assert.equal((await ask(publikSettings())).result, 'Part of it.' + FILTER_NOTE);
-  replies = [[text('Some notes. OUTPUT DATA MAY CONTAIN INAPPROPRIATE CONTENT.'), finish('stop')]];
+  replies = [[text('Some notes. Output data may contain inappropriate content.'), finish('content_filter')]];
   assert.equal((await ask(publikSettings())).result, 'Some notes. ' + FILTER_NOTE);
   replies = [[text('系统检测到输入或生成内容可能包含不安全或敏感内容，请您避免输入易产生敏感内容的提示语，感谢您的配合。'), finish('stop')]];
   const zhipu = await ask(publikSettings());
@@ -197,19 +198,22 @@ test('the other known provider refusals at the end are dropped too (DeepSeek, Qw
 
 test('any split of the stream into deltas gives the same shown text', () => {
   const { refusalFilter } = llmModule;
+  // [text, stop kind, shown, refused]
   const cases = [
-    ['streaming of the ascendingThe request was rejected because it was considered high risk', 'streaming of the ascending', true],
-    ['The cup holds the The request was rejected because it was considered high risk.\n', 'The cup holds the ', true],
-    ['Quote: The request was rejected because it was considered high risk, then more.', 'Quote: The request was rejected because it was considered high risk, then more.', false],
-    ['The request was approved.', 'The request was approved.', false]
+    ['streaming of the ascendingThe request was rejected because it was considered high risk', 'filter', 'streaming of the ascending', true],
+    ['The cup holds the The request was rejected because it was considered high risk.\n', 'filter', 'The cup holds the ', true],
+    ['streaming of the ascendingThe request was rejected because it was considered high risk', 'clean', 'streaming of the ascendingThe request was rejected because it was considered high risk', false],
+    ['The request was rejected because it was considered high risk.', 'clean', '', true],
+    ['Quote: The request was rejected because it was considered high risk, then more.', 'clean', 'Quote: The request was rejected because it was considered high risk, then more.', false],
+    ['The request was approved.', 'filter', 'The request was approved.', false]
   ];
-  for (const [input, want, wantRefused] of cases) {
+  for (const [input, kind, want, wantRefused] of cases) {
     for (let i = 0; i <= input.length; i++) {
       for (let j = i; j <= input.length; j += 7) {
         const f = refusalFilter();
-        const shown = f.push(input.slice(0, i)) + f.push(input.slice(i, j)) + f.push(input.slice(j)) + f.end();
-        assert.equal(shown, want, `split at ${i}/${j}`);
-        assert.equal(f.refused, wantRefused, `split at ${i}/${j}`);
+        const shown = f.push(input.slice(0, i)) + f.push(input.slice(i, j)) + f.push(input.slice(j)) + f.end(kind);
+        assert.equal(shown, want, `${kind} split at ${i}/${j}`);
+        assert.equal(f.refused, wantRefused, `${kind} split at ${i}/${j}`);
       }
     }
   }

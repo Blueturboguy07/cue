@@ -34,6 +34,9 @@ const MODES = {
     userBubble: null,
     small: false,
     resumeMode: 'assist',
+    // Answer at once: no hidden thinking on publik's fast tier (src/llm.js
+    // publikReasoningEffort; Smart mode keeps its thinking).
+    effort: 'none',
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
         'You are cue, a discreet real-time copilot overlaid on the user\'s screen during an interview or coding session. ' +
@@ -119,6 +122,7 @@ const MODES = {
     userBubble: null,
     small: false,
     resumeMode: 'ask',
+    effort: 'none', // as assist
     buildSystem(contextBlock, aiRules) {
       return applyRules(buildSystem(
         'You are cue, a real-time copilot with access to the candidate\'s screen and live interview. ' +

@@ -279,16 +279,31 @@ const RECITATION_CUT_NOTE = '\n\n(Incomplete: the AI provider stopped this answe
 const INCOMPLETE_CUT_NOTE = '\n\n(Incomplete: the answer stopped before the model finished. Ask again to get the rest.)';
 
 // Every stop reason cue knows, lower-cased: OpenAI-style finish_reason,
-// Anthropic stop_reason, Gemini finishReason. Anything else (error,
-// FINISH_REASON_UNSPECIFIED, OTHER, no reason at all) is 'incomplete'.
-const CLEAN_STOPS = new Set(['stop', 'end_turn', 'stop_sequence', 'tool_calls', 'tool_use', 'function_call']);
-const LENGTH_STOPS = new Set(['length', 'max_tokens', 'max_output_tokens', 'model_context_window_exceeded']);
+// Anthropic stop_reason, Gemini finishReason, and the end-of-turn words that
+// own-key OpenAI-compatible servers send instead of "stop" (TGI "eos_token",
+// llama.cpp/vLLM-style "eos", Anthropic-style "end_turn" and
+// "stop_sequence" through a proxy, ...). Any other reason (error, OTHER,
+// abort, ...) is 'incomplete'.
+const CLEAN_STOPS = new Set([
+  'stop', 'stopped', 'end_turn', 'end_of_turn', 'end', 'eos', 'eos_token', 'eot', 'eot_id', 'eog',
+  'stop_sequence', 'stop_token', 'stop_word', 'tool_calls', 'tool_use', 'function_call',
+  'complete', 'completed', 'finished', 'done'
+]);
+const LENGTH_STOPS = new Set(['length', 'max_tokens', 'max_output_tokens', 'max_length', 'max_new_tokens', 'limit', 'model_context_window_exceeded']);
 const FILTER_STOPS = new Set(['content_filter', 'refusal', 'safety', 'prohibited_content', 'blocklist', 'spii', 'image_safety', 'image_prohibited_content']);
 const RECITATION_STOPS = new Set(['recitation', 'image_recitation']);
+// Gemini's "not set" value means the same as no reason at all.
+const NO_REASON = new Set(['', 'finish_reason_unspecified']);
 
-function stopKind(reason, refused) {
+// evidence.cutShort: the stream itself shows that it did not reach its end
+// (cue cancelled it; on publik, it closed before "data: [DONE]"; on
+// Anthropic, no message_stop). A stream with no stop reason is incomplete
+// only with such evidence: own-key servers that send no reason at all
+// otherwise got "(Incomplete: ...)" on every answer.
+function stopKind(reason, refused, evidence) {
   if (refused) return 'filter';
   const r = String(reason || '').toLowerCase();
+  if (NO_REASON.has(r)) return evidence && evidence.cutShort ? 'incomplete' : 'clean';
   if (CLEAN_STOPS.has(r)) return 'clean';
   if (LENGTH_STOPS.has(r)) return 'length';
   if (FILTER_STOPS.has(r)) return 'filter';
@@ -313,105 +328,137 @@ function emptyAnswerError(kind, finishReason) {
 // sends the first one as normal content, alone or glued to a partial answer
 // mid-word ("...streaming of the ascendingThe request was rejected
 // because..."), and then finish_reason "content_filter" (NitroAI smoke,
-// 2026-11-05). Only exact provider messages are listed (the same list as
-// NitroAI's src/lib/engine/refusal.ts), never "I can't help with that"
-// phrases, which can be real content. A message counts only at the end of
-// the answer, where a provider puts it when it stops the stream: one quoted
-// inside an answer is content.
-const REFUSAL_SENTENCES = [
+// 2026-11-05). Only provider messages are listed (the same list as NitroAI's
+// src/lib/engine/refusal.ts), never "I can't help with that" phrases, which
+// can be real content.
+//   exact: the message word for word, case and spacing as the provider sends it.
+//   start: the first words of it; every wording of that message starts so.
+// Two rules (blind verify of 3282584, D1/D2):
+// - A clean stop is a whole answer. It counts as refused only when the WHOLE
+//   answer is one of the exact messages (case-sensitive), with nothing but
+//   closing punctuation around it. An answer that merely ends with similar
+//   words ("...warn users that the output data may contain inappropriate
+//   content.") is never cut, never labelled, never asked again.
+// - A stop that is not clean (content_filter, error, length, ...): the
+//   provider's message is cut off from its start to the end of the text,
+//   whatever the wording after it ("high-risk", "(request id: ...)", a double
+//   space, more words, the same message twice), if that start is within the
+//   last REFUSAL_WINDOW characters.
+const REFUSALS = [
   // Xiaomi MiMo (publik-balanced, seen 2026-11-05); Moonshot uses the same words.
-  'The request was rejected because it was considered high risk',
+  { start: 'The request was rejected because', exact: ['The request was rejected because it was considered high risk'] },
   // Alibaba Qwen (DashScope "data_inspection_failed").
-  'Input data may contain inappropriate content',
-  'Output data may contain inappropriate content',
+  { start: 'Input data may contain inappropriate content', exact: ['Input data may contain inappropriate content'] },
+  { start: 'Output data may contain inappropriate content', exact: ['Output data may contain inappropriate content'] },
   // DeepSeek (publik-fast's fallback model).
-  'Content Exists Risk',
-  // Zhipu GLM (publik-fast = z-ai/glm-5.3-flash), code 1301, first sentence;
-  // the notice goes on after it.
-  '系统检测到输入或生成内容可能包含不安全或敏感内容'
+  { start: 'Content Exists Risk', exact: ['Content Exists Risk'] },
+  // Zhipu GLM (publik-fast = z-ai/glm-5.3-flash), code 1301: the whole
+  // notice, or its first sentence alone.
+  { start: '系统检测到输入或生成内容可能包含不安全或敏感内容', exact: ['系统检测到输入或生成内容可能包含不安全或敏感内容，请您避免输入易产生敏感内容的提示语，感谢您的配合。', '系统检测到输入或生成内容可能包含不安全或敏感内容'] }
 ];
-// Whitespace and closing punctuation a provider may put after its message.
-const REFUSAL_TAIL = /^[\s.。!！,，;；:："'”’)\]}]*$/u;
-const HAN = /[\u4e00-\u9fff]/u;
+const REFUSAL_SENTENCES = REFUSALS.flatMap((r) => r.exact);
+// A provider's message (with its request id, a second copy, ...) is short;
+// text that goes on longer than this after a "start" is content.
+const REFUSAL_WINDOW = 240;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// The whole answer is one or more exact messages, with only whitespace and
+// closing punctuation around them.
+const WHOLE_REFUSAL = new RegExp('^\\s*(?:(?:' +
+  REFUSAL_SENTENCES.slice().sort((a, b) => b.length - a.length).map(escapeRe).join('|') +
+  ')[\\s.。!！,，;；:："\'”’)\\]}]*)+$', 'u');
+
+// Does text[i..] start with `start`? Case-sensitive; any run of whitespace
+// counts as one space. 'full' (all of it), 'partial' (the text ends inside
+// it: it could still grow into it), or null.
+function startsAt(text, i, start) {
+  let t = i;
+  for (let k = 0; k < start.length; k++) {
+    if (t >= text.length) return 'partial';
+    if (start[k] === ' ') {
+      if (!/\s/u.test(text[t])) return null;
+      while (t < text.length && /\s/u.test(text[t])) t++;
+    } else if (text[t] === start[k]) {
+      t++;
+    } else {
+      return null;
+    }
+  }
+  return 'full';
+}
 
 // Takes the streamed text piece by piece and gives back the text that is safe
-// to show. A whole refusal message, with only closing punctuation after it,
-// is held until the stream ends: if the answer ends there, it is dropped and
-// the answer counts as refused; if more text follows, it was content and is
-// shown. A tail that could still grow into a refusal message (its start, even
-// glued mid-word to the last word) is held until the next piece or the end.
-function refusalFilter(sentences = REFUSAL_SENTENCES) {
-  const patterns = sentences.map((sentence) => ({
-    re: new RegExp(sentence.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'),
-    lower: sentence.toLowerCase(),
-    han: HAN.test(sentence)
-  }));
-  let pending = '';
+// to show. From a refusal start in the last REFUSAL_WINDOW characters (a
+// whole one, or one the text could still grow into, even glued mid-word to
+// the last word), text is held until the stream ends; anything earlier
+// streams at once. end(kind) gets the stop kind and applies the two rules
+// above: it gives back the rest of the text, or the text before the refusal.
+function refusalFilter(refusals = REFUSALS) {
+  let text = '';
+  let shown = 0;
   let refused = false;
-  // Each whole message in pending, earliest first, from index `from` on.
-  function nextMatch(from) {
-    let best = null;
-    for (const p of patterns) {
-      const m = p.re.exec(pending.slice(from));
-      if (m && (!best || from + m.index < best.at)) best = { at: from + m.index, end: from + m.index + m[0].length, p };
+  const from = () => Math.max(shown, text.length - REFUSAL_WINDOW);
+  function startAt(i) {
+    let found = null;
+    for (const r of refusals) {
+      const m = startsAt(text, i, r.start);
+      if (m === 'full') return 'full';
+      if (m) found = m;
     }
-    return best;
+    return found;
   }
-  // The answer can still end with this message: only closing punctuation
-  // after it (or, for Zhipu, the rest of its own Chinese notice).
-  const endsHere = (match) => {
-    const rest = pending.slice(match.end);
-    return REFUSAL_TAIL.test(rest) || (match.p.han && !/[A-Za-z]/.test(rest));
-  };
-  // The first message the answer can still end with, or null.
-  function heldMatch() {
-    for (let from = 0, match = nextMatch(0); match; from = match.end, match = nextMatch(from)) {
-      if (endsHere(match)) return match;
-    }
-    return null;
+  // The first place text is held from (a full or a growing start), or the end.
+  function holdFrom() {
+    for (let i = from(); i < text.length; i++) if (startAt(i)) return i;
+    return text.length;
   }
-  function prefixLength() {
-    let keep = 0;
-    for (const p of patterns) {
-      for (let n = Math.min(pending.length, p.lower.length); n > keep; n--) {
-        if (p.lower.startsWith(pending.slice(pending.length - n).toLowerCase())) { keep = n; break; }
-      }
-    }
-    return keep;
+  // The first full refusal start that can still be cut off, or -1.
+  function refusalFrom() {
+    for (let i = from(); i < text.length; i++) if (startAt(i) === 'full') return i;
+    return -1;
   }
-  function take(n) {
-    const out = pending.slice(0, n);
-    pending = pending.slice(n);
+  function release(to) {
+    const out = text.slice(shown, to);
+    shown = to;
+    return out;
+  }
+  function drop(at) {
+    refused = true;
+    const out = release(at);
+    shown = text.length;
     return out;
   }
   return {
     push(piece) {
-      pending += piece;
-      const held = heldMatch();
-      if (held) return take(held.at);
-      return take(pending.length - prefixLength());
+      text += piece;
+      return release(holdFrom());
     },
-    end() {
-      const held = heldMatch();
-      if (!held) return take(pending.length);
-      refused = true;
-      const out = take(held.at);
-      pending = '';
-      return out;
+    end(kind = 'clean') {
+      if (kind === 'clean') {
+        // Only whitespace can have been shown before a whole-answer message.
+        return WHOLE_REFUSAL.test(text) && !text.slice(0, shown).trim() ? drop(shown) : release(text.length);
+      }
+      const at = refusalFrom();
+      return at < 0 ? release(text.length) : drop(at);
     },
     get refused() { return refused; }
   };
 }
 
 // The visible answer of one stream: every piece goes through the refusal
-// filter, and only what passes reaches onToken.
+// filter, and only what passes reaches onToken. finish() takes the stream's
+// stop reason (and evidence that it was cut short) and returns the shown
+// text with its stop kind.
 function answerText(onToken) {
   const filter = refusalFilter();
   let text = '';
   const emit = (piece) => { if (piece) { text += piece; onToken(piece); } };
   return {
     add(piece) { emit(filter.push(piece)); },
-    finish() { emit(filter.end()); return { text, refused: filter.refused }; }
+    finish(finishReason, evidence) {
+      const kind = stopKind(finishReason, false, evidence);
+      emit(filter.end(kind));
+      return { text, kind: filter.refused ? 'filter' : kind, finishReason: finishReason || null };
+    }
   };
 }
 
@@ -419,9 +466,8 @@ function answerText(onToken) {
 // as the answer, and an answer that did not stop cleanly says why. lengthCut
 // 'ellipsis' (slide captions, meeting notes) trims the cut text and ends it
 // with "…" instead of a note.
-function settleAnswer(answer, finishReason, onToken, lengthCut) {
-  const { text, refused } = answer;
-  const kind = stopKind(finishReason, refused);
+function settleAnswer(answer, onToken, lengthCut) {
+  const { text, kind, finishReason } = answer;
   if (!String(text || '').trim()) throw emptyAnswerError(kind, finishReason);
   if (kind === 'clean') return text;
   if (lengthCut === 'ellipsis') return trimCut(text) + '…';
@@ -457,9 +503,34 @@ function requestOptions(signal) {
   return signal ? { signal } : undefined;
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse, lengthCut, signal }) {
+// publik (OpenRouter behind it) always ends a stream with a finish reason and
+// "data: [DONE]". The SDK hides [DONE], so this fetch passes the bytes
+// through unchanged and notes whether it came. A stream that closed before
+// [DONE] came was cut short.
+function doneWatcher() {
+  const seen = { done: false };
+  const watchedFetch = async (input, init) => {
+    const res = await fetch(input, init);
+    if (!res.ok || !res.body || !/event-stream/i.test(res.headers.get('content-type') || '')) return res;
+    const decoder = new TextDecoder();
+    let tail = '\n'; // the stream starts at a line start
+    const watch = new TransformStream({
+      transform(chunk, controller) {
+        const s = tail + decoder.decode(chunk, { stream: true });
+        if (/\ndata: ?\[DONE\]/.test(s)) seen.done = true;
+        tail = s.slice(-16);
+        controller.enqueue(chunk);
+      }
+    });
+    return new Response(res.body.pipeThrough(watch), { status: res.status, statusText: res.statusText, headers: res.headers });
+  };
+  return { seen, fetch: watchedFetch };
+}
+
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse, lengthCut, signal, reasoningEffort, watchDone }) {
   const OpenAI = require('openai');
-  const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
+  const watcher = watchDone ? doneWatcher() : null;
+  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}), ...(watcher ? { fetch: watcher.fetch } : {}) });
   const messages = [{ role: 'system', content: system }];
   turns.forEach((t, i) => {
     const last = i === turns.length - 1;
@@ -476,7 +547,9 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
   });
   // signal: when cue stops waiting (watchdog, caption timer), the request is
   // cancelled too, so the provider stops generating and billing it.
-  const pending = client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens }, requestOptions(signal));
+  const body = { model, messages, stream: true, max_tokens: maxTokens };
+  if (reasoningEffort) body.reasoning_effort = reasoningEffort;
+  const pending = client.chat.completions.create(body, requestOptions(signal));
   let stream;
   if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
     // The gateway stamps x-publik-* headers at admission; hand the raw
@@ -494,7 +567,8 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
     if (chunk.text) answer.add(chunk.text);
     if (chunk.finish) finish = chunk.finish;
   }
-  return settleAnswer(answer.finish(), finish, onToken, lengthCut);
+  const cutShort = !!(signal && signal.aborted) || !!(watcher && !watcher.seen.done);
+  return settleAnswer(answer.finish(finish, { cutShort }), onToken, lengthCut);
 }
 
 // Azure AI Foundry Models API (cognitiveservices.azure.com hosts) lives under
@@ -546,7 +620,7 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
     if (chunk.text) answer.add(chunk.text);
     if (chunk.finish) finish = chunk.finish;
   }
-  return settleAnswer(answer.finish(), finish, onToken, lengthCut);
+  return settleAnswer(answer.finish(finish, { cutShort: !!(signal && signal.aborted) }), onToken, lengthCut);
 }
 
 async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, lengthCut, signal }) {
@@ -565,14 +639,17 @@ async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, max
   });
   const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true }, requestOptions(signal));
   // stop_reason comes in the message_delta event: end_turn, max_tokens,
-  // refusal, ... A stream without it did not finish.
+  // refusal, ... The stream ends with message_stop: without it (and with no
+  // stop_reason) it did not finish.
   const answer = answerText(onToken);
   let stop = '';
+  let ended = false;
   for await (const ev of stream) {
     if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') answer.add(ev.delta.text);
     else if (ev.type === 'message_delta' && ev.delta && ev.delta.stop_reason) stop = ev.delta.stop_reason;
+    else if (ev.type === 'message_stop') ended = true;
   }
-  return settleAnswer(answer.finish(), stop, onToken, lengthCut);
+  return settleAnswer(answer.finish(stop, { cutShort: !ended || !!(signal && signal.aborted) }), onToken, lengthCut);
 }
 
 // Gemini 3.x counts its internal "thinking" tokens against maxOutputTokens, so
@@ -630,7 +707,7 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
     if (candidate && candidate.finishReason) stop = candidate.finishReason;
     else if (!stop && chunk && chunk.promptFeedback && chunk.promptFeedback.blockReason) stop = 'SAFETY';
   }
-  return settleAnswer(answer.finish(), stop, onToken, lengthCut);
+  return settleAnswer(answer.finish(stop, { cutShort: !!(signal && signal.aborted) }), onToken, lengthCut);
 }
 
 async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, signal }) {
@@ -714,6 +791,39 @@ const PUBLIK_THINKING_HEADROOM = { fast: 2048, smart: 4096 };
 function publikOutputCap(visibleTokens, model) {
   const room = model === publik.DEFAULT_MODELS.fast ? PUBLIK_THINKING_HEADROOM.fast : PUBLIK_THINKING_HEADROOM.smart;
   return visibleTokens + room;
+}
+
+// How hard a publik model thinks before it answers. With no
+// reasoning_effort in the request the publik gateway uses the tier's default:
+// publik-fast "low", publik-balanced and publik-smart "medium". On the fast
+// tier a screenshot question goes to publik-balanced (xiaomi/mimo-v2.6-pro).
+// Live A/B on publik, 2026-11-05, the same four stubbed screenshots
+// (reasoning tokens; time to first text):
+//                          medium (0.2.12)   low            none
+//   code bug (ask)         1,174; 29.3 s     1,183; 30.3 s  0; 4.8 s
+//   slide (assist)         43; 4.6 s         28; 6.0 s      0; 3.6 s
+//   chart (ask)            261; 5.8 s        112; 6.4 s     0; 1.0 s
+//   hard problem (assist)  4,795; no text    4,802; no text 0; 3.9 s, cut at the cap
+// Every answer that finished was correct. MiMo thinks as much at "low" as
+// at "medium"; only "none" turns its thinking off. (The hard problem is made up: its
+// Example 1 is wrong and n reaches 2 * 10^5, so no level finishes it. At
+// "none" the model shows its work from 3.9 s instead of a blank 2 minutes.)
+// So:
+// - a caller asks for a level (src/prompts.js `effort`: assist and ask
+//   "none", they answer during a live call; slide captions and meeting notes
+//   "low" in every mode); anything else on the fast tier asks for "low"
+//   (leetcode: solving a problem needs thought);
+// - Smart mode keeps the gateway default and never turns thinking off:
+//   thinking deeper is what Smart is for.
+function publikReasoningEffort(settings, asked) {
+  if (settings.smart) return asked && asked !== 'none' ? asked : '';
+  return asked || 'low';
+}
+
+// A model that cannot turn its thinking off (a publik alias moved to one)
+// refuses "none" with a 400 before any text: ask once more at "low".
+function thinkingOffRefused(error, args) {
+  return !!error && error.status === 400 && args.reasoningEffort === 'none' && !(args.signal && args.signal.aborted);
 }
 
 // The publik model a screenshot question uses. On the smart tier that is the
@@ -808,15 +918,32 @@ function createLLM(settings) {
       // default cap; it must never reach the request as NaN.
       if (!(Number.isFinite(args.maxTokens) && args.maxTokens > 0)) args.maxTokens = maxTokens;
       const visibleTokens = args.maxTokens;
-      if (provider === PUBLIK_PROVIDER) args.maxTokens = publikOutputCap(visibleTokens, useModel);
+      if (provider === PUBLIK_PROVIDER) {
+        args.maxTokens = publikOutputCap(visibleTokens, useModel);
+        args.reasoningEffort = publikReasoningEffort(settings, params.reasoningEffort);
+        args.watchDone = true;
+      } else {
+        // Own keys: the request carries no publik-only fields.
+        delete args.reasoningEffort;
+        delete args.watchDone;
+      }
       // publik branches return an Error carrying `.action`; the string
       // branches keep working unchanged.
       const wrap = (error, failedModel) => {
         const wrapped = formatProviderErrorMessage(error, provider, failedModel);
         return wrapped instanceof Error ? wrapped : new Error(wrapped);
       };
+      const firstTry = async () => {
+        try {
+          return await streamWith(provider, args, minimaxRegion);
+        } catch (error) {
+          if (provider !== PUBLIK_PROVIDER || !thinkingOffRefused(error, args)) throw error;
+          args.reasoningEffort = 'low';
+          return await streamWith(provider, args, minimaxRegion);
+        }
+      };
       try {
-        return await streamWith(provider, args, minimaxRegion);
+        return await firstTry();
       } catch (error) {
         const retryModel = provider === PUBLIK_PROVIDER ? publikRefusalRetryModel(error, useModel, settings, !!args.imageDataUrl) : '';
         if (!retryModel || (args.signal && args.signal.aborted)) throw wrap(error, useModel);
@@ -824,7 +951,9 @@ function createLLM(settings) {
           try { args.onRetry({ from: useModel, to: retryModel, finishReason: error.finishReason || null }); } catch { /* a log hook must never break the answer */ }
         }
         try {
-          return await streamOpenAI({ ...args, model: retryModel, maxTokens: publikOutputCap(visibleTokens, retryModel) });
+          // Another model: never ask it to turn thinking off.
+          const retryEffort = args.reasoningEffort === 'none' ? 'low' : args.reasoningEffort;
+          return await streamOpenAI({ ...args, model: retryModel, maxTokens: publikOutputCap(visibleTokens, retryModel), reasoningEffort: retryEffort });
         } catch (retryError) {
           // The retry's own empty or refused answer says what happened to it;
           // any other failure of the retry (no credit, a network error) leaves
@@ -881,6 +1010,7 @@ module.exports = {
   isNotFoundError,
   geminiGenerationConfig,
   publikOutputCap,
+  publikReasoningEffort,
   PUBLIK_THINKING_HEADROOM,
   LENGTH_EMPTY_MESSAGE,
   EMPTY_ANSWER_MESSAGE,
