@@ -51,7 +51,7 @@ mkdirSync(OUT, { recursive: true });
 if (mode === 'a') {
   const r = await K.launchCue({
     exe: EXE, profile: PROFILE, port: PORT, iport: IPORT, stubGdm: false, macHome: false,
-    cfg: { testPng: join(HERE, 'test-slide.png'), stubScreenAll: false, stubScreenLarge: true, stubScreencapture: false, denyMic: false, denyDisplayMedia: false, observeLLM: true, captureExternal: true },
+    cfg: { testPng: join(HERE, 'test-slide.png'), stubScreenAll: false, stubScreenLarge: true, stubScreencapture: false, denyMic: false, denyDisplayMedia: false, observeLLM: true, captureExternal: true, tracePcm: true },
   });
   log('launched pid ' + r.pid + ', hooks ' + JSON.stringify(r.hooks));
   let page = null;
@@ -117,6 +117,7 @@ if (mode === 'a') {
   step('transcripts', tx);
   step('notes status', notes || 'none within 60 s');
   res.stt = await K.mainEval(IPORT, '(() => ({ toggles: global.__smoke.toggles.slice(), stt: global.__smoke.stt.map((r) => ({ n: r.n, at: r.at, t: r.t, bytes: r.bytes, prompt: r.prompt.slice(0, 200), text: r.text, error: r.error, endMs: r.endMs, togglesAtStart: r.togglesAtStart })) }))()');
+  res.pcmTrace = await K.mainEval(IPORT, '(() => { const T = global.__smoke.pcmTrace; return T ? { t0: T.t0, frames: T.rms.length, rms: T.rms } : null; })()');
   step('stt calls', res.stt.stt.map((r) => ({ n: r.n, sec: r.bytes / 32000, tog: r.togglesAtStart, text: r.text })));
   step('composer', await K.pageEval(PORT, opts, "({ input: document.getElementById('input').value.slice(0, 600) })"));
   step('say click', await K.click(PORT, opts, '.act[data-mode="say"]'));

@@ -221,6 +221,23 @@ ipcMain.on = function (channel, listener) {
       if (S.micPcmBlocked <= 3) alert('mic:pcm arrived (' + (buf && buf.byteLength) + ' bytes) and was DROPPED');
     });
   }
+  if (channel === 'system:pcm' && CFG.tracePcm) {
+    // Level trace of the meeting audio cue receives (30 ms frame RMS, numbers only).
+    note('system:pcm level trace on');
+    return realOn.call(this, channel, function smokeSystemPcmTap(e, ab) {
+      try {
+        const T = S.pcmTrace || (S.pcmTrace = { t0: Date.now(), rms: [], rest: Buffer.alloc(0) });
+        const all = Buffer.concat([T.rest, Buffer.from(ab)]);
+        let off = 0;
+        for (; off + 960 <= all.length && T.rms.length < 6000; off += 960) {
+          let sum = 0; for (let i = 0; i < 480; i++) { const s = all.readInt16LE(off + i * 2); sum += s * s; }
+          T.rms.push(Math.round(Math.sqrt(sum / 480)));
+        }
+        T.rest = Buffer.from(all.subarray(off));
+      } catch (_) {}
+      return listener.apply(this, arguments);
+    });
+  }
   return realOn.call(this, channel, listener);
 };
 ipcMain.addListener = ipcMain.on;
