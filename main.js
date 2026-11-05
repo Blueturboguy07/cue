@@ -447,8 +447,7 @@ async function flushChannel(channel) {
   // A piece that starts at a cut goes with the text before it, so whisper
   // reads its first words in context (src/stt.js promptWithContext).
   const context = publikSttBatchers[channel].continuesCut(pcm) ? lastSttText[channel] : '';
-  const endsMid = publikSttBatchers[channel].endsMidSentence(pcm);
-  const failed = await transcribePiece(channel, pcm, settings, stt, { context, session, endsMid });
+  const failed = await transcribePiece(channel, pcm, settings, stt, { context, session });
   if (!failed || failed.stale) return;
   // Stopped while it was in flight: the stop flush gives it its one more try.
   if (session !== sttSession || !state.capturing) return;
@@ -509,11 +508,7 @@ function reportLostAudio(pcm, err) {
 // Text for a session that already ended while a newer one runs is never
 // published: it comes back as { stale } (nothing from an old session joins
 // a new one).
-// endsMid: the piece ends at a cut with no clause gap (the batcher's
-// endsMidSentence): the sentence goes on in the next piece, so the "." that
-// whisper puts at the end is dropped, and the next piece is not given a
-// capital as a new sentence.
-function transcribePiece(channel, pcm, settings, stt, { context = '', session = sttSession, endsMid = false } = {}) {
+function transcribePiece(channel, pcm, settings, stt, { context = '', session = sttSession } = {}) {
   const run = (async () => {
     state.transcribing[channel] = true;
     try {
@@ -522,7 +517,6 @@ function transcribePiece(channel, pcm, settings, stt, { context = '', session = 
         return null;
       }
       const res = await stt.transcribe(pcm, { context });
-      if (endsMid && !res.error && res.text) res.text = midSentenceText(res.text);
       if (session !== sttSession) {
         // Stop, then Start before this text came back: the text is the old
         // session's last words. Shown (and in the notes) while the new
@@ -538,7 +532,7 @@ function transcribePiece(channel, pcm, settings, stt, { context = '', session = 
       }
       if (res.error) {
         if (res.error.provider === publik.PUBLIK_PROVIDER && isPassingSttError(res.error)) {
-          return { error: res.error, delayMs: sttRetryDelayMs(res.error), pcm, session, context, endsMid };
+          return { error: res.error, delayMs: sttRetryDelayMs(res.error), pcm, session, context };
         }
         handleSttError(res.error, settings);
         return null;
@@ -561,13 +555,6 @@ function transcribePiece(channel, pcm, settings, stt, { context = '', session = 
   })();
   sttInFlight[channel] = run.catch(() => null);
   return run;
-}
-
-// The text of a piece that ends in the middle of a sentence: without the
-// one "." whisper ends every piece with ("...plans the route for the next."
-// + "Morning and the customer..." was one sentence). "?", "!" and "..." stay.
-function midSentenceText(text) {
-  return String(text).replace(/\s+$/, '').replace(/([^.])\.$/, '$1');
 }
 
 // The meeting notes after a Stop. They wait for the last words, so they hold
@@ -615,8 +602,7 @@ function takeHeldAudio() {
       pcm,
       tried: batcher.wasRetried(pcm) ? 1 : 0,
       delayMs: Math.max(DEFAULT_MIN_GAP_MS, batcher.retryDueAt(pcm) - now),
-      continues: batcher.continuesCut(pcm),
-      endsMid: batcher.endsMidSentence(pcm)
+      continues: batcher.continuesCut(pcm)
     }));
   }
   return { session: sttSession, pieces };
@@ -645,7 +631,7 @@ async function sendHeldAudio(held) {
     if (inFlight && inFlight.session === held.session && inFlight.pcm && !inFlight.handled) {
       if (inFlight.stale) { if (inFlight.error) { lostBytes += inFlight.pcm.length; lastErr = inFlight.error; } } // no error: no words in it
       else if (inFlight.error) {
-        queue.push({ pcm: inFlight.pcm, tried: publikSttBatchers[channel].wasRetried(inFlight.pcm) ? 2 : 1, error: inFlight.error, delayMs: inFlight.delayMs, context: inFlight.context, endsMid: inFlight.endsMid });
+        queue.push({ pcm: inFlight.pcm, tried: publikSttBatchers[channel].wasRetried(inFlight.pcm) ? 2 : 1, error: inFlight.error, delayMs: inFlight.delayMs, context: inFlight.context });
         notBefore = Date.now() + inFlight.delayMs;
       }
     }
@@ -661,7 +647,7 @@ async function sendHeldAudio(held) {
         if (flush.cancelled || Date.now() > until) break;
         const settings = store.getSettings();
         const context = item.context != null ? item.context : (item.continues ? lastSttText[channel] : '');
-        const res = await transcribePiece(channel, item.pcm, settings, createSTT(settings), { context, session: held.session, endsMid: Boolean(item.endsMid) });
+        const res = await transcribePiece(channel, item.pcm, settings, createSTT(settings), { context, session: held.session });
         item.tried++;
         if (!res) done = true; // transcribed, or a lasting error already said
         else if (res.stale) { if (res.error) item.error = res.error; else done = true; break; }

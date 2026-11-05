@@ -67,10 +67,6 @@
 //     pieces after it go with it, so the text catches up when whisper stays
 //     slow; even then a short reply (less than `shortReplyMs` of voiced
 //     frames) is never joined to another piece.
-//   - A piece cut at the cap with no clause gap there ends in the middle of
-//     a sentence (`endsMidSentence()`): main.js drops the "." whisper puts
-//     at the end of it, so the text after the cut does not read as a new
-//     sentence.
 //   - A piece whose request failed for a passing reason (busy, server error,
 //     timeout) can be queued once more with `retry()`; it goes out first,
 //     alone, after its delay.
@@ -147,7 +143,6 @@ class UtteranceBatcher {
     this.retried = new WeakSet(); // pieces already given their one more try
     this.retryAt = new WeakMap(); // piece -> when its one more try may go
     this.continued = new WeakSet(); // pieces that start at a cut (the sentence before goes on)
-    this.midEnd = new WeakSet(); // pieces that end at a cut with no clause gap (mid-sentence)
     this.reset();
   }
 
@@ -322,14 +317,12 @@ class UtteranceBatcher {
   }
 
   // Send utter[0, cut) and hold the rest as the start of the next utterance.
-  // midSentence: the cut is not in a clause gap (talk with no gap at the cap).
-  _cutAt(cut, midSentence = false) {
+  _cutAt(cut) {
     const len = this.utter.length;
     cut = Math.max(1, Math.min(cut, len - 1));
     this.pendingCut = null;
     const held = this.utter.slice(cut);
-    const sent = this._emit(this.utter.slice(0, cut));
-    if (sent && midSentence) this.midEnd.add(sent);
+    this._emit(this.utter.slice(0, cut));
     this.utter = held;
     this.utterContinues = true;
     // Find the clause gaps and the trailing silence again in what is held.
@@ -366,30 +359,21 @@ class UtteranceBatcher {
       cut = from;
       for (let i = from; i < len; i++) if (this.utter[i].rms <= this.utter[cut].rms) cut = i;
     }
-    // A gap shorter than a clause gap (or none) is not where a sentence
-    // ends: the words go on across this cut.
-    this._cutAt(cut, best.length < this.softPauseFrames);
+    this._cutAt(cut);
   }
 
   _emit(frames) {
     const voiced = frames.filter((f) => f.voiced).length;
-    if (voiced < this.minSpeechFrames) return null; // a click, not speech
+    if (voiced < this.minSpeechFrames) return; // a click, not speech
     const buf = Buffer.concat(frames.map((f) => f.buf));
     if (this.utterContinues) this.continued.add(buf);
     this.ready.push({ buf, retry: false, notBefore: 0, at: this.now(), voiced });
-    return buf;
   }
 
   /** True when `pcm` (a piece this batcher returned) starts at a cut: the
    *  text before it belongs to the same sentence, so whisper is given it. */
   continuesCut(pcm) {
     return Boolean(pcm) && this.continued.has(pcm);
-  }
-
-  /** True when `pcm` ends at a cut with no clause gap: the sentence goes
-   *  on in the next piece, so the "." whisper ends it with is not real. */
-  endsMidSentence(pcm) {
-    return Boolean(pcm) && this.midEnd.has(pcm);
   }
 
   /** When the one more try of `pcm` may go (0: not a retry). Kept after
@@ -437,7 +421,6 @@ class UtteranceBatcher {
     if (parts.length === 1) return first.buf;
     const out = Buffer.concat(parts);
     if (this.continued.has(first.buf)) this.continued.add(out);
-    if (this.midEnd.has(parts[parts.length - 1])) this.midEnd.add(out);
     return out;
   }
 }

@@ -14,11 +14,12 @@
 //   the status is said once, for the last Stop, with the turns of the notes.
 // 3 (low) The lost-words notice quoted the 429 sentence ("Wait 2 seconds and
 //   try again", which does not apply) and ended with ".)".
-// 4 (low) A piece cut at the 14 s cap with no clause gap there ends in the
-//   middle of a sentence: the "." whisper put there is dropped, so the text
-//   after the cut does not read as a new sentence. (Cuts at a clause gap are
-//   left as they are: there, a sentence end is as likely, and whisper's case
-//   does not tell them apart.)
+// 4 (low, not changed) Text after a cut at the 14 s cap can read as a new
+//   sentence ("...Friday night." / "Who you would call first, ..."). Not
+//   fixed: in fast run-on talk the cap cut is often at a real sentence end
+//   (verify of f8b4ba2: dropping the "." there made "...last spring" + "the
+//   migration took 3 weeks, then..."). The guard below keeps whisper's "."
+//   and the capital rule at cap cuts, as in 0.2.12.
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('vm');
@@ -249,17 +250,18 @@ test('3: lost-words notice after two 429s: says why in its own words, no "try ag
   }
 });
 
-// ---- 4: text after a cut at the cap with no clause gap ----------------------
+// ---- 4 (guard): a cut at the cap keeps the sentence end whisper reads ------
 
-test('4: a piece cut at the 14 s cap with no clause gap: its text loses the "." whisper put at the cut, so the next piece is not a new sentence', async () => {
+test('4: a piece cut at the 14 s cap at a real sentence end keeps its ".", and the next piece starts with a capital', async () => {
   S.reseed(241);
-  const h = mainHarness({ plan: [{ text: 'The payment service goes down and we reroute the traffic for the next.' }, { text: 'morning and the customer is told.' }] });
+  const h = mainHarness({ plan: [{ text: 'We moved the ledger to Postgres last spring, and the migration took three weeks.' }, { text: 'then the checkout team moved too.' }] });
+  // Run-on talk with no clause gap (60 ms gaps only): cut at the cap.
   await h.feed(Buffer.concat([S.pause(900), S.speech(20000), S.pause(2000)]), { thenTicks: 8 });
   assert.equal(h.requests.length, 2, h.events.join(' | '));
   assert.ok(h.requests[0].pcm.length / 32 > 13000, 'the first piece is cut at the cap');
-  assert.equal(h.turns[0].text, 'The payment service goes down and we reroute the traffic for the next');
-  assert.equal(h.requests[1].context, 'The payment service goes down and we reroute the traffic for the next', 'whisper reads the next piece after text with no sentence end');
-  assert.equal(continuedText('morning and the customer is told.', h.requests[1].context), 'morning and the customer is told.', 'so it is not given a capital');
+  assert.equal(h.turns[0].text, 'We moved the ledger to Postgres last spring, and the migration took three weeks.');
+  assert.equal(h.requests[1].context, 'We moved the ledger to Postgres last spring, and the migration took three weeks.', 'whisper reads the next piece after the sentence end');
+  assert.equal(continuedText('then the checkout team moved too.', h.requests[1].context), 'Then the checkout team moved too.', 'so the next sentence starts with a capital');
 });
 
 test('4: a piece cut at a clause gap keeps its "." (a sentence may end there)', async () => {
