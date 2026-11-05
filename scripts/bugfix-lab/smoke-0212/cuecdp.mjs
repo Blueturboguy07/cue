@@ -1,4 +1,4 @@
-// Shared CDP driver for the cue 0.2.11 smoke test (Mac and Windows runner).
+// Shared CDP driver for the cue 0.2.12 smoke test (Mac and Windows runner).
 // Node 22+ (global fetch + WebSocket). Never prints keys, tokens or claim codes.
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, openSync, mkdirSync, existsSync } from 'node:fs';

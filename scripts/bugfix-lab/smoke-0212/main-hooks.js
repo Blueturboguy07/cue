@@ -1,6 +1,7 @@
 // Evaluated ONCE in cue's main process, while it is paused on the first line of
 // main.js (--inspect-brk), before any cue code runs. Wrapped by the launcher as
 //   (function (require, CFG) { <this file> })(require, {...})
+// 0.2.12: + whisper observer, fault injection, capture:toggle timestamps.
 // CFG: { testPng, rendererStub, stubScreenAll, stubScreenLarge, stubScreencapture,
 //        denyMic, denyDisplayMedia, observeLLM }
 // It never reads or prints a key. It records only counts, model ids, token caps,
@@ -112,11 +113,51 @@ function tapStream(stream, rec) {
     }
   };
 }
+
+// 4b. Whisper observer (0.2.12): model, prompt, audio bytes, text, timing.
+// The text is the transcription of the injected TEST speech file only.
+// Fault injection: S.sttFaults is a queue of { status, retryAfterS, times,
+// afterToggles, label }. A matching call throws the SDK's own APIError BEFORE
+// any request is sent (no network, no charge). afterToggles: the rule waits
+// until capture:toggle has been called at least that many times.
+S.stt = []; S.sttFaults = []; S.toggles = [];
+function wrapTranscriptions(client, Real) {
+  const tr = client.audio && client.audio.transcriptions;
+  if (!tr || tr.__smoke) return;
+  tr.__smoke = true;
+  const orig = tr.create.bind(tr);
+  tr.create = async (body, reqOpts) => {
+    const rec = { n: S.stt.length + 1, t: Date.now(), at: new Date().toISOString(), model: body && body.model,
+      prompt: String((body && body.prompt) || ''), bytes: body && body.file && body.file.size, text: null, error: null, injected: null, endMs: null,
+      togglesAtStart: S.toggles.length };
+    S.stt.push(rec);
+    const rule = S.sttFaults.find((r) => r.times > 0 && (!r.afterToggles || S.toggles.length >= r.afterToggles) && (!r.afterCalls || rec.n > r.afterCalls));
+    if (rule) {
+      rule.times--;
+      const headers = rule.retryAfterS ? { 'retry-after': String(rule.retryAfterS) } : {};
+      const err = Real.APIError.generate(rule.status || 429, { error: { message: 'smoke-injected ' + (rule.label || 'fault') } }, undefined, headers);
+      rec.injected = { status: rule.status || 429, retryAfterS: rule.retryAfterS || null, label: rule.label || null };
+      rec.error = String(err && err.message).slice(0, 160); rec.endMs = 0;
+      note('stt call #' + rec.n + ' FAILED by injection (' + (rule.label || '') + ')');
+      throw err;
+    }
+    note('stt call #' + rec.n + ' bytes=' + rec.bytes + ' promptChars=' + rec.prompt.length);
+    try {
+      const res = await orig(body, reqOpts);
+      rec.text = typeof res === 'string' ? res : (res && res.text);
+      return res;
+    } catch (e) {
+      rec.error = String((e && e.message) || e).slice(0, 200); rec.status = e && e.status;
+      throw e;
+    } finally { rec.endMs = Date.now() - rec.t; }
+  };
+}
 function wrapOpenAI(Real) {
   if (wrappedOpenAI) return wrappedOpenAI;
   class SmokeOpenAI extends Real {
     constructor(opts) {
       super(opts);
+      wrapTranscriptions(this, Real);
       const comp = this.chat && this.chat.completions;
       if (!comp || comp.__smoke) return;
       comp.__smoke = true;
@@ -183,6 +224,14 @@ ipcMain.on = function (channel, listener) {
   return realOn.call(this, channel, listener);
 };
 ipcMain.addListener = ipcMain.on;
+// capture:toggle is timestamped (pass-through) so a fault can target the stop flush.
+const realHandle = ipcMain.handle;
+ipcMain.handle = function (channel, fn) {
+  if (channel === 'capture:toggle') {
+    return realHandle.call(this, channel, function smokeToggleTimer(...a) { S.toggles.push(Date.now()); return fn.apply(this, a); });
+  }
+  return realHandle.call(this, channel, fn);
+};
 
 // 6. No macOS mic prompt; Chromium mic permission denied; real display capture denied.
 if (systemPreferences && process.platform === 'darwin') {

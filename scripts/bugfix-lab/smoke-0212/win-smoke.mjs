@@ -1,10 +1,11 @@
-// Windows runner driver for the RELEASED cue 0.2.11 (cue-win-x64.exe).
+// Windows runner driver for the RELEASED cue 0.2.12 (cue-win-x64.exe).
 //   node win-smoke.mjs a   launch cue (hooks), Sign in with publik, write the claim URL
 //                          ENCRYPTED to OUT/claim/claim.enc (RSA-OAEP, the private key
 //                          never leaves the Mac). The URL is never printed.
-//   node win-smoke.mjs b   wait for the link, real-sound meeting audio (VB-CABLE),
+//   node win-smoke.mjs b   wait for the link, real-sound meeting audio (VB-CABLE, speech-A),
+//                          End session right after the last word (stop flush + notes),
 //                          What should I say?, one typed question, one screenshot
-//                          question (fixed test image), End session, quit.
+//                          question (fixed test image), quit.
 // No publik key is passed in: cue mints its own install key on the runner, the way a
 // user's copy does. Nothing here prints a key, a token or the claim URL.
 import { spawn } from 'node:child_process';
@@ -101,15 +102,23 @@ if (mode === 'a') {
     const p = spawn('powershell', ['-NoProfile', '-Command', `(New-Object System.Media.SoundPlayer '${SPEECH}').PlaySync()`], { stdio: 'ignore' });
     p.on('exit', resolve);
   });
-  step('speech played on the default output', { seconds: (Date.now() - t0) / 1000 });
-  let tx = [];
-  for (let i = 0; i < 25; i++) {
-    tx = await K.pageEval(PORT, opts, "(window.__ev||[]).filter((e) => e.ch === 'transcript').map((e) => e.d)");
-    if (tx.some((d) => /learned from it/i.test(d)) && i >= 5) break;
+  const playEnd = Date.now();
+  // End session at once: the last sentence must reach whisper through the stop flush.
+  const stop = await K.click(PORT, opts, '#stop-btn', 'End session');
+  step('speech played; End session pressed', { seconds: (playEnd - t0) / 1000, stopAfterPlayEndMs: Date.now() - playEnd, stop });
+  let tx = [], notes = null;
+  for (let i = 0; i < 60; i++) {
+    const ev = await K.pageEval(PORT, opts, "(window.__ev||[]).filter((e) => e.ch === 'transcript' || e.ch === 'status' || e.ch === 'capture:state').map((e) => ({ ms: e.ms, ch: e.ch, d: e.d }))");
+    tx = ev.filter((e) => e.ch === 'transcript').map((e) => e.d);
+    notes = ev.find((e) => e.ch === 'status' && /Meeting notes saved/.test(e.d));
+    if (notes) break;
     await K.sleep(1000);
   }
   step('transcripts', tx);
-  step('composer', await K.pageEval(PORT, opts, "({ input: document.getElementById('input').value, cls: document.getElementById('composer').className })"));
+  step('notes status', notes || 'none within 60 s');
+  res.stt = await K.mainEval(IPORT, '(() => ({ toggles: global.__smoke.toggles.slice(), stt: global.__smoke.stt.map((r) => ({ n: r.n, at: r.at, t: r.t, bytes: r.bytes, prompt: r.prompt.slice(0, 200), text: r.text, error: r.error, endMs: r.endMs, togglesAtStart: r.togglesAtStart })) }))()');
+  step('stt calls', res.stt.stt.map((r) => ({ n: r.n, sec: r.bytes / 32000, tog: r.togglesAtStart, text: r.text })));
+  step('composer', await K.pageEval(PORT, opts, "({ input: document.getElementById('input').value.slice(0, 600) })"));
   step('say click', await K.click(PORT, opts, '.act[data-mode="say"]'));
   step('say answer', await waitAnswer(1, 90));
   step('clear composer', await K.pageEval(PORT, opts, "(() => { const i = document.getElementById('input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); return i.value; })()"));

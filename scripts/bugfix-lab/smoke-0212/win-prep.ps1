@@ -1,6 +1,6 @@
-# Prepare a windows-latest runner for the cue 0.2.11 smoke test:
+# Prepare a windows-latest runner for the cue 0.2.12 smoke test:
 #   1. confirm the virtual output (VB-CABLE, from LABSN/sound-ci-helpers) is the default playback device,
-#   2. make the test sentence as a 16 kHz mono WAV with Windows SAPI (to a file),
+#   2. use the committed test speech (speech-A.wav, the same file as the Mac test; 53.7 s, pauses, quiet short answers, a 15 s run-on),
 #   3. download the RELEASED cue-win-x64.exe, check its sha256, install it per-user (NSIS /S),
 #   4. hand CUE_EXE, CUE_PROFILE, SPEECH_WAV and OUT_DIR to the next steps.
 # No publik key is used: cue mints its own install key when the test signs in.
@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 $out = Join-Path $PWD 'out'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
-$sentence = 'Thanks for joining the call. Our team builds the payments platform for online stores. Tell me about a time you had to meet a tight deadline, and what you learned from it.'
+$sentence = 'speech-A: see spoken-text in the tester notes (same file as the Mac test)'
 Set-Content -Path (Join-Path $out 'spoken-text.txt') -Value $sentence -Encoding UTF8
 
 Write-Host "== audio endpoints =="
@@ -35,14 +35,9 @@ try {
   Write-Host "AudioDeviceCmdlets unavailable: $($_.Exception.Message)"
 }
 
-Write-Host "== test sentence with SAPI (to a file, 16 kHz mono) =="
-Add-Type -AssemblyName System.Speech
+Write-Host "== test speech (committed file) =="
 $wav = Join-Path $out 'speech-source.wav'
-$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
-$synth.SetOutputToWaveFile($wav, $fmt)
-$synth.Speak($sentence)
-$synth.Dispose()
+Copy-Item (Join-Path $PSScriptRoot 'speech-A.wav') $wav
 Write-Host "speech wav: $((Get-Item $wav).Length) bytes"
 
 Write-Host "== download $Url =="
@@ -59,6 +54,7 @@ $pkg = Get-Content (Join-Path $appDir 'package.json') -Raw | ConvertFrom-Json
 Write-Host "installed: $($exe.FullName) version $($pkg.version)"
 Select-String -Path (Join-Path $appDir 'main.js') -Pattern "audio: 'loopback'" | Select-Object -First 1 | ForEach-Object { Write-Host "main.js $($_.LineNumber): $($_.Line.Trim())" }
 Select-String -Path (Join-Path $appDir 'src\llm.js') -Pattern "PUBLIK_THINKING_HEADROOM = " | ForEach-Object { Write-Host "llm.js $($_.LineNumber): $($_.Line.Trim())" }
+Select-String -Path (Join-Path $appDir 'src\publik-stt-batcher.js') -Pattern "maxMs: 14000|softMs: 8000" | ForEach-Object { Write-Host "publik-stt-batcher.js $($_.LineNumber): $($_.Line.Trim())" }
 Get-Process -Name cue -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 "version=$($pkg.version)`nsha256=$hash" | Out-File -Encoding utf8 (Join-Path $out 'installed.txt')
 

@@ -1,12 +1,12 @@
-name: smoke-win-0211
+name: smoke-win-0212
 
-# Test-only branch. Smoke test of the RELEASED cue 0.2.11 Windows build with real
+# Test-only branch. Smoke test of the RELEASED cue 0.2.12 Windows build with real
 # sound (VB-CABLE). No publik key is passed in: cue signs in through its own claim
 # code, which leaves the runner only RSA-encrypted (the private key stays on the
 # tester's Mac). The tester revokes the install afterwards.
 on:
   push:
-    branches: ['smoke/cue-0.2.11-win']
+    branches: ['smoke/cue-0.2.12-win']
   workflow_dispatch: {}
 
 permissions:
@@ -25,25 +25,25 @@ jobs:
         uses: LABSN/sound-ci-helpers@v1.0.4
       - name: Prepare (default output, test speech, install the released exe)
         shell: powershell
-        run: .\scripts\bugfix-lab\smoke-0211\win-prep.ps1 -Url 'https://github.com/Blueturboguy07/cue/releases/download/v0.2.11/cue-win-x64.exe' -Sha256 '9ddbb9699d0f29aa528acabd548a309288b461533a05795b0cc0cbcb61982815'
+        run: .\scripts\bugfix-lab\smoke-0212\win-prep.ps1 -Url 'https://github.com/Blueturboguy07/cue/releases/download/v0.2.12/cue-win-x64.exe' -Sha256 '5152b6c2e09068352acb1f694a37ae20c9ddd3ab0482539eb831cdf4e6e2f69d'
       - name: Phase A (launch, Sign in with publik, encrypted claim URL)
         shell: powershell
-        run: node scripts/bugfix-lab/smoke-0211/win-smoke.mjs a
+        run: node scripts/bugfix-lab/smoke-0212/win-smoke.mjs a
       - name: Hand the encrypted claim URL to the tester
         uses: actions/upload-artifact@v4
         with:
           name: claim
           path: out/claim/claim.enc
           retention-days: 1
-      - name: Phase B (wait for the link, real sound, questions)
+      - name: Phase B (wait for the link, real sound, Stop right after the last words, questions)
         shell: powershell
-        run: node scripts/bugfix-lab/smoke-0211/win-smoke.mjs b
+        run: node scripts/bugfix-lab/smoke-0212/win-smoke.mjs b
       - name: cue log lines
         if: always()
         shell: powershell
         run: |
           if (Test-Path "$env:CUE_PROFILE\app.log") {
-            Select-String -Path "$env:CUE_PROFILE\app.log" -Pattern '\[audio\]|\[smoke\]|SMOKE-ALERT|capture started|system audio|mic error|\[llm\]' | ForEach-Object { $_.Line } | Tee-Object -FilePath out\cue-log-lines.txt
+            Select-String -Path "$env:CUE_PROFILE\app.log" -Pattern '\[audio\]|\[smoke\]|SMOKE-ALERT|capture started|system audio|mic error|\[llm\]|\[stt\]|\[meetings\]' | ForEach-Object { $_.Line } | Tee-Object -FilePath out\cue-log-lines.txt
           }
       - name: Stop cue
         if: always()
@@ -53,7 +53,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: win-smoke-0211
+          name: win-smoke-0212
           path: |
             out/*.json
             out/*.png
