@@ -31,6 +31,9 @@ function createMeetingMemory(opts) {
   let current = null;        // the meeting the live transcript is being written to
   let notesTurnCount = 0;    // transcript length when notes were last written for `current`
   let notesInFlight = null;
+  let notesInFlightFor = null; // the meeting the running notes call is for
+  let notesInFlightTurns = 0; // and how many of its turns it was given
+  let notesAgain = null;     // one more call, queued after the running one
 
   function lastTurnTs(m) {
     return m.transcript.length ? m.transcript[m.transcript.length - 1].ts : m.startedAt;
@@ -42,12 +45,15 @@ function createMeetingMemory(opts) {
     return 'Meeting on ' + new Date(startedAt).toLocaleDateString();
   }
 
-  // Write notes for a meeting with the LLM. Resolves to the parsed notes, or
-  // null when there is nothing to do (too short, no usable provider, failure).
+  // Write notes for a meeting with the LLM. Resolves to the parsed notes
+  // (with `turns`: how many turns they were written from), or null when
+  // there is nothing to do (too short, no usable provider, failure).
   async function writeNotes(m) {
     if (!m || m.transcript.length < cfg.minTurnsForNotes) return null;
     const llm = llmFactory();
     if (!llm || !llm.ready) return null;
+    // Turns that come while the call runs are not in these notes.
+    const turns = m.transcript.length;
     try {
       const text = await llm.stream({
         system: NOTES_SYSTEM,
@@ -59,13 +65,30 @@ function createMeetingMemory(opts) {
       });
       const notes = parseNotes(text);
       if (!notes.summary) return null;
-      store.update(m.id, { ...notes, title: titleFor(notes.summary, m.startedAt), notesAt: now(), notesTurns: m.transcript.length });
-      log(`notes written for meeting ${m.id} (${m.transcript.length} turns)`);
-      return notes;
+      store.update(m.id, { ...notes, title: titleFor(notes.summary, m.startedAt), notesAt: now(), notesTurns: turns });
+      log(`notes written for meeting ${m.id} (${turns} turns)`);
+      return { ...notes, turns };
     } catch (e) {
       log(`notes failed for meeting ${m.id}: ${e && e.message}`);
       return null;
     }
+  }
+
+  function refresh() {
+    if (!current) return Promise.resolve(null);
+    if (notesInFlight) {
+      if (current === notesInFlightFor && current.transcript.length <= notesInFlightTurns) return notesInFlight;
+      if (!notesAgain) notesAgain = notesInFlight.catch(() => null).then(() => { notesAgain = null; return refresh(); });
+      return notesAgain;
+    }
+    if (current.transcript.length === notesTurnCount) return Promise.resolve(null);
+    const m = current;
+    const count = m.transcript.length;
+    notesInFlightFor = m;
+    notesInFlightTurns = count;
+    notesInFlight = writeNotes(m).then((notes) => { if (notes && current === m) notesTurnCount = count; return notes; })
+      .finally(() => { notesInFlight = null; });
+    return notesInFlight;
   }
 
   return {
@@ -103,14 +126,11 @@ function createMeetingMemory(opts) {
 
     // Listening stopped (or the user asked): refresh the notes for the current
     // meeting if there is anything new. Background — callers need not await.
+    // The notes it resolves to hold every turn there was when it was called:
+    // while a call runs that was given fewer turns (Stop, Start and Stop
+    // again within seconds, 0.2.12 smoke), one more call follows it.
     refreshNotes() {
-      if (!current || current.transcript.length === notesTurnCount) return Promise.resolve(null);
-      if (notesInFlight) return notesInFlight;
-      const m = current;
-      const count = m.transcript.length;
-      notesInFlight = writeNotes(m).then((notes) => { if (notes && current === m) notesTurnCount = count; return notes; })
-        .finally(() => { notesInFlight = null; });
-      return notesInFlight;
+      return refresh();
     },
 
     // Close the current meeting (transcript cleared, quit, or a long gap).

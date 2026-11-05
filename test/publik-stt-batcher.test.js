@@ -70,7 +70,9 @@ test('reset drops pending audio (capture stopped)', () => {
 
 test('main.js batches publik transcription and keeps listening through a passing publik error', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(src, /if \(stt\.providers\[0\] === publik\.PUBLIK_PROVIDER\) \{\n(?:    \/\/[^\n]*\n)+    pcm = publikSttBatchers\[channel\]\.push\(windowPcm\);/);
+  assert.match(src, /const viaPublik = stt\.providers\[0\] === publik\.PUBLIK_PROVIDER;/);
+  // While a request is in flight the window still goes into the batcher (feed), nothing is sent.
+  assert.match(src, /if \(viaPublik\) \{\n(?:    \/\/[^\n]*\n)+    if \(busy\) \{ publikSttBatchers\[channel\]\.feed\(windowPcm\); return; \}\n    pcm = publikSttBatchers\[channel\]\.push\(windowPcm\);/);
   assert.match(src, /publikSttBatchers\.you\.reset\(\); publikSttBatchers\.them\.reset\(\);/);
   const start = src.indexOf('function handleSttError(err, settings)');
   const body = src.slice(start, src.indexOf('\n}\n', start));
