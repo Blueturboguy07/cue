@@ -211,3 +211,40 @@ test('scrolling up to read stops the follow; scrolling back to the end starts it
   flush();
   assert.equal(hiddenBelow(), 0, 'following again');
 });
+
+// Round 2 (verify of dcfd238): only a wheel up stopped the follow; a scrollbar
+// drag or PageUp moved the view and the next token pulled it back within
+// 50 ms. The follow now goes by position: within 40 px of the end, it
+// follows; a scroll that leaves the end by any input stops it.
+test('a scrollbar drag or PageUp (no wheel event) stops the follow; the text stays where the person put it', () => {
+  for (const how of ['scrollbar drag', 'PageUp']) {
+    const { fire, flush, m } = boot();
+    fire('llm:start', { userBubble: 'Walk me through the system design.' });
+    flush();
+    const tokens = words(300);
+    for (const t of tokens.slice(0, 150)) fire('llm:token', { text: t });
+    flush();
+    // No wheel event: the scroll position moves, as a drag or a key does.
+    m.scrollTop = m.scrollTop - (how === 'PageUp' ? m.clientHeight : 120);
+    const reading = m.scrollTop;
+    for (const t of tokens.slice(150)) fire('llm:token', { text: t });
+    flush();
+    fire('llm:done'); flush();
+    assert.equal(m.scrollTop, reading, `${how}: the view was pulled back to the end`);
+  }
+});
+
+test('a small scroll that stays within 40 px of the end keeps the follow, and cue\'s own scrolls never stop it', () => {
+  const { fire, flush, m, hiddenBelow } = boot();
+  fire('llm:start', { userBubble: 'Tell me about yourself.' });
+  flush();
+  for (const t of words(120)) fire('llm:token', { text: t });
+  flush();
+  assert.equal(hiddenBelow(), 0);
+  m.scrollTop = m.scrollTop - 30; // a nudge: still at the end
+  for (const t of words(120)) fire('llm:token', { text: t });
+  flush();
+  assert.equal(hiddenBelow(), 0, 'still following after a 30 px nudge');
+  fire('llm:done'); flush();
+  assert.equal(hiddenBelow(), 0);
+});

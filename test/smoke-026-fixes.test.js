@@ -101,7 +101,8 @@ test('publik user with no audio key: listening transcribes through publik API (w
   const pcm = Buffer.alloc(16000 * 2, 1); // one second of 16 kHz mono PCM
   const res = await stt.transcribe(pcm);
   assert.deepEqual(res, { text: 'hello from the meeting', provider: 'publik' });
-  assert.deepEqual(clients[0].options, { apiKey: PUBLIK_KEY, baseURL: 'https://publikhq.com/api/v1' });
+  // 30 s timeout, no SDK retries: main.js tries a failed piece once more itself (round 2 of the STT cuts).
+  assert.deepEqual(clients[0].options, { apiKey: PUBLIK_KEY, baseURL: 'https://publikhq.com/api/v1', timeout: 30000, maxRetries: 0 });
   assert.equal(clients[0].audioRequests[0].model, 'whisper-1');
   assert.equal(clients[0].audioRequests[0].file.type, 'audio/wav');
 });

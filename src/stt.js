@@ -31,10 +31,10 @@ function buildVocabPrompt(settings) {
   return prompt;
 }
 
-async function transcribeOpenAI(apiKey, wav, model, baseURL, prompt) {
+async function transcribeOpenAI(apiKey, wav, model, baseURL, prompt, clientOptions = {}) {
   const OpenAI = require('openai');
   const toFile = OpenAI.toFile || require('openai/uploads').toFile;
-  const client = new OpenAI({ apiKey, baseURL });
+  const client = new OpenAI({ apiKey, baseURL, ...clientOptions });
   const file = await toFile(wav, 'audio.wav', { type: 'audio/wav' });
   const res = await client.audio.transcriptions.create({
     file,
@@ -109,6 +109,23 @@ async function transcribeGemini(apiKey, wav) {
 // by tokens; without a duration the gateway falls back to a size estimate
 // that is about ten times a 16 kHz WAV clip.)
 const PUBLIK_STT_MODEL = 'whisper-1';
+// publik transcription requests: an answer within 30 s (a 14 s piece takes
+// about 3 s; the SDK default is 10 minutes, and a hung request blocks the
+// channel), and no SDK retries: main.js tries a failed piece once more
+// itself, after a pause that keeps the channel's 2.5 s spacing and the key's
+// 60 requests a minute.
+const PUBLIK_STT_CLIENT = { timeout: 30000, maxRetries: 0 };
+
+// Retry-After (seconds) or retry-after-ms of a failed request, in ms; 0 if none.
+function retryAfterHeaderMs(e) {
+  const h = e && e.headers;
+  if (!h) return 0;
+  const get = (k) => (typeof h.get === 'function' ? h.get(k) : h[k]);
+  const ms = Number(get('retry-after-ms'));
+  if (ms > 0) return Math.round(ms);
+  const s = Number(get('retry-after'));
+  return s > 0 ? Math.round(s * 1000) : 0;
+}
 
 /** { apiKey, baseURL, model } when publik can transcribe for this person, else null. */
 function publikTranscription(settings) {
@@ -171,7 +188,7 @@ function createSTT(settings) {
   // person who moved to another provider is never charged on publik for audio.
   const publikStt = publikTranscription(settings);
   if (selectedProvider === 'auto' && publikStt) {
-    chain.push({ p: 'publik', m: publikStt.model, fn: (wav) => transcribeOpenAI(publikStt.apiKey, wav, publikStt.model, publikStt.baseURL, vocabPrompt) });
+    chain.push({ p: 'publik', m: publikStt.model, fn: (wav) => transcribeOpenAI(publikStt.apiKey, wav, publikStt.model, publikStt.baseURL, vocabPrompt, PUBLIK_STT_CLIENT) });
   }
 
   let disabledUntil = 0;
@@ -208,6 +225,8 @@ function createSTT(settings) {
           const formatted = formatProviderErrorMessage(e, c.p, c.m);
           const message = formatted instanceof Error ? formatted.message : formatted;
           lastErr = { status: e && e.status, code: e && e.code, message, provider: c.p, model: c.m };
+          const retryAfterMs = retryAfterHeaderMs(e);
+          if (retryAfterMs) lastErr.retryAfterMs = retryAfterMs;
           if (formatted instanceof Error && formatted.action) lastErr.action = formatted.action;
           if (backOff) {
             lastProvider = c.p;
@@ -221,4 +240,4 @@ function createSTT(settings) {
   };
 }
 
-module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };
+module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, PUBLIK_STT_CLIENT, retryAfterHeaderMs, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };

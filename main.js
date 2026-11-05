@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
-const { UtteranceBatcher } = require('./src/publik-stt-batcher');
+const { UtteranceBatcher, DEFAULT_MIN_GAP_MS } = require('./src/publik-stt-batcher');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM, normalizeProviderName } = require('./src/llm');
 const { giveUpTimer } = require('./src/give-up');
@@ -112,6 +112,7 @@ const state = { capturing: false, busy: false, transcribing: { you: false, them:
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
 const buffers = { you: [], them: [] };
 const publikSttBatchers = { you: new UtteranceBatcher(), them: new UtteranceBatcher() };
+const sttInFlight = { you: Promise.resolve(), them: Promise.resolve() }; // the channel's transcription request, if any
 let publikSttNoticeAt = 0; // last "Transcription paused" notice for a passing publik error
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
@@ -413,9 +414,10 @@ async function flushChannel(channel) {
   let pcm = voiced;
   if (stt.providers[0] === publik.PUBLIK_PROVIDER) {
     // publik API: whole utterances cut at pauses, so two busy channels stay
-    // under the key's 60 requests a minute and a long question is never cut
-    // mid-sentence (src/publik-stt-batcher.js). The batcher gets the raw
-    // window, pauses included: it finds them in 30 ms frames.
+    // under the key's 60 requests a minute and a question is never cut inside
+    // a word; a sentence reaches whisper within about 10 s of its end
+    // (src/publik-stt-batcher.js). The batcher gets the raw window, pauses
+    // included: it finds them in 30 ms frames.
     pcm = publikSttBatchers[channel].push(windowPcm);
   } else {
     publikSttBatchers[channel].reset();
@@ -426,28 +428,93 @@ async function flushChannel(channel) {
   // a Settings save, which clear sttDisabled.
   if (sttDisabled && stt.providers[0] === publik.PUBLIK_PROVIDER) return;
 
-  state.transcribing[channel] = true;
-  try {
-    if (!stt.available) {
-      if (!sttDisabled) { sttDisabled = true; send('status', { message: noTranscriptionMessage(settings) }); }
-      return;
+  const failed = await transcribePiece(channel, pcm, settings, stt, true);
+  // A passing publik failure: the batcher sends the piece once more, first
+  // in line, after the delay; a second failure is final.
+  if (failed && !publikSttBatchers[channel].retry(pcm, failed.delayMs)) handleSttError(failed.error, settings);
+}
+
+// publik API: busy (429), a server error, or no answer in time (no status)
+// is passing; anything else (balance used up, key revoked) is not.
+function isPassingSttError(err) {
+  return Boolean(err) && (err.status === 429 || !err.status || err.status >= 500);
+}
+
+// The wait before the one more try: the gateway's Retry-After (at most 20 s),
+// else 5 s after a 429 (the key allows 60 requests a minute, chat included)
+// and the channel's 2.5 s spacing after anything else.
+function sttRetryDelayMs(err) {
+  if (err && err.retryAfterMs > 0) return Math.min(Math.max(err.retryAfterMs, DEFAULT_MIN_GAP_MS), 20000);
+  return err && err.status === 429 ? 5000 : DEFAULT_MIN_GAP_MS;
+}
+
+// Transcribes one piece for a channel and publishes its text. With
+// `canRetry`, a passing publik failure is not reported: it comes back as
+// { error, delayMs } for the caller to try once more.
+function transcribePiece(channel, pcm, settings, stt, canRetry) {
+  const run = (async () => {
+    state.transcribing[channel] = true;
+    try {
+      if (!stt.available) {
+        if (!sttDisabled) { sttDisabled = true; send('status', { message: noTranscriptionMessage(settings) }); }
+        return null;
+      }
+      const res = await stt.transcribe(pcm);
+      if (res.error) {
+        if (canRetry && res.error.provider === publik.PUBLIK_PROVIDER && isPassingSttError(res.error)) {
+          return { error: res.error, delayMs: sttRetryDelayMs(res.error) };
+        }
+        handleSttError(res.error, settings);
+        return null;
+      }
+      if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
+        const turn = { channel, text: res.text.trim(), ts: Date.now() };
+        pushTranscript(turn);
+        send('transcript', turn);
+      }
+      return null;
+    } catch (e) {
+      console.log('[stt] error', e && e.message);
+      recordEvent({ level: 'error', event: 'stt_failed', msg: e && e.message ? e.message : String(e), frame: 'transcribePiece', context: { channel } });
+      return null;
+    } finally {
+      state.transcribing[channel] = false;
     }
-    const res = await stt.transcribe(pcm);
-    if (res.error) {
-      handleSttError(res.error, settings);
-      return;
-    }
-    if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
-      const turn = { channel, text: res.text.trim(), ts: Date.now() };
-      pushTranscript(turn);
-      send('transcript', turn);
-    }
-  } catch (e) {
-    console.log('[stt] error', e && e.message);
-    recordEvent({ level: 'error', event: 'stt_failed', msg: e && e.message ? e.message : String(e), frame: 'flushChannel', context: { channel } });
-  } finally {
-    state.transcribing[channel] = false;
+  })();
+  sttInFlight[channel] = run.catch(() => {});
+  return run;
+}
+
+// The session stopped: what the publik batchers still hold (the sentence
+// being spoken at that moment, and audio that arrived since the last flush)
+// is taken now, before the buffers are cleared, and sent as final pieces.
+function takeHeldAudio() {
+  const settings = store.getSettings();
+  const stt = createSTT(settings);
+  if (stt.providers[0] !== publik.PUBLIK_PROVIDER || sttDisabled) return null;
+  const pieces = {};
+  for (const channel of ['you', 'them']) {
+    const rest = buffers[channel].length ? Buffer.concat(buffers[channel]) : null;
+    buffers[channel] = [];
+    pieces[channel] = publikSttBatchers[channel].flush(rest);
   }
+  return { settings, stt, pieces };
+}
+
+// Sends the held pieces after any request already in flight on the channel
+// (so the turns stay in order), each with one more try after a passing failure.
+async function sendHeldAudio(held) {
+  if (!held) return;
+  await Promise.all(['you', 'them'].map(async (channel) => {
+    for (const pcm of held.pieces[channel]) {
+      await sttInFlight[channel];
+      const failed = await transcribePiece(channel, pcm, held.settings, held.stt, true);
+      if (failed) {
+        await new Promise((r) => setTimeout(r, failed.delayMs));
+        await transcribePiece(channel, pcm, held.settings, held.stt, false);
+      }
+    }
+  }));
 }
 
 function handleSttError(err, settings) {
@@ -465,11 +532,12 @@ function handleSttError(err, settings) {
   if (sttDisabled) return;
   if (err.provider === publik.PUBLIK_PROVIDER) {
     // publik API: busy (429), unreachable (5xx, network) or a timeout is
-    // passing; say so at most once a minute and keep listening. Anything
+    // passing (after its one more try); say so at most once a minute and
+    // keep listening. Anything
     // else (balance used up, key revoked, a refused request) stops
     // transcription with the gateway's own sentence and its one button --
     // "update your key" is wrong for a key cue minted.
-    const passing = err.status === 429 || !err.status || err.status >= 500;
+    const passing = isPassingSttError(err);
     if (passing) {
       const now = Date.now();
       if (now - publikSttNoticeAt > 60000) { publikSttNoticeAt = now; send('status', { message: `Transcription paused: ${err.message}` }); }
@@ -789,10 +857,14 @@ async function setCapturing(active) {
   state.capturing = false;
   stopFlushLoop();
   stopStreamingSTT();
+  // The last words before the stop go out as final pieces, not dropped.
+  const lastWords = sendHeldAudio(takeHeldAudio()).catch(() => {});
   if (meetingMemory) {
     // Write/refresh the notes for this meeting in the background so the
     // summary survives even if cue is closed before the meeting formally ends.
-    meetingMemory.refreshNotes().then((notes) => {
+    // They wait for the last words, so the notes hold them too.
+    const memory = meetingMemory;
+    lastWords.then(() => memory.refreshNotes()).then((notes) => {
       if (notes) send('status', { message: `Meeting notes saved (${transcript.length} turns).` });
     }).catch(() => {});
   }

@@ -5,6 +5,8 @@ const path = require('node:path');
 const { UtteranceBatcher, BYTES_PER_SECOND } = require('../src/publik-stt-batcher');
 
 const win = (ms) => Buffer.alloc(Math.round((ms / 1000) * BYTES_PER_SECOND), 7); // one ~900 ms voiced window
+// A steady DC level is "steady noise" to the adaptive silence level after 3 s;
+// floorRatio 0 keeps the fixed gate for the tests of the other rules.
 
 test('voiced windows are held; a pause after them sends the whole utterance', () => {
   let t = 10000;
@@ -22,7 +24,7 @@ test('voiced windows are held; a pause after them sends the whole utterance', ()
 
 test('a long stretch without a pause is cut at maxMs', () => {
   let t = 0;
-  const b = new UtteranceBatcher({ maxMs: 8000, now: () => t });
+  const b = new UtteranceBatcher({ maxMs: 8000, floorRatio: 0, now: () => t });
   let sent = null;
   for (let i = 0; i < 10 && !sent; i++) { t += 900; sent = b.push(win(900)); }
   assert.ok(sent, 'sent once 8 s were pending');
@@ -72,6 +74,7 @@ test('main.js batches publik transcription and keeps listening through a passing
   assert.match(src, /publikSttBatchers\.you\.reset\(\); publikSttBatchers\.them\.reset\(\);/);
   const start = src.indexOf('function handleSttError(err, settings)');
   const body = src.slice(start, src.indexOf('\n}\n', start));
-  assert.match(body, /const passing = err\.status === 429 \|\| !err\.status \|\| err\.status >= 500;/);
+  assert.match(body, /const passing = isPassingSttError\(err\);/);
+  assert.match(src, /function isPassingSttError\(err\) \{\n  return Boolean\(err\) && \(err\.status === 429 \|\| !err\.status \|\| err\.status >= 500\);\n\}/);
   assert.ok(body.indexOf('const passing') < body.indexOf('sttDisabled = true'), 'a passing publik error never switches transcription off');
 });
