@@ -117,6 +117,8 @@ let sttSession = 0; // one per listening session; a piece only ever joins the se
 let stopFlush = null; // the stop flush still running: { session, cancelled }
 const STOP_FLUSH_MS = 40000; // the stop flush starts no request after this
 const lastSttText = { you: '', them: '' }; // the channel's latest text, whisper context for a piece after a cut
+let sttSessionShown = false; // the current session has shown text (an old session's late text then waits no more)
+const NEW_SESSION_FIRST = { message: 'a new session started first' };
 let publikSttNoticeAt = 0; // last "not transcribed" notice for a lost piece (passing publik error)
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
@@ -493,7 +495,19 @@ function transcribePiece(channel, pcm, settings, stt, { context = '', session = 
         return null;
       }
       const res = await stt.transcribe(pcm, { context });
-      if (session !== sttSession) return { stale: true, pcm, session, error: res.error || null };
+      if (session !== sttSession) {
+        // Stop, then Start before this text came back: the text is the old
+        // session's last words. Shown (and in the notes) while the new
+        // session has shown nothing, so the order holds; else said as lost.
+        const text = !res.error && res.text ? res.text.trim() : '';
+        if (text.length > 1 && !sttSessionShown && !/^[?!.,;:\-…]+$/.test(text)) {
+          const turn = { channel, text, ts: Date.now() };
+          pushTranscript(turn);
+          send('transcript', turn);
+          return null;
+        }
+        return { stale: true, pcm, session, error: res.error || (text ? NEW_SESSION_FIRST : null) };
+      }
       if (res.error) {
         if (res.error.provider === publik.PUBLIK_PROVIDER && isPassingSttError(res.error)) {
           return { error: res.error, delayMs: sttRetryDelayMs(res.error), pcm, session, context };
@@ -506,6 +520,7 @@ function transcribePiece(channel, pcm, settings, stt, { context = '', session = 
         pushTranscript(turn);
         send('transcript', turn);
         lastSttText[channel] = turn.text;
+        sttSessionShown = true;
       }
       return null;
     } catch (e) {
@@ -529,6 +544,7 @@ function startSttSession() {
   buffers.you = []; buffers.them = [];
   publikSttBatchers.you.reset(); publikSttBatchers.them.reset();
   lastSttText.you = ''; lastSttText.them = '';
+  sttSessionShown = false;
 }
 
 // The session stopped: what the publik batchers still hold (the sentence
@@ -543,10 +559,14 @@ function takeHeldAudio() {
     const batcher = publikSttBatchers[channel];
     const rest = buffers[channel].length ? Buffer.concat(buffers[channel]) : null;
     buffers[channel] = [];
+    // A retry already waiting keeps what is left of its delay (Retry-After),
+    // at least the channel's 2.5 s spacing (verify of ba8a0fe: Retry-After
+    // 15 s, sent 3 s after the 429 at Stop).
+    const now = Date.now();
     pieces[channel] = batcher.flush(rest).map((pcm) => ({
       pcm,
       tried: batcher.wasRetried(pcm) ? 1 : 0,
-      delayMs: DEFAULT_MIN_GAP_MS,
+      delayMs: Math.max(DEFAULT_MIN_GAP_MS, batcher.retryDueAt(pcm) - now),
       continues: batcher.continuesCut(pcm)
     }));
   }
@@ -574,7 +594,7 @@ async function sendHeldAudio(held) {
     let notBefore = 0;
     const inFlight = await sttInFlight[channel];
     if (inFlight && inFlight.session === held.session && inFlight.pcm && !inFlight.handled) {
-      if (inFlight.stale) { lostBytes += inFlight.pcm.length; lastErr = inFlight.error || lastErr; }
+      if (inFlight.stale) { if (inFlight.error) { lostBytes += inFlight.pcm.length; lastErr = inFlight.error; } } // no error: no words in it
       else if (inFlight.error) {
         queue.push({ pcm: inFlight.pcm, tried: publikSttBatchers[channel].wasRetried(inFlight.pcm) ? 2 : 1, error: inFlight.error, delayMs: inFlight.delayMs, context: inFlight.context });
         notBefore = Date.now() + inFlight.delayMs;
@@ -595,10 +615,10 @@ async function sendHeldAudio(held) {
         const res = await transcribePiece(channel, item.pcm, settings, createSTT(settings), { context, session: held.session });
         item.tried++;
         if (!res) done = true; // transcribed, or a lasting error already said
-        else if (res.stale) { item.error = res.error || item.error; break; }
+        else if (res.stale) { if (res.error) item.error = res.error; else done = true; break; }
         else { item.error = res.error; item.delayMs = res.delayMs; notBefore = Date.now() + res.delayMs; }
       }
-      if (!done) { lostBytes += item.pcm.length; lastErr = item.error || lastErr; }
+      if (!done) { lostBytes += item.pcm.length; lastErr = item.error || lastErr || (flush.cancelled ? NEW_SESSION_FIRST : null); }
     }
   }));
   if (stopFlush === flush) stopFlush = null;

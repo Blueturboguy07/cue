@@ -28,6 +28,8 @@ function fnByName(src, name) {
 function mainHarness({ plan = [], batcherOpts = {} } = {}) {
   const src = readSource('main.js');
   const code = NAMES.map((name) => fnByName(src, name)).join('\n');
+  // Top-level values of main.js the functions use (when this main.js has them).
+  const consts = ['NEW_SESSION_FIRST'].map((name) => (new RegExp(`^const ${name} = .*;$`, 'm').exec(src) || [''])[0]).join('\n');
   let t = 1e6;
   const requests = []; const notices = []; const turns = []; const reported = []; const waits = []; const events = [];
   const held = new Map();
@@ -60,7 +62,7 @@ function mainHarness({ plan = [], batcherOpts = {} } = {}) {
     buffers: { you: [], them: [] },
     publikSttBatchers: { you: new UtteranceBatcher({ now: () => t, ...batcherOpts }), them: new UtteranceBatcher({ now: () => t, ...batcherOpts }) },
     sttInFlight: { you: Promise.resolve(null), them: Promise.resolve(null) },
-    sttSession: 1, stopFlush: null, STOP_FLUSH_MS: 40000, lastSttText: { you: '', them: '' },
+    sttSession: 1, stopFlush: null, STOP_FLUSH_MS: 40000, lastSttText: { you: '', them: '' }, sttSessionShown: false,
     publikSttNoticeAt: 0,
     store: { getSettings: () => ({}) }, createSTT: makeStt, publik: { PUBLIK_PROVIDER: 'publik' },
     MIN_BYTES: 3840, RMS_GATE: 180, rms16: S.rms, DEFAULT_MIN_GAP_MS: 2500, sttDisabled: false,
@@ -72,7 +74,7 @@ function mainHarness({ plan = [], batcherOpts = {} } = {}) {
     // A wait moves the fake clock on at once.
     setTimeout: (fn, ms) => { waits.push(ms); t += ms || 0; fn(); return 0; }
   });
-  vm.runInContext(code + "\nthis.api = { flushChannel, takeHeldAudio, sendHeldAudio, startSttSession: typeof startSttSession === 'function' ? startSttSession : null };", ctx);
+  vm.runInContext(consts + '\n' + code + "\nthis.api = { flushChannel, takeHeldAudio, sendHeldAudio, startSttSession: typeof startSttSession === 'function' ? startSttSession : null };", ctx);
   const win = 0.9 * BYTES_PER_SECOND;
   return {
     api: ctx.api, ctx, requests, turns, reported, notices, waits, events,
@@ -80,12 +82,13 @@ function mainHarness({ plan = [], batcherOpts = {} } = {}) {
     tick: (ms) => { t += ms; },
     now: () => t,
     release: async (n) => { const r = held.get(n); if (!r) throw new Error(`request ${n} is not in flight`); held.delete(n); r(); await settle(); },
-    // Feed audio to the "them" channel in 900 ms windows, one flushChannel
-    // each, as the 900 ms timer does: not awaited, so a held request stays in
-    // flight while the next windows arrive (they wait in the buffer).
-    async feed(audio, { thenTicks = 0 } = {}) {
-      for (let off = 0; off < audio.length; off += win) { ctx.buffers.them.push(audio.subarray(off, off + win)); t += 900; ctx.api.flushChannel('them'); await settle(); }
-      for (let i = 0; i < thenTicks; i++) { t += 900; ctx.api.flushChannel('them'); await settle(); }
+    // Feed audio to a channel ("them" unless named) in 900 ms windows, one
+    // flushChannel each, as the 900 ms timer does: not awaited, so a held
+    // request stays in flight while the next windows arrive (they wait in
+    // the buffer).
+    async feed(audio, { thenTicks = 0, channel = 'them' } = {}) {
+      for (let off = 0; off < audio.length; off += win) { ctx.buffers[channel].push(audio.subarray(off, off + win)); t += 900; ctx.api.flushChannel(channel); await settle(); }
+      for (let i = 0; i < thenTicks; i++) { t += 900; ctx.api.flushChannel(channel); await settle(); }
     },
     // The stop path of setCapturing, in its order.
     stop() {

@@ -161,21 +161,11 @@ function promptWithContext(vocabPrompt, context) {
   return tail.replace(/[\s.,;:\u2026]+$/, '') + ',';
 }
 
-// whisper sometimes repeats the end of its prompt before the new words; drop
-// such a repeat (3 or more words that end the context) from the start. A
-// text that is only such a repeat is the prompt read back (over silence or
-// noise), not speech: it becomes no text.
-function stripContextEcho(text, context) {
-  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
-  const ctx = contextTail(context).split(/\s+/).filter(Boolean);
-  const norm = (w) => w.toLowerCase().replace(/[^a-z0-9']/g, '');
-  for (let n = Math.min(ctx.length, words.length); n >= 3; n--) {
-    let same = true;
-    for (let i = 0; i < n && same; i++) same = norm(words[i]) === norm(ctx[ctx.length - n + i]) && norm(words[i]) !== '';
-    if (same) return words.slice(n).join(' ');
-  }
-  return String(text || '').trim();
-}
+// No repeat removal: in two live runs (verify of ba8a0fe) whisper read its
+// prompt back in 0 pieces, and removing "3 or more words that repeat the end
+// of the text before" deleted real speech ("go back, go back, until" ->
+// "Until", "talk to the team about the tests" -> "About the tests"). A
+// repeat across a cut is kept as said.
 
 // The text of a piece that starts at a cut is its own turn: when the text
 // before it ended a sentence, it starts with a capital ("describe a
@@ -249,7 +239,7 @@ function createSTT(settings) {
     chain.push({ p: 'publik', m: publikStt.model, fn: async (wav, opts) => {
       const context = opts && opts.context;
       const text = await transcribeOpenAI(publikStt.apiKey, wav, publikStt.model, publikStt.baseURL, promptWithContext(vocabPrompt, context), PUBLIK_STT_CLIENT);
-      return context ? continuedText(stripContextEcho(text, context), context) : text;
+      return context ? continuedText(text, context) : text;
     } });
   }
 
@@ -304,4 +294,4 @@ function createSTT(settings) {
   };
 }
 
-module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, PUBLIK_STT_CLIENT, retryAfterHeaderMs, promptWithContext, stripContextEcho, continuedText, CONTEXT_CHARS, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };
+module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, PUBLIK_STT_CLIENT, retryAfterHeaderMs, promptWithContext, continuedText, CONTEXT_CHARS, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };

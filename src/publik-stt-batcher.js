@@ -127,6 +127,7 @@ class UtteranceBatcher {
     this.now = o.now || (() => Date.now());
     this.lastSentAt = -Infinity;
     this.retried = new WeakSet(); // pieces already given their one more try
+    this.retryAt = new WeakMap(); // piece -> when its one more try may go
     this.continued = new WeakSet(); // pieces that start at a cut (the sentence before goes on)
     this.reset();
   }
@@ -176,7 +177,9 @@ class UtteranceBatcher {
   retry(pcm, delayMs = this.minGapMs) {
     if (!pcm || !pcm.length || this.retried.has(pcm)) return false;
     this.retried.add(pcm);
-    this.ready.unshift({ buf: pcm, retry: true, notBefore: this.now() + Math.max(0, delayMs) });
+    const notBefore = this.now() + Math.max(0, delayMs);
+    this.retryAt.set(pcm, notBefore);
+    this.ready.unshift({ buf: pcm, retry: true, notBefore });
     return true;
   }
 
@@ -356,6 +359,12 @@ class UtteranceBatcher {
    *  text before it belongs to the same sentence, so whisper is given it. */
   continuesCut(pcm) {
     return Boolean(pcm) && this.continued.has(pcm);
+  }
+
+  /** When the one more try of `pcm` may go (0: not a retry). Kept after
+   *  flush(), so the stop flush waits what is left of a Retry-After. */
+  retryDueAt(pcm) {
+    return (pcm && this.retryAt.get(pcm)) || 0;
   }
 
   /** True when `pcm` was already given its one more try. */

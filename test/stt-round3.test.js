@@ -175,18 +175,6 @@ test('N2: when the one more try fails too, a notice says the last words were not
   assert.deepEqual(h.turns.map((x) => x.text), ['the held sentence', 'new session']);
 });
 
-test('N2: text that comes back for an old session after a new Start is not shown in the new one; it is said as lost', async () => {
-  const h = mainHarness({ plan: [{ text: 'old words', hold: true }, { text: 'held' }] });
-  const { done } = await inFlightAtStop(h, 75);
-  h.start(); // Start again while request 1 is still in flight
-  await h.release(1);
-  await done;
-  assert.deepEqual(h.turns, [], 'nothing from the old session in the new one');
-  assert.equal(h.requests.length, 1, 'the stop flush ended at the new Start');
-  assert.equal(h.notices.length, 1);
-  assert.match(h.notices[0], /^The last \d+ s before Stop were not transcribed\.$/);
-});
-
 // ---- N3: a 429 near Stop -------------------------------------------------
 
 test('N3: 429 with Retry-After 15 s just before Stop, then a plain 429: the stop flush waits the 15 s, the local back-off does not block the last words, and the notice matches', async () => {
@@ -221,7 +209,7 @@ test('N3: at Stop, a Retry-After over 20 s is waited for 20 s, not more', async 
 // ---- N1: the whisper context prompt --------------------------------------
 
 const http = require('http');
-const { createSTT, promptWithContext, stripContextEcho, continuedText, CONTEXT_CHARS, buildVocabPrompt } = require('../src/stt');
+const { createSTT, promptWithContext, continuedText, CONTEXT_CHARS, buildVocabPrompt } = require('../src/stt');
 
 test('N1: the prompt of a piece that starts at a cut is only the last words before it (at most 160 characters, whole words), a final "." made a ","; other pieces get the vocabulary', () => {
   assert.equal(promptWithContext('Docker, AWS', ''), 'Docker, AWS');
@@ -235,15 +223,6 @@ test('N1: the prompt of a piece that starts at a cut is only the last words befo
   assert.ok(!/Docker|^V/.test(p), 'no vocabulary list');
   const words = p.slice(0, -1);
   assert.ok(long.slice(0, -1).endsWith(words) && long[long.length - 1 - words.length - 1] === ' ', 'the tail starts at a whole word');
-});
-
-test('N1: whisper repeating the end of the context is dropped from the text (3 or more words; a text that is only that repeat becomes no text), other text is kept', () => {
-  const ctx = 'What did you do then? I rolled back the change, told the team, and we fixed it. Great.';
-  assert.equal(stripContextEcho('we fixed it. Great. Who reviewed the fix?', ctx), 'Who reviewed the fix?');
-  assert.equal(stripContextEcho('Great. Who reviewed the fix?', ctx), 'Great. Who reviewed the fix?', 'one or two words can be new speech');
-  assert.equal(stripContextEcho('My lead reviewed it.', ctx), 'My lead reviewed it.');
-  assert.equal(stripContextEcho('fixed it. Great.', ctx), '', 'only the prompt read back: no text');
-  assert.equal(stripContextEcho('it. Great.', ctx), 'it. Great.', 'two words can be new speech');
 });
 
 test('N1: a piece after a cut starts with a capital when the text before it ended a sentence, else as whisper wrote it', () => {
@@ -270,7 +249,7 @@ function publikServer(answers) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, prompts, url: `http://127.0.0.1:${server.address().port}/v1` })));
 }
 
-test('N1: publik gets the context in the whisper prompt only for a piece that continues a cut, and an echo of it is dropped from the text', async () => {
+test('N1: publik gets the context in the whisper prompt only for a piece that continues a cut', async () => {
   const srv = await publikServer(['Who reviewed the fix? My lead reviewed it.', 'Great. Who reviewed the fix? My lead reviewed it.']);
   try {
     const settings = { provider: 'publik', apiKeys: { publik: 'test-publik-key' }, publik: { baseUrl: srv.url } };
@@ -285,6 +264,6 @@ test('N1: publik gets the context in the whisper prompt only for a piece that co
     assert.equal(srv.prompts[0], vocab);
     assert.equal(srv.prompts[1], ctx.replace(/\.$/, ','), 'only the words before the cut, the final "." made a ","');
     assert.equal(a.text, 'Who reviewed the fix? My lead reviewed it.');
-    assert.equal(b.text, 'Great. Who reviewed the fix? My lead reviewed it.', 'a one-word repeat is kept (it can be new speech)');
+    assert.equal(b.text, 'Great. Who reviewed the fix? My lead reviewed it.', 'a repeat of the text before is kept (round 4)');
   } finally { srv.server.close(); }
 });
