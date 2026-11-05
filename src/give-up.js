@@ -15,10 +15,14 @@ function giveUpTimer(ms, message, timers = { setTimeout, clearTimeout }) {
   let reject = () => {};
   const expired = new Promise((_res, rej) => { reject = rej; });
   expired.catch(() => {}); // a guard nobody races must not raise an unhandled rejection
+  const abort = (e) => {
+    clear();
+    const err = e instanceof Error ? e : new Error(e || message);
+    controller.abort(err);
+    reject(err);
+  };
   const fire = () => {
-    timer = null;
-    controller.abort(new Error(message));
-    reject(new Error(message));
+    abort(new Error(message));
   };
   const rearm = () => {
     timers.clearTimeout(timer);
@@ -29,7 +33,7 @@ function giveUpTimer(ms, message, timers = { setTimeout, clearTimeout }) {
     timer = null;
   };
   rearm();
-  return { signal: controller.signal, expired, rearm, clear };
+  return { signal: controller.signal, expired, rearm, clear, abort };
 }
 
 module.exports = { giveUpTimer };

@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 // Electron's setDisplayMediaRequestHandler callback accepts `audio` as a
 // WebFrameMain, 'loopback', or 'loopbackWithMute' — and NOTHING else. Its
@@ -49,3 +50,45 @@ test('the display-media handler invokes its one-time callback exactly once', () 
     `callback( appears ${invocations.length} times in the handler; a one-time callback must be invoked from ` +
     'exactly one place or Electron reports "One-time callback was called more than once"');
 });
+
+for (const platform of ['darwin', 'win32', 'linux']) {
+  test(`main denies Meeting audio Off on ${platform}`, async () => {
+    let handler, enumerations = 0, replies = 0, reply;
+    const block = 'session.defaultSession.' + displayMediaHandlerSource() + 'useSystemPicker: false });';
+    vm.runInNewContext(block, {
+      isMac: platform === 'darwin', captureController: { signal: new AbortController().signal },
+      store: { getSettings: () => ({ meetingAudio: false }) },
+      session: { defaultSession: { setDisplayMediaRequestHandler: (fn) => { handler = fn; } } },
+      desktopCapturer: { getSources: async () => { enumerations++; return [{ id: 'synthetic-screen' }]; } },
+      console,
+    });
+    handler({}, (value) => { replies++; reply = value; });
+    await new Promise(setImmediate);
+    assert.equal(enumerations, 0);
+    assert.equal(replies, 1);
+    assert.equal(reply, undefined);
+  });
+}
+
+for (const change of ['off', 'stop', 'restart']) {
+  test(`a pending display grant is denied after ${change}`, async () => {
+    let handler, resolve, reply, replies = 0;
+    const controller = new AbortController(), captureController = { signal: controller.signal };
+    const settings = { meetingAudio: true };
+    const sources = new Promise((done) => { resolve = done; });
+    const block = 'session.defaultSession.' + displayMediaHandlerSource() + 'useSystemPicker: false });';
+    vm.runInNewContext(block, {
+      captureController, store: { getSettings: () => settings },
+      session: { defaultSession: { setDisplayMediaRequestHandler: (fn) => { handler = fn; } } },
+      desktopCapturer: { getSources: () => sources }, console,
+    });
+    handler({}, (value) => { replies++; reply = value; });
+    if (change === 'off') settings.meetingAudio = false;
+    else controller.abort();
+    if (change === 'restart') captureController.signal = new AbortController().signal;
+    resolve([{ id: 'synthetic-screen' }]);
+    await new Promise(setImmediate);
+    assert.equal(replies, 1);
+    assert.equal(reply, undefined);
+  });
+}

@@ -30,10 +30,14 @@ const DEFAULTS = {
   // screen-sharing. cue's promise is to be invisible, so on macOS this is opt-in;
   // on Windows/Linux loopback capture carries no such indicator, so it stays on.
   meetingAudio: process.platform !== 'darwin',
+  automaticNotes: false,
+  privacyPaused: false,
   baseUrl: '',
   minimaxRegion: 'global_en',
   apiKeys: { cerebras: '', openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '', deepseek: '', azure: '', publik: '' },
   azureEndpoint: '',
+  anthropicBaseUrl: '',
+  anthropicEffort: { fast: '', smart: '' },
   // publik API (packaged-build default). apiKeys.publik holds the minted key;
   // everything here is state the main process owns — the renderer only reads
   // a redacted view of it through publik:state and can never write it.
@@ -127,7 +131,7 @@ function clampOpacity(value) {
   return Math.min(MAX_OPACITY, Math.max(MIN_OPACITY, Math.round(n * 100) / 100));
 }
 
-const RENDERER_READ_ONLY = ['publik'];
+const RENDERER_READ_ONLY = ['privacyPaused', 'publik'];
 
 let data = null;
 let lastError = null;

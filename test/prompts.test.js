@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { MODES } = require('../src/prompts');
+const { MODES, currentThread, questionThread } = require('../src/prompts');
 
 test('assist mode gives a direct answer in first person', () => {
   const system = MODES.assist.buildSystem(null);
@@ -82,4 +82,68 @@ test('leetcode mode never applies AI rules (coding answers stay strict)', () => 
   assert.ok(!withRules.includes('USER RULES'), 'leetcode must not include USER RULES');
   assert.ok(!withRules.includes(RULES), 'leetcode must not leak user rules into the prompt');
   assert.match(withRules, /competitive programmer/);
+});
+test('live-answer modes send only the current question thread', () => {
+  const min = 60 * 1000;
+  const transcript = [
+    { channel: 'them', text: 'Old meeting question.', ts: 0 },
+    { channel: 'them', text: 'Tell me about', ts: 20 * min },
+    { channel: 'them', text: 'a hard bug.', ts: 20 * min + 900 },
+    { channel: 'you', text: 'Sure, at my last job', ts: 21 * min },
+    { channel: 'them', text: 'How did you find it?', ts: 22 * min }
+  ];
+  const thread = currentThread(transcript);
+  assert.ok(!thread.includes('Old meeting'), 'turns older than the window are dropped');
+  assert.match(thread, /^Them: Tell me about a hard bug\.\nYou: Sure, at my last job\nThem: How did you find it\?$/, 'fragments merge into utterances');
+  const many = Array.from({ length: 20 }, (_, i) => ({ channel: i % 2 ? 'you' : 'them', text: `u${i}`, ts: i }));
+  assert.equal(currentThread(many).split('\n').length, 8, 'capped to the last few utterances');
+  for (const mode of ['say', 'assist']) {
+    const text = MODES[mode].build({ transcript, userText: '' });
+    assert.ok(!text.includes('Old meeting'), `${mode} must not resend stale turns`);
+    assert.match(text, /newest question/);
+  }
+});
+
+test('live-answer prompts frame the session as interview practice', () => {
+  for (const mode of ['say', 'assist', 'ask', 'answerThis']) {
+    const system = MODES[mode].buildSystem(null, '');
+    assert.match(system, /practic/i, `${mode} should say this is practice`);
+    assert.ok(!/whisper|discreet|live interview/i.test(system), `${mode} should not describe covert live use`);
+  }
+});
+
+test('feedback coaches the user\'s own attempt at the current question', () => {
+  const def = MODES.feedback;
+  assert.equal(def.transcriptRequired, true, 'nothing to coach before anything was said');
+  const system = def.buildSystem(null, '');
+  assert.match(system, /Breakdown/);
+  assert.match(system, /Your answer/);
+  assert.match(system, /Fix now/);
+  const transcript = [
+    { channel: 'them', text: 'Old question.', ts: 0 },
+    { channel: 'them', text: 'How would you design a cache?', ts: 20 * 60000 },
+    { channel: 'you', text: 'I would use a hash map', ts: 20 * 60000 + 5000 }
+  ];
+  const text = def.build({ transcript, userText: '' });
+  assert.ok(!text.includes('Old question'), 'only the current thread is coached');
+  assert.match(text, /You: I would use a hash map/);
+});
+
+test('back-to-back questions stay separate and only the newest is up for answering', () => {
+  const transcript = [
+    { channel: 'them', text: 'What is your name?', ts: 0 },
+    { channel: 'them', text: 'Where are you based?', ts: 6000 },
+    { channel: 'them', text: 'How would you design', ts: 12000 },
+    { channel: 'them', text: 'a URL shortener?', ts: 12900 },
+    { channel: 'you', text: 'So first I would', ts: 16000 }
+  ];
+  assert.equal(currentThread(transcript).split('\n').length, 4, 'a 3s+ pause splits utterances; a short gap merges');
+  const q = questionThread(transcript);
+  assert.match(q, /context only, do not answer these\):\nThem: What is your name\?\nThem: Where are you based\?/);
+  assert.match(q, /Newest question \(answer only this\):\nThem: How would you design a URL shortener\?/);
+  assert.match(q, /Said since then:\nYou: So first I would$/);
+  for (const mode of ['say', 'assist', 'feedback']) {
+    assert.match(MODES[mode].build({ transcript, userText: '' }), /Newest question \(answer only this\):\nThem: How would you design a URL shortener\?/);
+  }
+  assert.equal(questionThread([]), 'Current thread (newest last):\n(none)');
 });

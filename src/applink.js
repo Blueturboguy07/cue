@@ -35,7 +35,7 @@ const CONSENT_TIMEOUT_MS = 120_000;
  * carries setContentProtection — so a consent prompt does not show up in a
  * screen share, which for this particular prompt is the right default.
  */
-function askInWindow(win, copy, scope) {
+function askInWindow(win, copy, scope, signal) {
   const id = `consent-${++consentSeq}`;
 
   return new Promise((resolve) => {
@@ -46,16 +46,21 @@ function askInWindow(win, copy, scope) {
       clearTimeout(timer);
       ipcMain.removeListener('applink:consent-response', onResponse);
       win.removeListener('closed', onClosed);
+      signal?.removeEventListener('abort', onAbort);
+      if (!win.isDestroyed()) { try { win.webContents.send('applink:consent-cancelled', { id }); } catch (_) {} }
       resolve(allowed);
     };
     const onResponse = (_event, payload) => {
-      if (payload && payload.id === id) settle(!!payload.allowed);
+      if (_event.sender === win.webContents && payload && payload.id === id) settle(payload.allowed === true);
     };
     const onClosed = () => settle(false);
+    const onAbort = () => settle(false);
     const timer = setTimeout(() => settle(false), CONSENT_TIMEOUT_MS);
 
     ipcMain.on('applink:consent-response', onResponse);
     win.once('closed', onClosed);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) { settle(false); return; }
 
     // cue deliberately never steals focus — except here. A question about who
     // may read your screen activity is the one thing that should interrupt.
@@ -69,10 +74,12 @@ function askInWindow(win, copy, scope) {
 
 /** Copy comes from applink-state.js so it can be tested without Electron. */
 async function requestConsent(request, deps) {
+  const signal = deps?.privacySignal?.();
+  if (signal?.aborted || (deps?.canPrompt && !deps.canPrompt())) return false;
   const copy = consentCopy(request);
   const win = deps && deps.getWindow ? deps.getWindow() : null;
 
-  if (win && !win.isDestroyed()) return askInWindow(win, copy, request.scope);
+  if (win && !win.isDestroyed()) return askInWindow(win, copy, request.scope, signal);
 
   // No window to ask in — during startup, or after the renderer died. Activate
   // first for the same reason as above, or this panel is equally unclickable.
@@ -85,7 +92,14 @@ async function requestConsent(request, deps) {
     message: copy.message,
     detail: copy.detail,
   });
-  return response === 1;
+  return !signal?.aborted && (!deps?.canPrompt || deps.canPrompt()) && response === 1;
+}
+
+function requirePrivacyAccess(signal) {
+  if (!signal?.aborted) return;
+  const error = new Error('Cue is privacy-paused; resume explicitly before granting access.');
+  error.rpcCode = ERROR_CODES.SCOPE_DENIED;
+  throw error;
 }
 
 /**
@@ -116,9 +130,11 @@ function startAppLink(deps) {
   link.action('set_capturing', {
     description: 'Start or stop listening',
     inputSchema: { type: 'object', properties: { active: { type: 'boolean' } }, required: ['active'] },
-    handler: (args, { caller }) => {
-      const active = !!args.active;
-      deps.setCapturing(active);
+    handler: async (args, { caller }) => {
+      const signal = deps.privacySignal?.();
+      requirePrivacyAccess(signal);
+      const active = await deps.setCapturing(args.active);
+      requirePrivacyAccess(signal);
       link.record({
         level: 'info',
         event: 'applink_set_capturing',
@@ -142,6 +158,8 @@ function startAppLink(deps) {
     description: 'List auto-captured slide captions for this meeting (memory-only)',
     inputSchema: { type: 'object', properties: {} },
     handler: async (_args, { caller }) => {
+      const signal = deps.privacySignal?.();
+      requirePrivacyAccess(signal);
       const getDecision = typeof deps.getSlidesConsent === 'function' ? deps.getSlidesConsent : () => undefined;
       const setDecision = typeof deps.setSlidesConsent === 'function' ? deps.setSlidesConsent : () => {};
       let decision = getDecision(caller.id);
@@ -150,6 +168,7 @@ function startAppLink(deps) {
         // (possibly stronger) verification of the caller, only that it
         // already holds the 'action' scope; hedge rather than overstate it.
         const allowed = await requestConsent({ callerName: caller.name, scope: 'slides', verification: 'none' }, deps);
+        requirePrivacyAccess(signal);
         decision = allowed ? 'granted' : 'denied';
         setDecision(caller.id, decision);
         link.record({
@@ -163,6 +182,7 @@ function startAppLink(deps) {
         error.rpcCode = ERROR_CODES.SCOPE_DENIED;
         throw error;
       }
+      requirePrivacyAccess(signal);
       const slides = typeof deps.getSlides === 'function' ? deps.getSlides() : [];
       link.record({
         level: 'info',

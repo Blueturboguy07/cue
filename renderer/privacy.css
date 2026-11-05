@@ -1,0 +1,15 @@
+.privacy-notice {
+  flex-shrink: 0;
+  max-width: 700px;
+  margin: 6px 0;
+  padding: 7px 12px;
+  border: 1px solid rgba(255, 206, 120, .4);
+  border-radius: 10px;
+  background: rgba(30, 24, 20, .96);
+  color: #ffe2ab;
+  font: 12px/1.45 -apple-system, system-ui, sans-serif;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+.privacy-notice button { margin-left: 8px; cursor: pointer; }
+#window-hide-btn:disabled { opacity: .5; cursor: default; }

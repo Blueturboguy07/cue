@@ -11,6 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { abortable } = require('./abort');
 
 const PUBLIK_PROVIDER = 'publik';
 const PROVIDER_LABEL = 'publik API';
@@ -112,11 +113,13 @@ function micros(v) {
   return Number.isFinite(n) ? Math.round(n) : null;
 }
 
-async function timedFetch(fetchImpl, url, init, timeoutMs) {
+async function timedFetch(fetchImpl, url, init, timeoutMs, signal) {
+  signal?.throwIfAborted();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
+    const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    return await abortable(fetchImpl(url, { ...init, signal: combined }), combined);
   } finally { clearTimeout(timer); }
 }
 
@@ -138,7 +141,7 @@ function gatewayError(res, body) {
  *   → 201 { key, key_id, base_url, models, claim_url, starter_micros, balance_micros, wallet }
  *   → 200 replay for an existing install_id: { key: null, starter_micros: 0, claim_state }
  */
-async function provision({ build, installId, appVersion, platform, osVersion, arch, deviceName, fetchImpl = fetch }) {
+async function provision({ build, installId, appVersion, platform, osVersion, arch, deviceName, fetchImpl = fetch, signal }) {
   if (!build || !build.available) throw new Error('This build has no publik app token.');
   const body = {
     app_token: build.appToken,
@@ -156,8 +159,9 @@ async function provision({ build, installId, appVersion, platform, osVersion, ar
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${build.appToken}` },
     body: JSON.stringify(body)
-  }, PROVISION_TIMEOUT_MS);
-  const data = await res.json().catch(() => ({}));
+  }, PROVISION_TIMEOUT_MS, signal);
+  const data = await abortable(res.json(), signal).catch(() => { signal?.throwIfAborted(); return {}; });
+  signal?.throwIfAborted();
   if (!res.ok) throw gatewayError(res, data);
 
   const wallet = data.wallet ? normalizeWallet(data.wallet) : null;
@@ -235,20 +239,21 @@ function normalizeWallet(b) {
   };
 }
 
-async function fetchWallet({ baseUrl, apiKey, fetchImpl = fetch }) {
+async function fetchWallet({ baseUrl, apiKey, fetchImpl = fetch, signal }) {
   const res = await timedFetch(fetchImpl, `${String(baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '')}/wallet`, {
     headers: { Authorization: `Bearer ${apiKey}` }
-  }, WALLET_TIMEOUT_MS);
-  const data = await res.json().catch(() => ({}));
+  }, WALLET_TIMEOUT_MS, signal);
+  const data = await abortable(res.json(), signal).catch(() => { signal?.throwIfAborted(); return {}; });
+  signal?.throwIfAborted();
   if (!res.ok) throw gatewayError(res, data);
   return normalizeWallet(data);
 }
 
 /** POST /installs/revoke with the install's own key (R21 §2.6). 204, idempotent. */
-async function revokeInstall({ baseUrl, apiKey, fetchImpl = fetch }) {
+async function revokeInstall({ baseUrl, apiKey, fetchImpl = fetch, signal }) {
   const res = await timedFetch(fetchImpl, `${String(baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '')}/installs/revoke`, {
     method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }
-  }, WALLET_TIMEOUT_MS);
+  }, WALLET_TIMEOUT_MS, signal);
   if (!res.ok && res.status !== 401) throw gatewayError(res, await res.json().catch(() => ({})));
   return true;
 }
@@ -632,7 +637,8 @@ function ownProviderNotReadyMessage({ providerName, missingKey, configurationErr
  *   - only apiKeys.publik and publik.* are written — no user-entered key is
  *     ever touched, and the provider is not switched here.
  */
-async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, log = () => {} }) {
+async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, log = () => {}, signal }) {
+  if (signal?.aborted) return { ok: false, cancelled: true };
   const s = store.getSettings();
   if (s.apiKeys.publik && !s.publik.revoked) return { ok: true, minted: false };
   let installId = s.publik.installId || randomUUID();
@@ -640,8 +646,11 @@ async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, 
   for (;;) {
     let r;
     try {
-      r = await provision({ build, installId, fetchImpl, ...device });
+      signal?.throwIfAborted();
+      r = await provision({ build, installId, fetchImpl, ...device, signal });
+      signal?.throwIfAborted();
     } catch (e) {
+      if (signal?.aborted) return { ok: false, cancelled: true };
       if (isInstallFinished(e) && !mintedFresh) {
         // The old key, claim link and wallet belong to the finished install;
         // the file keeps the new install_id so a retry stays idempotent.

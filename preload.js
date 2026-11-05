@@ -11,7 +11,13 @@ contextBridge.exposeInMainWorld('cue', {
   whisperModelDelete: (modelId) => ipcRenderer.invoke('whisper:model-delete', modelId),
   whisperModelImport: (modelId) => ipcRenderer.invoke('whisper:model-import', modelId),
   platformInfo: () => ipcRenderer.invoke('platform:info'),
+  privacyState: () => ipcRenderer.invoke('privacy:state'),
+  privacyPause: () => ipcRenderer.invoke('privacy:pause'),
+  privacyResume: () => ipcRenderer.invoke('privacy:resume'),
+  hideWindow: () => ipcRenderer.invoke('window:hide'),
+  windowReady: (token) => ipcRenderer.send('window:ready', token),
   ask: (payload) => ipcRenderer.send('ask', payload),
+  captureSet: (active) => ipcRenderer.invoke('capture:set', active),
   captureToggle: () => ipcRenderer.invoke('capture:toggle').catch((err) => {
     console.error('[cue] captureToggle error', err);
     return false;
@@ -44,7 +50,7 @@ contextBridge.exposeInMainWorld('cue', {
   permissionsContinue: () => ipcRenderer.send('permissions:continue'),
   log: (msg) => ipcRenderer.send('log', msg),
   on: (channel, cb) => {
-    const allowed = ['capture:state', 'llm:start', 'llm:thinking', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'transcript:restore', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'publik:state', 'slides:update'];
+    const allowed = ['privacy:state', 'applink:consent-cancelled', 'capture:state', 'meeting-audio:state', 'llm:start', 'llm:thinking', 'llm:token', 'llm:done', 'llm:error', 'status', 'transcript', 'transcript:restore', 'stt:interim', 'stt:final', 'stt:status', 'vad:state', 'applink:consent-request', 'hide:toggle', 'whisper:download-progress', 'whisper:models-changed', 'publik:state', 'slides:update'];
     if (!allowed.includes(channel)) return;
     ipcRenderer.on(channel, (_e, data) => cb(data));
   }

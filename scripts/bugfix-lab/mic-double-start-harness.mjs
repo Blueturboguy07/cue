@@ -46,7 +46,7 @@ function findLine(needle, from = 0) {
 }
 
 // ---- extract the mic capture functions (startMic/stopMic), verbatim ----
-const micBlockStart = findLine('let audioCtx = null, micStream = null, micWorklet = null;');
+const micBlockStart = findLine('let audioCtx = null, micStream = null, micWorklet = null');
 const micBlockEnd = findLine('// ---- capture: system/meeting audio', micBlockStart + 1);
 
 // ---- extract the capture:state event handler, verbatim ----
@@ -141,6 +141,10 @@ const isWindowsStub = true;
 const fnSource = `
 let interimEl = null;
 let sttState = 'off';
+let captureRequest = 0, captureDesired = false;
+const setSessionButton = () => {};
+const startSystemAudio = () => {};
+const stopSystemAudio = () => {};
 ${micBlockCode}
 
 ${handlerCode}

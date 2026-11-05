@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
   <title>cue</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="privacy.css" />
 </head>
 <body>
   <div id="app">
@@ -17,12 +18,14 @@
       <button class="tb-logo" id="logo-btn" title="How to use cue" aria-label="How to use cue"></button>
       <button class="tb-settings" id="tb-settings-btn" title="Settings" aria-label="Settings"></button>
       <div class="tb-divider"></div>
-      <button class="tb-hide" id="hide-btn" title="Hide" aria-label="Hide"><span class="chev"></span><span class="tb-hide-label">Hide</span></button>
+      <button class="tb-hide" id="hide-btn" title="Collapse" aria-label="Collapse"><span class="chev"></span><span class="tb-hide-label">Collapse</span></button>
       <div class="tb-divider"></div>
       <button class="tb-stop" id="stop-btn" title="Start session" aria-label="Start session">
         <span class="ic"></span><span class="tb-stop-label">Start session</span>
       </button>
       <div class="tb-divider"></div>
+      <button class="tb-hide" id="window-hide-btn" title="Hide window; restore with Ctrl/⌘+Shift+Space">Hide window</button>
+      <button class="tb-stop" id="pause-btn" title="Stop capture and requests; resume explicitly">Privacy pause</button>
       <div class="tb-opacity-wrap">
         <button class="tb-opacity" id="opacity-btn" title="Opacity" aria-label="Opacity" aria-expanded="false">
           <span class="ic"></span>
@@ -38,6 +41,8 @@
       <div class="tb-divider"></div>
       <button class="tb-quit" id="quit-btn" title="Quit cue" aria-label="Quit cue"></button>
     </div>
+
+    <div id="privacy-notice" class="privacy-notice" role="status">Checking screen-share protection…</div>
 
     <!-- Main assistant panel -->
     <div id="panel-wrap">
@@ -66,6 +71,11 @@
               </button>
               <span class="sep">•</span>
               <button class="act" data-mode="recap"><span class="ic"></span><span>Recap</span></button>
+              <span class="sep">•</span>
+              <button class="act" data-mode="feedback"
+                title="Breaks the question into steps and coaches the answer you just gave">
+                <span class="ic"></span><span>Feedback</span>
+              </button>
             </div>
 
             <div id="composer">
@@ -146,6 +156,9 @@
         <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
         <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
         <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
+        <div class="s-field" data-key-for="anthropic"><span>Fast effort</span><select id="effort-fast" class="s-select compact"><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Max</option></select></div>
+        <div class="s-field" data-key-for="anthropic"><span>Smart effort</span><select id="effort-smart" class="s-select compact"><option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Max</option></select></div>
+        <div class="s-note" data-key-for="anthropic">Higher effort thinks longer before answering: better on hard problems, slower to start.</div>
 
         <label class="s-label">Assistant access <span class="s-hint">programs allowed to see what cue is doing</span></label>
         <div class="s-callers" id="applink-callers"></div>
@@ -171,6 +184,7 @@
             <div class="s-field" data-key-for="cerebras"><span>Cerebras</span><input id="key-cerebras" type="password" placeholder="csk-..." autocomplete="off" /></div>
             <div class="s-field" data-key-for="openai"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
             <div class="s-field" data-key-for="anthropic"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
+            <div class="s-field" data-key-for="anthropic"><span>Base URL</span><input id="anthropic-base-url" type="text" placeholder="optional · a relay like https://api.tokenrouter.com" autocomplete="off" /></div>
             <div class="s-field" data-key-for="gemini"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
             <div class="s-field" data-key-for="deepgram"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
             <div class="s-field" data-key-for="groq"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
@@ -212,9 +226,11 @@
           <button data-stt-provider="auto">Auto</button>
           <button data-stt-provider="local">Local</button>
           <button data-stt-provider="openai">OpenAI</button>
+          <button data-stt-provider="groq">Groq</button>
+          <button data-stt-provider="deepgram">Deepgram</button>
           <button data-stt-provider="custom">Custom</button>
         </div>
-        <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider. Custom sends audio to the Base URL and Custom key set under “Use your own API key instead” on the first tab (requires both).</div>
+        <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider. Groq, OpenAI and Deepgram use their key under “Use your own API key instead” on the first tab, whichever chat provider you picked. Deepgram and OpenAI stream live; Groq sends each sentence after you pause. Custom sends audio to the Base URL and Custom key set under “Use your own API key instead” on the first tab (requires both).</div>
 
         <label class="s-label">Meeting audio <span class="s-hint">transcribe the other side of a call</span></label>
         <div class="s-seg" id="meeting-audio-seg">
@@ -260,6 +276,10 @@
         </div>
 
         <div class="s-status" id="whisper-status"></div>
+
+        <label class="s-label">Meeting notes</label>
+        <div class="s-field"><span>Write notes automatically</span><input id="automatic-notes" type="checkbox" style="width:auto;" /></div>
+        <div class="s-note">Sends transcripts to your selected chat provider when listening stops. Applies to meetings begun while enabled. Changing providers does not approve sending existing meetings to the new provider. Local transcription alone does not keep these notes on device.</div>
 
         <label class="s-label">Meeting slides <span class="s-hint">opt-in · auto-captions while listening · memory-only</span></label>
         <div class="s-field"><span>Track slides</span><input id="slides-enabled" type="checkbox" style="width:auto;" /></div>
@@ -334,5 +354,6 @@
   <script src="icons.js"></script>
   <script src="publik-card.js"></script>
   <script src="renderer.js"></script>
+  <script src="privacy.js"></script>
 </body>
 </html>

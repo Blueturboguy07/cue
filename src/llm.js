@@ -1,8 +1,9 @@
 // LLM factory — OpenAI, Anthropic, Gemini, and OpenAI-compatible APIs behind one streaming interface.
-// stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken }) -> Promise<fullText>
+// stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken, signal }) -> Promise<fullText>
 
 const { createCompatibleClientOptions } = require('./openai-compatible');
 const publik = require('./publik');
+const { abortable } = require('./abort');
 
 const CUSTOM_PROVIDER = 'custom';
 const PUBLIK_PROVIDER = publik.PUBLIK_PROVIDER;
@@ -260,6 +261,14 @@ function stripDataUrl(dataUrl) {
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
+// Thinking models behind OpenAI-compatible APIs (routers, reasoning models) count
+// hidden reasoning against the cap, same as Gemini below — measured: Sonnet via
+// TokenRouter spent all 700 tokens on a "say" prompt and streamed 222 chars.
+const OPENAI_THINKING_HEADROOM = { fast: 2048, smart: 4096 };
+// Models that rejected max_tokens and asked for max_completion_tokens, so later
+// requests skip the failed first attempt.
+const usesMaxCompletionTokens = new Set();
+
 // What a stream that ends with no usable answer says, instead of a blank
 // bubble. Reasoning models think inside the output cap: when the thinking
 // uses it all, the stream ends with finish_reason "length" and no text
@@ -269,7 +278,10 @@ const EMPTY_ANSWER_MESSAGE = 'The model sent back an empty answer. Ask again.';
 const LENGTH_CUT_NOTE = '\n\n(Cut off: the answer reached its length limit.)';
 
 function emptyAnswerError(finishReason) {
-  const error = new Error(finishReason === 'length' ? LENGTH_EMPTY_MESSAGE : EMPTY_ANSWER_MESSAGE);
+  let message = EMPTY_ANSWER_MESSAGE;
+  if (finishReason === 'length') message = LENGTH_EMPTY_MESSAGE;
+  else if (finishReason === 'content_filter') message = "The model's provider blocked this answer with its safety filter.";
+  const error = new Error(message);
   error.emptyAnswer = true;
   error.finishReason = finishReason || null;
   return error;
@@ -330,18 +342,26 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
       messages.push({ role: t.role, content: t.text });
     }
   });
-  // signal: when cue stops waiting (watchdog, caption timer), the request is
-  // cancelled too, so the provider stops generating and billing it.
-  const pending = client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens }, requestOptions(signal));
+  const open = async (limitParam) => {
+    const pending = client.chat.completions.create({ model, messages, stream: true, [limitParam]: maxTokens }, requestOptions(signal));
+    if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
+      // The gateway stamps x-publik-* headers at admission; hand the raw
+      // Response to the caller so the balance line can move before settlement.
+      const { data, response } = await pending.withResponse();
+      try { onResponse(response); } catch { /* a display hook must never break the answer */ }
+      return data;
+    }
+    return pending;
+  };
   let stream;
-  if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
-    // The gateway stamps x-publik-* headers at admission; hand the raw
-    // Response to the caller so the balance line can move before settlement.
-    const { data, response } = await pending.withResponse();
-    try { onResponse(response); } catch { /* a display hook must never break the answer */ }
-    stream = data;
-  } else {
-    stream = await pending;
+  try {
+    stream = await open(usesMaxCompletionTokens.has(model) ? 'max_completion_tokens' : 'max_tokens');
+  } catch (error) {
+    signal?.throwIfAborted();
+    // Newer OpenAI reasoning models (also via routers) 400 on max_tokens.
+    if (!(error && error.status === 400 && /max_completion_tokens/.test(error.message || ''))) throw error;
+    usesMaxCompletionTokens.add(model);
+    stream = await open('max_completion_tokens');
   }
   let full = '';
   let finish = '';
@@ -405,9 +425,9 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
   return settleAnswer(full, finish, onToken, lengthCut);
 }
 
-async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, signal }) {
+async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, effort, onToken, onActivity, signal }) {
   const Anthropic = require('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = turns.map((t, i) => {
     const last = i === turns.length - 1;
     if (last && imageDataUrl && t.role === 'user') {
@@ -419,10 +439,21 @@ async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, max
     }
     return { role: t.role, content: t.text };
   });
-  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true }, requestOptions(signal));
+  // Effort only takes hold with adaptive thinking, and thinking spends from max_tokens, so lift the cap.
+  const strength = effort ? { thinking: { type: 'adaptive' }, output_config: { effort }, max_tokens: maxTokens + 16000 } : {};
+  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true, ...strength }, requestOptions(signal));
   let full = '';
+  let stopReason = null;
   for await (const ev of stream) {
+    // Thinking streams no text for a while; any event (pings included) proves the stream is alive.
+    if (typeof onActivity === 'function') onActivity();
     if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') { full += ev.delta.text; onToken(ev.delta.text); }
+    if (ev.type === 'message_delta' && ev.delta && ev.delta.stop_reason) stopReason = ev.delta.stop_reason;
+  }
+  if (!full) {
+    throw new Error(stopReason === 'refusal'
+      ? "The model's provider blocked this answer with its safety filter."
+      : `The model returned an empty answer${stopReason ? ` (finish reason: ${stopReason})` : ''}.`);
   }
   return full;
 }
@@ -464,6 +495,7 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
   try {
     stream = await ai.models.generateContentStream({ model, contents, config });
   } catch (e) {
+    signal?.throwIfAborted();
     // A model that predates thinkingLevel (or a custom id that rejects it)
     // should still answer: retry once without the thinking setting.
     if (!config.thinkingConfig || !/thinking/i.test((e && e.message) || '')) throw e;
@@ -501,6 +533,7 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
   try {
     response = await fetch(url, {
       method: 'POST',
+      signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages, stream: true }),
       ...(signal ? { signal } : {})
@@ -646,6 +679,8 @@ function createLLM(settings) {
     missingKey,
     providerName: normalizeProviderName(provider),
     async stream(params) {
+      const signal = params.signal;
+      signal?.throwIfAborted();
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
       const useModel = params && params.imageDataUrl ? visionModel : model;
       const args = { apiKey, baseURL, endpoint, model: useModel, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
@@ -653,7 +688,11 @@ function createLLM(settings) {
       // default cap; it must never reach the request as NaN.
       if (!(Number.isFinite(args.maxTokens) && args.maxTokens > 0)) args.maxTokens = maxTokens;
       if (provider === PUBLIK_PROVIDER) args.maxTokens = publikOutputCap(args.maxTokens, useModel);
-      try {
+      if (provider === CUSTOM_PROVIDER) args.maxTokens = args.maxTokens + OPENAI_THINKING_HEADROOM[settings.smart ? 'smart' : 'fast'];
+      for (const hook of ['onToken', 'onActivity', 'onResponse']) {
+        if (typeof params[hook] === 'function') args[hook] = (...values) => { signal?.throwIfAborted(); return params[hook](...values); };
+      }
+      const dispatch = async () => {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
         if (provider === PUBLIK_PROVIDER) return await streamOpenAI(args);
@@ -662,11 +701,19 @@ function createLLM(settings) {
         if (provider === 'cerebras') return await streamOpenAI({ ...args, baseURL: CEREBRAS_BASE_URL });
         if (provider === 'minimax') return await streamOpenAI({ ...args, baseURL: MINIMAX_BASE_URLS[minimaxRegion] || MINIMAX_BASE_URLS.global_en });
         if (provider === 'deepseek') return await streamOpenAI({ ...args, baseURL: DEEPSEEK_BASE_URL });
-        if (provider === 'anthropic') return await streamAnthropic(args);
+        if (provider === 'anthropic') {
+          // An Anthropic-format relay (e.g. TokenRouter); the SDK adds /v1 itself.
+          const relay = String(settings.anthropicBaseUrl || '').trim().replace(/\/+$/, '').replace(/\/v1$/, '');
+          return await streamAnthropic({ ...args, baseURL: relay || undefined, effort: (settings.anthropicEffort || {})[tier] || undefined });
+        }
         if (provider === 'gemini') return await streamGemini(args);
         if (provider === 'azure') return await streamAzure(args);
         throw new Error('unknown provider: ' + provider);
+      };
+      try {
+        return await abortable(dispatch(), signal);
       } catch (error) {
+        signal?.throwIfAborted();
         // publik branches return an Error carrying `.action`; the string
         // branches keep working unchanged.
         const wrapped = formatProviderErrorMessage(error, provider, useModel);
