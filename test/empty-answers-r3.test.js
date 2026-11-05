@@ -276,7 +276,8 @@ test('6b: the source-text tests pass on a CRLF copy of the repo', { skip: proces
     delete env.NODE_TEST_CONTEXT;
     const r = spawnSync(process.execPath, ['--test', 'test/empty-answers.test.js', 'test/thinking-and-captions.test.js'],
       { cwd: tmp, env, encoding: 'utf8', timeout: 60000 });
-    assert.match(out0(r), /ℹ tests [1-9]/, 'the CRLF copy ran its tests');
+    // Node 23+ prints the spec summary ("ℹ tests 21"); Node 18-22 print TAP ("# tests 21").
+    assert.match(out0(r), /^\s*(ℹ|#) tests [1-9]/m, 'the CRLF copy ran its tests');
     const out = out0(r);
     assert.equal(r.status, 0, out.split('\n').filter((l) => /^(not ok|✖)/.test(l.trim())).slice(0, 8).join('\n') || out.slice(-800));
   } finally {
