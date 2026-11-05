@@ -1,0 +1,63 @@
+name: smoke-win-audio
+
+# Real-sound check of the RELEASED Windows installer's meeting-audio path:
+# a virtual audio output (VB-CABLE via LABSN/sound-ci-helpers) gives the runner
+# a default render endpoint; a known sentence is played on it while cue
+# captures; the PCM cue's meeting-audio path received is uploaded as a WAV.
+# v0.2.10 = the fixed release; v0.2.4 = the control (before the loopback fix).
+# No publik key is used anywhere in this workflow.
+on:
+  push:
+    branches:
+      - "smoke/**-win-audio"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  real-sound:
+    name: real sound ${{ matrix.tag }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tag: v0.2.10
+            sha256: 223bf487ce34a176cebd19f570e3becaad691a21ae7218bb06ab24d08b4121a2
+            url: https://github.com/Blueturboguy07/cue/releases/download/v0.2.10/cue-win-x64.exe
+          - tag: v0.2.4
+            sha256: d521b4e3b47b5f7ecf3356f9b467df2582d857ca17d38ff09e24fb9a371866f2
+            url: https://github.com/Blueturboguy07/cue/releases/download/v0.2.4/cue-win-x64.exe
+    steps:
+      - name: Check out the helpers
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install a virtual audio output (VB-CABLE)
+        uses: LABSN/sound-ci-helpers@v1.0.4
+
+      - name: Install the CDP client only (no app build)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path cdp-deps | Out-Null
+          Push-Location cdp-deps
+          npm init -y | Out-Null
+          npm install --no-save --ignore-scripts ws@8.18.0
+          Pop-Location
+
+      - name: Real sound through cue's meeting-audio path
+        shell: powershell
+        run: .\scripts\bugfix-lab\cue-win-audio-real.ps1 -Tag "${{ matrix.tag }}" -Sha256 "${{ matrix.sha256 }}" -Url "${{ matrix.url }}"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-audio-${{ matrix.tag }}
+          path: out/
+          if-no-files-found: warn
