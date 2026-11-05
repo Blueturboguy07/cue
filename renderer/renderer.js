@@ -100,8 +100,28 @@
     messages.appendChild(aiEl);
   }
 
+  // "Thinking…" while a reasoning model thinks and no answer text has come
+  // yet. Only this placeholder shows, never the reasoning itself. The first
+  // answer token replaces it (appendToken), and so does the final message
+  // (finalizeAi re-renders the bubble from its text).
+  function showThinking() {
+    if (!aiEl || aiEl.dataset.raw) return;
+    if (aiEl.querySelector('.ai-thinking')) return;
+    const el = document.createElement('span');
+    el.className = 'ai-thinking';
+    el.textContent = 'Thinking…';
+    if (caretEl && caretEl.parentNode === aiEl) aiEl.insertBefore(el, caretEl);
+    else aiEl.appendChild(el);
+  }
+
+  function clearThinking() {
+    const el = aiEl && aiEl.querySelector('.ai-thinking');
+    if (el) el.remove();
+  }
+
   function appendToken(t) {
     if (!aiEl) startAi(false);
+    clearThinking();
     aiEl.dataset.raw += t;
     const span = document.createElement('span');
     span.className = 'w';
@@ -1194,6 +1214,10 @@
       }
     });
     setBusy(true);
+  });
+  cue.on('llm:thinking', () => {
+    showThinking();
+    if (busy) setBusy(true); // a long think is not a lost answer: keep the failsafe away
   });
   cue.on('llm:token', ({ text }) => appendToken(text));
   cue.on('llm:done', () => { finalizeAi(); setBusy(false); });

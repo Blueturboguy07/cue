@@ -126,6 +126,7 @@ let slideDisabled = false; // set when the chat key rejects slide captions (stop
 let slideTxCursor = 0; // transcript.length at last emitted slide
 const FLUSH_MS = 900;
 const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy can't wedge forever
+const THINKING_PING_MS = 5000; // at most one "Thinking…" signal to the renderer per 5 s
 const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
 const RMS_GATE = 180;
 let flushTimer = null;
@@ -595,6 +596,9 @@ async function captionSlide(imageDataUrl, transcriptSlice) {
         turns: [{ role: 'user', text: buildSlideUser(transcriptSlice) }],
         imageDataUrl,
         maxTokens: 300,
+        // A caption cut at the cap is trimmed and ends with "…", never with
+        // the chat answer's "(Cut off: …)" note.
+        lengthCut: 'ellipsis',
         onToken: () => {}
       }),
       stalled
@@ -903,16 +907,29 @@ async function runFeature(mode, userText) {
       };
       rearm();
     });
+    // A reasoning model streams its thinking before any text: that is
+    // activity too, so a long think is not called a stalled stream. While it
+    // only thinks, the renderer shows "Thinking…" (never the reasoning text).
+    // The signal repeats at most every 5 s, which keeps the renderer's busy
+    // failsafe from firing during a long think.
+    let answerStarted = false;
+    let thinkingSentAt = 0;
+    const noteActivity = (kind) => {
+      if (streamSettled) return;
+      rearm();
+      if (kind === 'thinking' && !answerStarted && Date.now() - thinkingSentAt >= THINKING_PING_MS) {
+        thinkingSentAt = Date.now();
+        send('llm:thinking', {});
+      }
+    };
     try {
       await Promise.race([
         llm.stream({
           system,
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
-          onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); },
-          // A reasoning model streams its thinking before any text: that is
-          // activity too, so a long think is not called a stalled stream.
-          onActivity: () => { if (!streamSettled) rearm(); },
+          onToken: (t) => { if (streamSettled) return; answerStarted = true; rearm(); send('llm:token', { text: t }); },
+          onActivity: noteActivity,
           onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined
         }),
         stalled

@@ -244,6 +244,7 @@ button:focus { outline: none; }
 }
 .ai-text code { font-family: var(--mono); font-size: 0.92em; }
 .ai-text p code { background: rgba(255,255,255,0.10); padding: 1px 5px; border-radius: 5px; }
+.ai-thinking { color: var(--tx-mut); font-style: italic; margin-right: 4px; }
 .ai-caret { display:inline-block; width:7px; height:1.05em; vertical-align:-2px; background: var(--accent); border-radius:1px; animation: blink 1s step-end infinite; margin-left: 2px; }
 .status-line { color: var(--tx-mut); font-size: 13px; margin: 10px 0 2px; }
 #cue-status { display: none; margin: 8px 0 2px; padding: 8px 12px; border-radius: 10px;

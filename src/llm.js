@@ -276,26 +276,39 @@ function emptyAnswerError(finishReason) {
 }
 
 // The end of an OpenAI-style stream: never a blank answer, and an answer cut
-// at the cap says so.
-function settleAnswer(full, finishReason, onToken) {
+// at the cap says so. lengthCut 'ellipsis' (slide captions) trims the cut
+// text and ends it with "…" instead of the cut-off note.
+function settleAnswer(full, finishReason, onToken, lengthCut) {
   if (!String(full || '').trim()) throw emptyAnswerError(finishReason);
-  if (finishReason === 'length') { onToken(LENGTH_CUT_NOTE); return full + LENGTH_CUT_NOTE; }
-  return full;
+  if (finishReason !== 'length') return full;
+  if (lengthCut === 'ellipsis') return trimCut(full) + '…';
+  onToken(LENGTH_CUT_NOTE);
+  return full + LENGTH_CUT_NOTE;
+}
+
+// A cut caption ends without a dangling space, comma, colon or dash.
+function trimCut(text) {
+  return String(text).replace(/[\s,;:\-\u2013\u2014]+$/u, '');
 }
 
 // One streamed chunk: its text (if any) and its finish reason (if any).
 // Every chunk counts as activity, reasoning-only ones included, so a model
-// that thinks for a while is not taken for a stalled stream.
+// that thinks for a while is not taken for a stalled stream. onActivity gets
+// the chunk's kind: 'text', 'thinking' (reasoning only) or 'other'. The
+// reasoning text itself never leaves this function.
 function readChunk(part, onActivity) {
-  if (typeof onActivity === 'function') { try { onActivity(); } catch { /* a watchdog hook must never break the answer */ } }
   const choice = part && part.choices && part.choices[0];
-  return {
-    text: (choice && choice.delta && choice.delta.content) || '',
-    finish: (choice && choice.finish_reason) || ''
-  };
+  const delta = (choice && choice.delta) || {};
+  const text = delta.content || '';
+  const thinking = !text && !!(delta.reasoning || delta.reasoning_content ||
+    (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length));
+  if (typeof onActivity === 'function') {
+    try { onActivity(text ? 'text' : thinking ? 'thinking' : 'other'); } catch { /* a watchdog hook must never break the answer */ }
+  }
+  return { text, finish: (choice && choice.finish_reason) || '' };
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse }) {
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse, lengthCut }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
@@ -330,7 +343,7 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
     if (chunk.text) { full += chunk.text; onToken(chunk.text); }
     if (chunk.finish) finish = chunk.finish;
   }
-  return settleAnswer(full, finish, onToken);
+  return settleAnswer(full, finish, onToken, lengthCut);
 }
 
 // Azure AI Foundry Models API (cognitiveservices.azure.com hosts) lives under
@@ -344,7 +357,7 @@ function normalizeAzureBaseURL(raw) {
   return u;
 }
 
-async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, endpoint }) {
+async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, endpoint, lengthCut }) {
   const url = normalizeAzureBaseURL(endpoint);
   if (!url) throw new Error('Missing Azure endpoint. Add your Azure AI Foundry or Azure OpenAI endpoint in Settings.');
   const messages = [{ role: 'system', content: system }];
@@ -382,7 +395,7 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
     if (chunk.text) { full += chunk.text; onToken(chunk.text); }
     if (chunk.finish) finish = chunk.finish;
   }
-  return settleAnswer(full, finish, onToken);
+  return settleAnswer(full, finish, onToken, lengthCut);
 }
 
 async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {

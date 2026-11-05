@@ -127,5 +127,6 @@ test('reasoning-only chunks count as activity, so the 25 s watchdog does not cal
 
 test('main.js: the answer watchdog is re-armed by thinking chunks too', () => {
   const run = mainSrc.slice(mainSrc.indexOf('async function runFeature(mode, userText) {'));
-  assert.match(run, /onActivity: \(\) => \{ if \(!streamSettled\) rearm\(\); \},/);
+  assert.match(run, /onActivity: noteActivity,/);
+  assert.match(run, /const noteActivity = \(kind\) => \{\s*if \(streamSettled\) return;\s*rearm\(\);/);
 });
