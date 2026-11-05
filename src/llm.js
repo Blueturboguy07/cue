@@ -333,17 +333,20 @@ function emptyAnswerError(kind, finishReason) {
 // can be real content.
 //   exact: the message word for word, case and spacing as the provider sends it.
 //   start: the first words of it; every wording of that message starts so.
-// Two rules (blind verify of 3282584, D1/D2):
+// Three rules (blind verifies of 3282584 and 992973d):
 // - A clean stop is a whole answer. It counts as refused only when the WHOLE
 //   answer is one of the exact messages (case-sensitive), with nothing but
 //   closing punctuation around it. An answer that merely ends with similar
 //   words ("...warn users that the output data may contain inappropriate
 //   content.") is never cut, never labelled, never asked again.
-// - A stop that is not clean (content_filter, error, length, ...): the
-//   provider's message is cut off from its start to the end of the text,
-//   whatever the wording after it ("high-risk", "(request id: ...)", a double
-//   space, more words, the same message twice), if that start is within the
-//   last REFUSAL_WINDOW characters.
+// - A filter stop (content_filter, refusal, SAFETY, ...): the provider's
+//   message is cut off from its start to the end of the text, whatever the
+//   wording after it ("high-risk", "(request id: ...)", a double space, more
+//   words, the same message twice), if that start is within the last
+//   REFUSAL_WINDOW characters.
+// - Any other stop (length, error, cut short, ...) keeps all of its text,
+//   with its own note: "The request was rejected because the token
+//   expired, ..." at the end of a length cut is content, not a refusal.
 const REFUSALS = [
   // Xiaomi MiMo (publik-balanced, seen 2026-11-05); Moonshot uses the same words.
   { start: 'The request was rejected because', exact: ['The request was rejected because it was considered high risk'] },
@@ -390,7 +393,7 @@ function startsAt(text, i, start) {
 // to show. From a refusal start in the last REFUSAL_WINDOW characters (a
 // whole one, or one the text could still grow into, even glued mid-word to
 // the last word), text is held until the stream ends; anything earlier
-// streams at once. end(kind) gets the stop kind and applies the two rules
+// streams at once. end(kind) gets the stop kind and applies the three rules
 // above: it gives back the rest of the text, or the text before the refusal.
 function refusalFilter(refusals = REFUSALS) {
   let text = '';
@@ -437,6 +440,7 @@ function refusalFilter(refusals = REFUSALS) {
         // Only whitespace can have been shown before a whole-answer message.
         return WHOLE_REFUSAL.test(text) && !text.slice(0, shown).trim() ? drop(shown) : release(text.length);
       }
+      if (kind !== 'filter') return release(text.length);
       const at = refusalFrom();
       return at < 0 ? release(text.length) : drop(at);
     },
@@ -527,7 +531,7 @@ function doneWatcher() {
   return { seen, fetch: watchedFetch };
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse, lengthCut, signal, reasoningEffort, watchDone }) {
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse, lengthCut, signal, watchDone }) {
   const OpenAI = require('openai');
   const watcher = watchDone ? doneWatcher() : null;
   const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}), ...(watcher ? { fetch: watcher.fetch } : {}) });
@@ -547,9 +551,7 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
   });
   // signal: when cue stops waiting (watchdog, caption timer), the request is
   // cancelled too, so the provider stops generating and billing it.
-  const body = { model, messages, stream: true, max_tokens: maxTokens };
-  if (reasoningEffort) body.reasoning_effort = reasoningEffort;
-  const pending = client.chat.completions.create(body, requestOptions(signal));
+  const pending = client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens }, requestOptions(signal));
   let stream;
   if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
     // The gateway stamps x-publik-* headers at admission; hand the raw
@@ -793,38 +795,14 @@ function publikOutputCap(visibleTokens, model) {
   return visibleTokens + room;
 }
 
-// How hard a publik model thinks before it answers. With no
-// reasoning_effort in the request the publik gateway uses the tier's default:
-// publik-fast "low", publik-balanced and publik-smart "medium". On the fast
-// tier a screenshot question goes to publik-balanced (xiaomi/mimo-v2.6-pro).
-// Live A/B on publik, 2026-11-05, the same four stubbed screenshots
-// (reasoning tokens; time to first text):
-//                          medium (0.2.12)   low            none
-//   code bug (ask)         1,174; 29.3 s     1,183; 30.3 s  0; 4.8 s
-//   slide (assist)         43; 4.6 s         28; 6.0 s      0; 3.6 s
-//   chart (ask)            261; 5.8 s        112; 6.4 s     0; 1.0 s
-//   hard problem (assist)  4,795; no text    4,802; no text 0; 3.9 s, cut at the cap
-// Every answer that finished was correct. MiMo thinks as much at "low" as
-// at "medium"; only "none" turns its thinking off. (The hard problem is made up: its
-// Example 1 is wrong and n reaches 2 * 10^5, so no level finishes it. At
-// "none" the model shows its work from 3.9 s instead of a blank 2 minutes.)
-// So:
-// - a caller asks for a level (src/prompts.js `effort`: assist and ask
-//   "none", they answer during a live call; slide captions and meeting notes
-//   "low" in every mode); anything else on the fast tier asks for "low"
-//   (leetcode: solving a problem needs thought);
-// - Smart mode keeps the gateway default and never turns thinking off:
-//   thinking deeper is what Smart is for.
-function publikReasoningEffort(settings, asked) {
-  if (settings.smart) return asked && asked !== 'none' ? asked : '';
-  return asked || 'low';
-}
-
-// A model that cannot turn its thinking off (a publik alias moved to one)
-// refuses "none" with a 400 before any text: ask once more at "low".
-function thinkingOffRefused(error, args) {
-  return !!error && error.status === 400 && args.reasoningEffort === 'none' && !(args.signal && args.signal.aborted);
-}
+// cue sends no reasoning_effort, so every publik tier thinks at the gateway's
+// default (publik-fast "low", publik-balanced and publik-smart "medium"), as
+// in 0.2.12. Live on publik-balanced (xiaomi/mimo-v2.6-pro), 2026-11-05:
+// "low" thought as much as "medium" (1,183 vs 1,174 reasoning tokens on the
+// same code question), and "none" answered fast but got multi-step questions
+// wrong (9 of 16 right against 15 of 15: a stacked discount, a time-zone
+// invite, a binary-search bug). Users say these answers out loud, so a
+// screenshot question keeps its thinking.
 
 // The publik model a screenshot question uses. On the smart tier that is the
 // model already chosen. On the fast tier it is the smart alias (the user's
@@ -920,11 +898,9 @@ function createLLM(settings) {
       const visibleTokens = args.maxTokens;
       if (provider === PUBLIK_PROVIDER) {
         args.maxTokens = publikOutputCap(visibleTokens, useModel);
-        args.reasoningEffort = publikReasoningEffort(settings, params.reasoningEffort);
         args.watchDone = true;
       } else {
         // Own keys: the request carries no publik-only fields.
-        delete args.reasoningEffort;
         delete args.watchDone;
       }
       // publik branches return an Error carrying `.action`; the string
@@ -933,17 +909,8 @@ function createLLM(settings) {
         const wrapped = formatProviderErrorMessage(error, provider, failedModel);
         return wrapped instanceof Error ? wrapped : new Error(wrapped);
       };
-      const firstTry = async () => {
-        try {
-          return await streamWith(provider, args, minimaxRegion);
-        } catch (error) {
-          if (provider !== PUBLIK_PROVIDER || !thinkingOffRefused(error, args)) throw error;
-          args.reasoningEffort = 'low';
-          return await streamWith(provider, args, minimaxRegion);
-        }
-      };
       try {
-        return await firstTry();
+        return await streamWith(provider, args, minimaxRegion);
       } catch (error) {
         const retryModel = provider === PUBLIK_PROVIDER ? publikRefusalRetryModel(error, useModel, settings, !!args.imageDataUrl) : '';
         if (!retryModel || (args.signal && args.signal.aborted)) throw wrap(error, useModel);
@@ -951,9 +918,7 @@ function createLLM(settings) {
           try { args.onRetry({ from: useModel, to: retryModel, finishReason: error.finishReason || null }); } catch { /* a log hook must never break the answer */ }
         }
         try {
-          // Another model: never ask it to turn thinking off.
-          const retryEffort = args.reasoningEffort === 'none' ? 'low' : args.reasoningEffort;
-          return await streamOpenAI({ ...args, model: retryModel, maxTokens: publikOutputCap(visibleTokens, retryModel), reasoningEffort: retryEffort });
+          return await streamOpenAI({ ...args, model: retryModel, maxTokens: publikOutputCap(visibleTokens, retryModel) });
         } catch (retryError) {
           // The retry's own empty or refused answer says what happened to it;
           // any other failure of the retry (no credit, a network error) leaves
@@ -1010,7 +975,6 @@ module.exports = {
   isNotFoundError,
   geminiGenerationConfig,
   publikOutputCap,
-  publikReasoningEffort,
   PUBLIK_THINKING_HEADROOM,
   LENGTH_EMPTY_MESSAGE,
   EMPTY_ANSWER_MESSAGE,

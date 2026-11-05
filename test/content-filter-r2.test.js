@@ -9,12 +9,15 @@
 // D3: a missing or unknown stop reason put "(Incomplete: ...)" on every answer
 //     of own-key servers that say "eos_token", "eos", ... or nothing.
 // D4: retries from slide captions and meeting notes were not logged.
-// Effort: cue sent no reasoning effort, so publik-balanced (screenshot
-//     questions on the fast tier) ran at the gateway's "medium" and could think
-//     until the cap with no answer. A live A/B showed MiMo thinks as much at
-//     "low"; only "none" turns it off. Now assist and ask send "none" on the
-//     fast tier, everything else there "low"; Smart never turns thinking off.
-// Every test here fails on 3282584 unless it says "guard".
+// Effort (round 3, blind verify of 992973d): "none" for assist and ask got
+//     multi-step answers wrong on publik-balanced (9 of 16 right against 15 of
+//     15), and "low" thinks as much as "medium" there. So every mode sends
+//     exactly what 0.2.12 (fbd52fe) sent: no reasoning_effort at all.
+// Length (round 3): a "length" stop keeps its text and gets the length note;
+//     legit words like "The request was rejected because the token
+//     expired" at its end are never cut, labelled or asked again.
+// Every test here fails on 3282584 unless it says "guard". The effort and
+// length tests also fail on 992973d.
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const Module = require('node:module');
@@ -278,8 +281,8 @@ test('D4: meeting notes: the one retry reaches the onRetry hook', async () => {
     const notes = await memory.refreshNotes();
     assert.ok(notes && notes.summary);
     assert.deepEqual(retries, [{ from: 'publik-balanced', to: 'publik-smart', finishReason: 'content_filter' }]);
-    // A summary needs no deep thought: "low" even in Smart mode.
-    assert.deepEqual(requests.map((r) => r.reasoning_effort), ['low', 'low']);
+    // As 0.2.12: no reasoning_effort, on the first try or the retry.
+    assert.deepEqual(requests.map((r) => 'reasoning_effort' in r), [false, false]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -290,82 +293,116 @@ test('D4: main.js logs caption and meeting-notes retries as llm_filter_retry', (
   const mainSrc = readSource('main.js');
   const caption = fnFrom(mainSrc, 'async function captionSlide');
   assert.match(caption, /onRetry: \(r\) => recordEvent\(\{ level: 'info', event: 'llm_filter_retry'[^\n]*frame: 'captionSlide', context: \{ mode: 'caption'/);
-  assert.match(caption, /reasoningEffort: 'low'/);
+  assert.doesNotMatch(caption, /reasoningEffort/);
   assert.match(mainSrc, /llmFactory: \(\) => createLLM\(store\.getSettings\(\)\),[\s\S]{0,200}onRetry: \(r\) => recordEvent\(\{ level: 'info', event: 'llm_filter_retry'[^\n]*frame: 'meetingNotes', context: \{ mode: 'notes'/);
 });
 
-// ---- reasoning effort ----------------------------------------------------------
+// ---- reasoning effort: exactly what 0.2.12 sent -------------------------------
 
-test('effort: a screenshot question on the fast tier asks publik-balanced for "low"', async () => {
+// fbd52fe's OpenAI-compatible request body, for every provider and mode.
+const FBD52FE_BODY_KEYS = ['max_tokens', 'messages', 'model', 'stream'];
+const bodyKeys = (r) => Object.keys(r).sort();
+
+test('effort: assist and ask (a screenshot question on the fast tier) send no reasoning_effort, as 0.2.12', async () => {
   replies = [[text('Revenue is $4.2M.'), finish('stop')]];
-  await ask(publikSettings(), { imageDataUrl: IMAGE });
-  assert.equal(requests[0].model, 'publik-balanced');
-  assert.equal(requests[0].reasoning_effort, 'low');
-  replies = [[text('Hi.'), finish('stop')]];
-  await ask(publikSettings());
-  assert.equal(requests[1].model, 'publik-fast');
-  assert.equal(requests[1].reasoning_effort, 'low');
-});
-
-test('effort: Smart mode keeps the gateway default (no reasoning_effort sent); a caller may still ask for "low"', async () => {
-  await ask(publikSettings({ smart: true }), { imageDataUrl: IMAGE });
+  const { result } = await ask(publikSettings(), { imageDataUrl: IMAGE });
+  assert.equal(result, 'Revenue is $4.2M.');
   assert.equal(requests[0].model, 'publik-balanced');
   assert.equal('reasoning_effort' in requests[0], false);
-  await ask(publikSettings({ smart: true }), { imageDataUrl: IMAGE, reasoningEffort: 'low', maxTokens: 300, lengthCut: 'ellipsis' });
-  assert.equal(requests[1].reasoning_effort, 'low');
+  assert.deepEqual(bodyKeys(requests[0]), FBD52FE_BODY_KEYS);
 });
 
-test('effort: the one retry asks with the same effort', async () => {
+test('effort: every mode\'s request body matches 0.2.12 (fbd52fe) on the effort field, fast and Smart', async () => {
+  const { MODES } = require('../src/prompts');
+  // The params each call site passes (main.js runFeature / captionSlide,
+  // src/meeting-memory.js), plus a stale caller that still asks for a level.
+  const calls = [
+    ...Object.entries(MODES).map(([name, def]) => [name, def.needsScreen ? { imageDataUrl: IMAGE } : {}]),
+    ['caption', { imageDataUrl: IMAGE, maxTokens: 300, lengthCut: 'ellipsis' }],
+    ['notes', { maxTokens: 600, lengthCut: 'ellipsis' }],
+    ['stale caller "none"', { imageDataUrl: IMAGE, reasoningEffort: 'none' }],
+    ['stale caller "low"', { reasoningEffort: 'low' }]
+  ];
+  assert.ok(calls.length >= 8, 'every mode in src/prompts.js is covered');
+  for (const smart of [false, true]) {
+    for (const [name, params] of calls) {
+      requests = [];
+      replies = [[text('ok'), finish('stop')]];
+      await ask(publikSettings({ smart }), params);
+      assert.equal(requests.length, 1, name);
+      assert.deepEqual(bodyKeys(requests[0]), FBD52FE_BODY_KEYS, `${smart ? 'Smart' : 'fast'} ${name}`);
+    }
+  }
+});
+
+test('effort: the one filter retry sends no reasoning_effort either', async () => {
   replies = [[text(MIMO), finish('content_filter')], [text('It is a slide.'), finish('stop')]];
-  await ask(publikSettings(), { imageDataUrl: IMAGE });
-  assert.deepEqual(requests.map((r) => [r.model, r.reasoning_effort]), [['publik-balanced', 'low'], ['publik-smart', 'low']]);
+  const { result } = await ask(publikSettings(), { imageDataUrl: IMAGE });
+  assert.equal(result, 'It is a slide.');
+  assert.deepEqual(requests.map((r) => [r.model, 'reasoning_effort' in r]), [['publik-balanced', false], ['publik-smart', false]]);
 });
 
-test('effort: assist and ask ask for "none" (answer at once); publik-balanced gets it on the fast tier', async () => {
-  replies = [[text('May had the most.'), finish('stop')]];
-  const { result } = await ask(publikSettings(), { imageDataUrl: IMAGE, reasoningEffort: 'none' });
-  assert.equal(result, 'May had the most.');
-  assert.deepEqual(requests.map((r) => [r.model, r.reasoning_effort]), [['publik-balanced', 'none']]);
+test('effort: call sites as 0.2.12: no mode carries an effort, main.js and meeting notes pass none, llm.js never writes one', () => {
+  const { MODES } = require('../src/prompts');
+  for (const [name, def] of Object.entries(MODES)) assert.equal('effort' in def, false, name);
+  const { readSource, fnFrom } = require('./source-text');
+  const mainSrc = readSource('main.js');
+  assert.doesNotMatch(fnFrom(mainSrc, 'async function runFeature'), /reasoningEffort|reasoning_effort/);
+  assert.doesNotMatch(fnFrom(mainSrc, 'async function captionSlide'), /reasoningEffort|reasoning_effort/);
+  assert.doesNotMatch(readSource('src/meeting-memory.js'), /reasoningEffort|reasoning_effort/);
+  assert.doesNotMatch(readSource('src/llm.js'), /reasoningEffort|\.reasoning_effort\s*=|reasoning_effort:/);
 });
 
-test('effort guard: Smart mode never turns thinking off: "none" is dropped (gateway default)', async () => {
-  await ask(publikSettings({ smart: true }), { imageDataUrl: IMAGE, reasoningEffort: 'none' });
-  assert.equal(requests[0].model, 'publik-balanced');
-  assert.equal('reasoning_effort' in requests[0], false);
-});
-
-test('effort: a model that refuses "none" with a 400 is asked once more at "low"', async () => {
-  replies = [Object.assign(new Error('400 Reasoning is mandatory for this endpoint and cannot be disabled.'), { status: 400 }), [text('Answer at low.'), finish('stop')]];
-  const { result, error } = await ask(publikSettings(), { imageDataUrl: IMAGE, reasoningEffort: 'none' });
-  assert.equal(error, null);
-  assert.equal(result, 'Answer at low.');
-  assert.deepEqual(requests.map((r) => [r.model, r.reasoning_effort]), [['publik-balanced', 'none'], ['publik-balanced', 'low']]);
-});
-
-test('effort guard: a 400 to any other request is not asked again', async () => {
+test('guard: a 400 is never asked again', async () => {
   replies = [Object.assign(new Error('400 image too large'), { status: 400 })];
   const { error } = await ask(publikSettings(), { imageDataUrl: IMAGE });
   assert.ok(error);
   assert.equal(requests.length, 1);
 });
 
-test('effort: the filter retry after "none" asks the other model at "low", never "none"', async () => {
-  replies = [[text(MIMO), finish('content_filter')], [text('It is a slide.'), finish('stop')]];
-  const { result } = await ask(publikSettings(), { imageDataUrl: IMAGE, reasoningEffort: 'none' });
-  assert.equal(result, 'It is a slide.');
-  assert.deepEqual(requests.map((r) => [r.model, r.reasoning_effort]), [['publik-balanced', 'none'], ['publik-smart', 'low']]);
+// ---- a length stop keeps its text (round 3) -----------------------------------
+
+const LENGTH_CUT_NOTE = '\n\n(Cut off: the answer reached its length limit.)';
+const TOKEN_EXPIRED = 'The request was rejected because the token expired, so refresh it before the next call and';
+
+test('length: legit "The request was rejected because ..." at the end of a length cut keeps its text and gets the length note', async () => {
+  const answer = 'Step 1: read the proxy log. It says: ' + TOKEN_EXPIRED;
+  replies = [[text('Step 1: read the proxy log. It says: '), text(TOKEN_EXPIRED), finish('length')]];
+  const { result, shown, error } = await ask(publikSettings(), { imageDataUrl: IMAGE });
+  assert.equal(error, null);
+  assert.equal(result, answer + LENGTH_CUT_NOTE);
+  assert.equal(shown, result);
+  assert.equal(requests.length, 1);
 });
 
-test('effort: src/prompts.js: assist and ask answer at once, leetcode and the text modes think; main.js passes the mode\'s level', () => {
-  const { MODES } = require('../src/prompts');
-  assert.equal(MODES.assist.effort, 'none');
-  assert.equal(MODES.ask.effort, 'none');
-  for (const [name, def] of Object.entries(MODES)) {
-    if (name !== 'assist' && name !== 'ask') assert.equal(def.effort, undefined, name);
+test('length: an answer that starts with the phrase keeps all its text, with no paid retry', async () => {
+  for (const words of [TOKEN_EXPIRED, MIMO]) {
+    requests = [];
+    replies = [[text(words), finish('length')]];
+    const { result, retries } = await ask(publikSettings(), { imageDataUrl: IMAGE });
+    assert.equal(result, words + LENGTH_CUT_NOTE, words);
+    assert.deepEqual(retries, []);
+    assert.equal(requests.length, 1);
   }
-  const { readSource, fnFrom } = require('./source-text');
-  const run = fnFrom(readSource('main.js'), 'async function runFeature');
-  assert.match(run, /llm\.stream\(\{[\s\S]*reasoningEffort: def\.effort,/);
+});
+
+test('length: slide captions and notes (ellipsis cut) keep the phrase too', async () => {
+  replies = [[text('Slide 3 covers why ' + TOKEN_EXPIRED), finish('length')]];
+  const { result } = await ask(publikSettings(), { imageDataUrl: IMAGE, maxTokens: 300, lengthCut: 'ellipsis' });
+  assert.match(result, /^Slide 3 covers why The request was rejected because the token expired/);
+  assert.match(result, /…$/);
+});
+
+test('length: other stops that are not a filter (error, cut short) keep their text too, with the Incomplete note', async () => {
+  replies = [[text('It says: ' + TOKEN_EXPIRED), finish('error')]];
+  const { result } = await ask(publikSettings(), { imageDataUrl: IMAGE });
+  assert.equal(result, 'It says: ' + TOKEN_EXPIRED + INCOMPLETE_NOTE);
+});
+
+test('length guard: the same words under a real filter stop are still cut off, with the safety note', async () => {
+  replies = [[text('Step 1: read the proxy log. '), text(TOKEN_EXPIRED), finish('content_filter')]];
+  const { result } = await ask(publikSettings(), { imageDataUrl: IMAGE });
+  assert.equal(result, 'Step 1: read the proxy log. ' + FILTER_NOTE);
 });
 
 test('effort guard: own keys never get reasoning_effort, even when a caller asks for it', async () => {

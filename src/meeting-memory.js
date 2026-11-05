@@ -57,8 +57,6 @@ function createMeetingMemory(opts) {
         // Stored notes never carry the chat answer's "(Cut off: …)" note: a
         // cut is trimmed and ends with "…", as slide captions do.
         lengthCut: 'ellipsis',
-        // A summary needs no deep thought (publik only; src/llm.js).
-        reasoningEffort: 'low',
         onToken: () => {},
         onRetry
       });

@@ -773,8 +773,6 @@ async function captionSlide(imageDataUrl, transcriptSlice) {
         // A caption cut at the cap is trimmed and ends with "…", never with
         // the chat answer's "(Cut off: …)" note.
         lengthCut: 'ellipsis',
-        // A caption needs no deep thought (publik only; src/llm.js).
-        reasoningEffort: 'low',
         signal: guard.signal,
         onToken: () => {},
         onRetry: (r) => recordEvent({ level: 'info', event: 'llm_filter_retry', msg: `${r.from} -> ${r.to}`, frame: 'captionSlide', context: { mode: 'caption', from: r.from, to: r.to, finishReason: r.finishReason } })
@@ -1110,8 +1108,6 @@ async function runFeature(mode, userText) {
           onActivity: noteActivity,
           signal: guard.signal,
           onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined,
-          // assist and ask answer at once; leetcode thinks (src/prompts.js).
-          reasoningEffort: def.effort,
           // A publik-balanced answer that the safety filter stopped before any
           // text showed is asked once more on another publik tier (src/llm.js).
           onRetry: (r) => recordEvent({ level: 'info', event: 'llm_filter_retry', msg: `${r.from} -> ${r.to}`, frame: 'runFeature', context: { mode, from: r.from, to: r.to, finishReason: r.finishReason } })

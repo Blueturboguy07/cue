@@ -5,6 +5,8 @@
 // reason is incomplete only when it closed before [DONE]; an own-key server
 // that sends no finish reason is a whole answer. 3282584 put "(Incomplete:
 // ...)" on all of them. Tests that pass on 3282584 too say "guard".
+// Round 3: the body is 0.2.12's (no reasoning_effort), and a "length" stop
+// keeps its text; those two tests also fail on 992973d.
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const http = require('http');
@@ -85,14 +87,14 @@ test('guard: publik stream that closes before [DONE] with no finish reason is in
   });
 });
 
-test('publik: "stop" + [DONE]: whole, streamed in pieces, the fast tier asks for reasoning_effort "low", headers still reach the hook', async () => {
+test('publik: "stop" + [DONE]: whole, streamed in pieces, the body is 0.2.12\'s (no reasoning_effort), headers still reach the hook', async () => {
   await withServer([sse(chunk({ reasoning: 'plan' })), sse(chunk({ content: 'One ' })), sse(chunk({ content: 'two.' })), sse(chunk({}, 'stop')), sse(usage), 'data: [DONE]\n\n'], async (base, bodies) => {
     let header = null;
     const { result, tokens } = await ask(publikAt(base), { onResponse: (res) => { header = res.headers.get('x-publik-test'); } });
     assert.equal(result, 'One two.');
     assert.ok(tokens.length >= 2, 'text streams in pieces');
     assert.equal(bodies[0].model, 'publik-fast');
-    assert.equal(bodies[0].reasoning_effort, 'low');
+    assert.deepEqual(Object.keys(bodies[0]).sort(), ['max_tokens', 'messages', 'model', 'stream']);
     assert.equal(header, 'seen');
   });
 });
@@ -121,33 +123,14 @@ test('guard: the OpenRouter content_filter shape over the wire: refusal dropped,
   });
 });
 
-test('publik: a 400 to reasoning_effort "none" (model cannot turn thinking off) is asked once more at "low" over the wire', async () => {
-  const bodies = [];
-  const server = http.createServer((req, res) => {
-    let raw = '';
-    req.on('data', (c) => { raw += c; });
-    req.on('end', () => {
-      const body = JSON.parse(raw || '{}');
-      bodies.push(body);
-      if (body.reasoning_effort === 'none') {
-        // The publik gateway relays an upstream 4xx as 400 upstream_error.
-        res.writeHead(400, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'Reasoning is mandatory for this endpoint and cannot be disabled.', type: 'invalid_request_error', code: 'upstream_error' } }));
-        return;
-      }
-      res.writeHead(200, { 'content-type': 'text/event-stream' });
-      res.end(sse(chunk({ content: 'Answer at low.' })) + sse(chunk({}, 'stop')) + 'data: [DONE]\n\n');
-    });
-  });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const base = `http://127.0.0.1:${server.address().port}/v1`;
-  try {
-    const { result, error } = await ask(publikAt(base), { imageDataUrl: 'data:image/jpeg;base64,AAAA', reasoningEffort: 'none' });
+test('publik over the wire: a "length" stop with legit "The request was rejected because ..." at its end keeps the text and the length note', async () => {
+  const legit = 'The request was rejected because the token expired, so refresh it and';
+  const frames = [sse(chunk({ reasoning: 'plan' })), sse(chunk({ content: 'It says: ' })), sse(chunk({ content: legit })), sse(chunk({}, 'length')), sse(usage), 'data: [DONE]\n\n'];
+  await withServer(frames, async (base, bodies) => {
+    const { result, shown, error } = await ask(publikAt(base), { imageDataUrl: 'data:image/jpeg;base64,AAAA' });
     assert.equal(error, null);
-    assert.equal(result, 'Answer at low.');
-    assert.deepEqual(bodies.map((b) => [b.model, b.reasoning_effort]), [['publik-balanced', 'none'], ['publik-balanced', 'low']]);
-  } finally {
-    server.closeAllConnections && server.closeAllConnections();
-    await new Promise((r) => server.close(r));
-  }
+    assert.equal(result, 'It says: ' + legit + '\n\n(Cut off: the answer reached its length limit.)');
+    assert.equal(shown, result);
+    assert.equal(bodies.length, 1, 'no retry');
+  });
 });
