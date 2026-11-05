@@ -52,6 +52,9 @@ function createMeetingMemory(opts) {
       const text = await llm.stream({
         system: NOTES_SYSTEM,
         turns: [{ role: 'user', text: buildNotesPrompt(m.transcript) }],
+        // Stored notes never carry the chat answer's "(Cut off: …)" note: a
+        // cut is trimmed and ends with "…", as slide captions do.
+        lengthCut: 'ellipsis',
         onToken: () => {}
       });
       const notes = parseNotes(text);

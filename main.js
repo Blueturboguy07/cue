@@ -8,6 +8,7 @@ const { createSTT } = require('./src/stt');
 const { UtteranceBatcher } = require('./src/publik-stt-batcher');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM, normalizeProviderName } = require('./src/llm');
+const { giveUpTimer } = require('./src/give-up');
 const { checkOwnKey } = require('./src/own-key-check');
 const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
@@ -126,6 +127,7 @@ let slideDisabled = false; // set when the chat key rejects slide captions (stop
 let slideTxCursor = 0; // transcript.length at last emitted slide
 const FLUSH_MS = 900;
 const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy can't wedge forever
+const THINKING_PING_MS = 5000; // at most one "Thinking…" signal to the renderer per 5 s
 const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
 const RMS_GATE = 180;
 let flushTimer = null;
@@ -584,10 +586,9 @@ async function captionSlide(imageDataUrl, transcriptSlice) {
   const settings = store.getSettings();
   const llm = createLLM(settings);
   if (!llm.ready) throw new Error(llm.configurationError || 'Complete the provider settings.');
-  let watchdog = null;
-  const stalled = new Promise((_res, reject) => {
-    watchdog = setTimeout(() => reject(new Error('slide caption timed out')), STREAM_INACTIVITY_MS);
-  });
+  // A fixed 25 s total limit (never re-armed). When it gives up, the request
+  // is cancelled too, so a long think is not billed for a caption nobody sees.
+  const guard = giveUpTimer(STREAM_INACTIVITY_MS, 'slide caption timed out');
   try {
     return await Promise.race([
       llm.stream({
@@ -595,12 +596,16 @@ async function captionSlide(imageDataUrl, transcriptSlice) {
         turns: [{ role: 'user', text: buildSlideUser(transcriptSlice) }],
         imageDataUrl,
         maxTokens: 300,
+        // A caption cut at the cap is trimmed and ends with "…", never with
+        // the chat answer's "(Cut off: …)" note.
+        lengthCut: 'ellipsis',
+        signal: guard.signal,
         onToken: () => {}
       }),
-      stalled
+      guard.expired
     ]);
   } finally {
-    clearTimeout(watchdog);
+    guard.clear();
   }
 }
 
@@ -894,29 +899,41 @@ async function runFeature(mode, userText) {
 
     // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
     // leaving state.busy = true and wedging every later question until an app restart.
-    let watchdog = null;
-    let rearm = () => {};
-    const stalled = new Promise((_res, reject) => {
-      rearm = () => {
-        clearTimeout(watchdog);
-        watchdog = setTimeout(() => reject(new Error('the model stopped responding (timed out). Please try again.')), STREAM_INACTIVITY_MS);
-      };
+    // When it gives up, the HTTP request is cancelled too (guard.signal), so the
+    // provider stops generating and billing an answer cue no longer shows.
+    const guard = giveUpTimer(STREAM_INACTIVITY_MS, 'the model stopped responding (timed out). Please try again.');
+    const rearm = guard.rearm;
+    // A reasoning model streams its thinking before any text: that is
+    // activity too, so a long think is not called a stalled stream. While it
+    // only thinks, the renderer shows "Thinking…" (never the reasoning text).
+    // The signal repeats at most every 5 s, which keeps the renderer's busy
+    // failsafe from firing during a long think.
+    let answerStarted = false;
+    let thinkingSentAt = 0;
+    const noteActivity = (kind) => {
+      if (streamSettled) return;
       rearm();
-    });
+      if (kind === 'thinking' && !answerStarted && Date.now() - thinkingSentAt >= THINKING_PING_MS) {
+        thinkingSentAt = Date.now();
+        send('llm:thinking', {});
+      }
+    };
     try {
       await Promise.race([
         llm.stream({
           system,
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
-          onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); },
+          onToken: (t) => { if (streamSettled) return; answerStarted = true; rearm(); send('llm:token', { text: t }); },
+          onActivity: noteActivity,
+          signal: guard.signal,
           onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined
         }),
-        stalled
+        guard.expired
       ]);
     } finally {
       streamSettled = true;
-      clearTimeout(watchdog);
+      guard.clear();
     }
     send('llm:done', {});
     // The own key answered: it is not bad (any more).
@@ -925,7 +942,7 @@ async function runFeature(mode, userText) {
     // GET /wallet shortly after the answer — one request per answer, debounced.
     if (settings.provider === publik.PUBLIK_PROVIDER) publikScheduleWalletRefresh();
   } catch (e) {
-    recordEvent({ level: 'error', event: 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider } });
+    recordEvent({ level: 'error', event: e && e.emptyAnswer ? 'llm_empty_answer' : 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider, finishReason: (e && e.finishReason) || null } });
     // A bad own key: plain words, "Switch to publik" first, "Fix my key"
     // second; never the provider's raw 401.
     if (e && e.ownKeyFailed) {
