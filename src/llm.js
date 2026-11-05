@@ -204,6 +204,8 @@ function describePublikError(error, model) {
 }
 
 function formatProviderErrorMessage(error, provider, model) {
+  // An empty or cut answer already carries its plain sentence (settleAnswer).
+  if (error && error.emptyAnswer) return error;
   const label = normalizeProviderName(provider);
   const rawMessage = (error && (error.message || String(error))) || '';
 
@@ -258,7 +260,42 @@ function stripDataUrl(dataUrl) {
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onResponse }) {
+// What a stream that ends with no usable answer says, instead of a blank
+// bubble. Reasoning models think inside the output cap: when the thinking
+// uses it all, the stream ends with finish_reason "length" and no text
+// (Cue audit 2026-11-04: 118 of 2,675 fast-tier answers came back empty).
+const LENGTH_EMPTY_MESSAGE = 'No answer this time: the model used its whole length limit on thinking and wrote nothing. Ask again, or ask a shorter question.';
+const EMPTY_ANSWER_MESSAGE = 'The model sent back an empty answer. Ask again.';
+const LENGTH_CUT_NOTE = '\n\n(Cut off: the answer reached its length limit.)';
+
+function emptyAnswerError(finishReason) {
+  const error = new Error(finishReason === 'length' ? LENGTH_EMPTY_MESSAGE : EMPTY_ANSWER_MESSAGE);
+  error.emptyAnswer = true;
+  error.finishReason = finishReason || null;
+  return error;
+}
+
+// The end of an OpenAI-style stream: never a blank answer, and an answer cut
+// at the cap says so.
+function settleAnswer(full, finishReason, onToken) {
+  if (!String(full || '').trim()) throw emptyAnswerError(finishReason);
+  if (finishReason === 'length') { onToken(LENGTH_CUT_NOTE); return full + LENGTH_CUT_NOTE; }
+  return full;
+}
+
+// One streamed chunk: its text (if any) and its finish reason (if any).
+// Every chunk counts as activity, reasoning-only ones included, so a model
+// that thinks for a while is not taken for a stalled stream.
+function readChunk(part, onActivity) {
+  if (typeof onActivity === 'function') { try { onActivity(); } catch { /* a watchdog hook must never break the answer */ } }
+  const choice = part && part.choices && part.choices[0];
+  return {
+    text: (choice && choice.delta && choice.delta.content) || '',
+    finish: (choice && choice.finish_reason) || ''
+  };
+}
+
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
@@ -287,11 +324,13 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
     stream = await pending;
   }
   let full = '';
+  let finish = '';
   for await (const part of stream) {
-    const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
-    if (d) { full += d; onToken(d); }
+    const chunk = readChunk(part, onActivity);
+    if (chunk.text) { full += chunk.text; onToken(chunk.text); }
+    if (chunk.finish) finish = chunk.finish;
   }
-  return full;
+  return settleAnswer(full, finish, onToken);
 }
 
 // Azure AI Foundry Models API (cognitiveservices.azure.com hosts) lives under
@@ -305,7 +344,7 @@ function normalizeAzureBaseURL(raw) {
   return u;
 }
 
-async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, endpoint }) {
+async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, endpoint }) {
   const url = normalizeAzureBaseURL(endpoint);
   if (!url) throw new Error('Missing Azure endpoint. Add your Azure AI Foundry or Azure OpenAI endpoint in Settings.');
   const messages = [{ role: 'system', content: system }];
@@ -337,11 +376,13 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
   }
   const stream = await client.chat.completions.create({ model, messages, stream: true, max_completion_tokens: maxTokens });
   let full = '';
+  let finish = '';
   for await (const part of stream) {
-    const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
-    if (d) { full += d; onToken(d); }
+    const chunk = readChunk(part, onActivity);
+    if (chunk.text) { full += chunk.text; onToken(chunk.text); }
+    if (chunk.finish) finish = chunk.finish;
   }
-  return full;
+  return settleAnswer(full, finish, onToken);
 }
 
 async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
@@ -482,6 +523,19 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
   return full;
 }
 
+// publik's tiers are reasoning models, and the thinking counts inside the
+// output cap. A 700-token cap was often all thinking: 118 of 2,675 fast-tier
+// answers came back empty (output 700, reasoning 700), and on 0.2.10 one
+// screenshot answer in five was cut at 700 (prod audit 2026-11-04). As with
+// Gemini above, the cap gets headroom for thoughts, so maxTokens stays the
+// visible budget. Prod reasoning on these models: publik-fast p99 628 and max
+// 960 tokens; publik-balanced p95 1,013 and p99 2,691. The user pays for the
+// tokens used, not for the cap.
+const PUBLIK_THINKING_HEADROOM = { fast: 2048, smart: 4096 };
+function publikOutputCap(visibleTokens, smart) {
+  return visibleTokens + (smart ? PUBLIK_THINKING_HEADROOM.smart : PUBLIK_THINKING_HEADROOM.fast);
+}
+
 // The publik model a screenshot question uses. On the smart tier that is the
 // model already chosen. On the fast tier it is the smart alias (the user's
 // Smart field, else the provisioning response's, else publik-balanced),
@@ -570,6 +624,7 @@ function createLLM(settings) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
       const useModel = params && params.imageDataUrl ? visionModel : model;
       const args = { apiKey, baseURL, endpoint, model: useModel, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
+      if (provider === PUBLIK_PROVIDER) args.maxTokens = publikOutputCap(args.maxTokens, !!settings.smart);
       try {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
@@ -601,6 +656,11 @@ module.exports = {
   isQuotaError,
   isNotFoundError,
   geminiGenerationConfig,
+  publikOutputCap,
+  PUBLIK_THINKING_HEADROOM,
+  LENGTH_EMPTY_MESSAGE,
+  EMPTY_ANSWER_MESSAGE,
+  LENGTH_CUT_NOTE,
   resolveGeminiModel,
   CURRENT_GEMINI_DEFAULT,
   GEMINI_TRANSCRIBE_MODEL,

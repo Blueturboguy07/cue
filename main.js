@@ -910,6 +910,9 @@ async function runFeature(mode, userText) {
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
           onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); },
+          // A reasoning model streams its thinking before any text: that is
+          // activity too, so a long think is not called a stalled stream.
+          onActivity: () => { if (!streamSettled) rearm(); },
           onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined
         }),
         stalled
@@ -925,7 +928,7 @@ async function runFeature(mode, userText) {
     // GET /wallet shortly after the answer — one request per answer, debounced.
     if (settings.provider === publik.PUBLIK_PROVIDER) publikScheduleWalletRefresh();
   } catch (e) {
-    recordEvent({ level: 'error', event: 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider } });
+    recordEvent({ level: 'error', event: e && e.emptyAnswer ? 'llm_empty_answer' : 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider, finishReason: (e && e.finishReason) || null } });
     // A bad own key: plain words, "Switch to publik" first, "Fix my key"
     // second; never the provider's raw 401.
     if (e && e.ownKeyFailed) {
