@@ -32,11 +32,16 @@ function fakeStore(initial = {}) {
 }
 
 // The fake gateway: mints once per install_id, replays after that, serves
-// /wallet for a live key, answers 401 key_revoked for a revoked one.
+// /wallet for a live key, answers 401 key_revoked for a revoked one. An
+// install revoked from the dashboard (`ownerRevoked`) is finished: POST
+// /installs answers 403 install_revoked with reprovision:false, the way
+// publik's installs route does for revoke_reason dashboard|abuse.
 function startFakeGateway() {
-  const installs = new Map(); // install_id -> { keyId, key, revoked }
+  const installs = new Map(); // install_id -> { keyId, key, revoked, ownerRevoked }
   const requests = [];
+  const gw = { refuseAll: false }; // every POST /installs answers 403 install_revoked
   let mintCounter = 0;
+  const claimCodeFor = (n) => (n === 1 ? 'HK7F-2QWD' : `HK7F-2QW${n}`);
   const server = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => { raw += c; });
@@ -52,29 +57,34 @@ function startFakeGateway() {
         if (bearer !== TOKEN && body.app_token !== TOKEN) return send(401, { error: { type: 'invalid_app_token', message: 'Unknown app token.' } });
         if (body.app_slug !== 'cue' || !body.install_id || !(body.disclosure_version >= 1)) return send(400, { error: { type: 'invalid_field', message: 'bad field', field: 'app_slug' } });
         const existing = installs.get(body.install_id);
+        if (gw.refuseAll || (existing && existing.ownerRevoked)) {
+          return send(403, { error: { type: 'install_revoked', message: 'This install was disconnected by its owner. Provision a new install.', reprovision: false } });
+        }
         if (existing && !existing.revoked) {
           return send(200, { install_id: body.install_id, key: null, key_id: existing.keyId, starter_micros: 0, claim_state: 'anonymous', base_url: `http://127.0.0.1:${server.address().port}/api/v1` });
         }
         mintCounter += 1;
         const keyId = String(mintCounter).padStart(12, '0').replace(/\d/g, (d) => 'abcdefghijkl'[Number(d)]);
         const key = `pk_test_${keyId}_${KEY_SECRET}`;
-        installs.set(body.install_id, { keyId, key, revoked: false });
+        const claimCode = claimCodeFor(mintCounter);
+        installs.set(body.install_id, { keyId, key, revoked: false, ownerRevoked: false });
         return send(201, {
           install_id: body.install_id, key, key_id: keyId,
           base_url: `http://127.0.0.1:${server.address().port}/api/v1`,
           models: { fast: 'publik-fast', balanced: 'publik-balanced', smart: 'publik-smart' },
-          claim_code: 'HK7F-2QWD', claim_url: 'https://publikhq.com/claim/HK7F-2QWD',
+          claim_code: claimCode, claim_url: `https://publikhq.com/claim/${claimCode}`,
           // Policy 0059: an install is minted at $0.00. None of these fixtures
           // mint an install already bound to a signed-in account, so starter
           // stays 0 whether or not the install_id was seen before.
           starter_micros: 0, balance_micros: 0, starting_credit_micros: 0,
-          wallet: { claim_state: 'anonymous', balance_micros: 0, starter: { remaining_micros: 0 }, week: { used_micros: 0, budget_micros: null, resets_at: '2026-09-25T17:04:11Z' }, claim_url: 'https://publikhq.com/claim/HK7F-2QWD' }
+          wallet: { claim_state: 'anonymous', balance_micros: 0, starter: { remaining_micros: 0 }, week: { used_micros: 0, budget_micros: null, resets_at: '2026-09-25T17:04:11Z' }, claim_url: `https://publikhq.com/claim/${claimCode}` }
         });
       }
       if (req.method === 'GET' && req.url === '/api/v1/wallet') {
         const bearer = (req.headers.authorization || '').replace(/^Bearer /, '');
         const row = [...installs.values()].find((r) => r.key === bearer);
         if (!row) return send(401, { error: { type: 'invalid_api_key', message: 'Invalid API key.' } });
+        if (row.ownerRevoked) return send(401, { error: { type: 'key_revoked', message: 'This key was revoked.', reprovision: false } });
         if (row.revoked) return send(401, { error: { type: 'key_revoked', message: 'This key was revoked.', reprovision: true } });
         return send(200, { claim_state: 'anonymous', balance_micros: 209000, starter: { remaining_micros: 209000 }, week: { used_micros: 41000, budget_micros: null, resets_at: '2026-09-25T17:04:11Z' }, daily_cap_micros: 250000, spent_today_micros: 41000, claim_url: 'https://publikhq.com/claim/HK7F-2QWD' });
       }
@@ -82,12 +92,19 @@ function startFakeGateway() {
     });
   });
   return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({
+    server.listen(0, '127.0.0.1', () => resolve(Object.assign(gw, {
       server, installs, requests,
       baseUrl: `http://127.0.0.1:${server.address().port}/api/v1`,
       close: () => new Promise((r) => server.close(r))
-    }));
+    })));
   });
+}
+
+// What main.js publikState() hands the renderer for the status sentence.
+function statusOf(store) {
+  const s = store.getSettings();
+  const p = s.publik;
+  return publik.statusLine({ connected: !!s.apiKeys.publik, revoked: !!p.revoked, disconnected: !!p.disconnected, keyId: p.keyId, disclosureAccepted: p.disclosureAccepted, lastError: p.lastError, line: '' });
 }
 
 test('provisionInstall mints once, stores only apiKeys.publik + publik.*, then GET /wallet works with that key', async () => {
@@ -172,6 +189,83 @@ test('a revoked key (401 key_revoked, reprovision:true) re-provisions with the s
   } finally { await gw.close(); }
 });
 
+// Bug reports 0a3e7542 / 3c6adc78 / 9d5ca184: the owner revoked the computer
+// from the publik dashboard (revoke_reason 'dashboard'), then pressed
+// Reconnect. The gateway answers 403 install_revoked reprovision:false for
+// that install_id for ever; v0.2.5 re-sent the same install_id on every press
+// and the settings card hid the answer behind the fixed "key was revoked" copy.
+test('a dashboard-revoked install (403 install_revoked) mints a fresh install_id once and stores the new key and claim link', async () => {
+  const gw = await startFakeGateway();
+  try {
+    const build = { appToken: TOKEN, appSlug: 'cue', baseUrl: gw.baseUrl, disclosureVersion: 1, available: true };
+    const store = fakeStore({ publik: { installId: '', keyId: '', baseUrl: '', claimUrl: '', claimCode: '', claimState: '', starterMicros: 0, balanceMicros: null, balanceAt: 0, wallet: null, disclosureAccepted: 1, defaultApplied: true, revoked: false, disconnected: false, lastError: '' } });
+    const events = [];
+    await publik.provisionInstall({ build, store, device: { appVersion: '0.2.5', platform: 'win32', arch: 'x64', deviceName: 'HusainLaptop' } });
+    const firstKey = store.data.apiKeys.publik;
+    const firstKeyId = store.data.publik.keyId;
+    const oldId = store.data.publik.installId;
+    assert.equal(store.data.publik.claimUrl, 'https://publikhq.com/claim/HK7F-2QWD');
+
+    // Revoked from the dashboard: the next metered call is 401 key_revoked
+    // reprovision:false and main.js publikHandleRevoked() stores this.
+    gw.installs.get(oldId).ownerRevoked = true;
+    await assert.rejects(publik.fetchWallet({ baseUrl: gw.baseUrl, apiKey: firstKey }), (e) => e.status === 401 && e.type === 'key_revoked' && e.reprovision === false);
+    store.setPublik({ revoked: true, disconnected: true, lastError: '' });
+    assert.match(statusOf(store).text, /^publik API key was revoked\. Reconnect/);
+
+    // Reconnect (main.js publik:reconnect): revoked:true, then provisionInstall.
+    store.setPublik({ revoked: true });
+    const r = await publik.provisionInstall({ build, store, device: { appVersion: '0.2.5', platform: 'win32', arch: 'x64', deviceName: 'HusainLaptop' }, log: (e) => events.push(e) });
+    assert.equal(r.ok, true);
+    assert.equal(r.minted, true);
+    assert.notEqual(store.data.publik.installId, oldId, 'a finished install_id is never re-sent');
+    assert.match(store.data.apiKeys.publik, publik.KEY_RE);
+    assert.notEqual(store.data.apiKeys.publik, firstKey);
+    assert.notEqual(store.data.publik.keyId, firstKeyId);
+    assert.equal(store.data.publik.claimUrl, 'https://publikhq.com/claim/HK7F-2QW2', 'the new install has its own claim link');
+    assert.equal(store.data.publik.revoked, false);
+    assert.equal(store.data.publik.disconnected, false);
+    assert.equal(store.data.publik.lastError, '');
+    assert.equal(store.data.publik.starterMicros, 0, 'a fresh install gets no starter');
+    assert.match(statusOf(store).text, new RegExp(`^Connected · key ${store.data.publik.keyId}`));
+    const bodies = gw.requests.filter((q) => q.url === '/api/v1/installs').map((q) => q.body.install_id);
+    assert.deepEqual(bodies, [oldId, oldId, store.data.publik.installId]);
+    assert.deepEqual(events.map((e) => e.event), ['publik_install_reprovisioned', 'publik_provisioned']);
+    assert.equal(events[0].msg, oldId);
+    assert.equal(events[0].context.type, 'install_revoked');
+  } finally { await gw.close(); }
+});
+
+test('a second 403 install_revoked on the fresh install_id stops after one retry, drops the stale key and keeps the gateway message', async () => {
+  const gw = await startFakeGateway();
+  try {
+    const build = { appToken: TOKEN, appSlug: 'cue', baseUrl: gw.baseUrl, disclosureVersion: 1, available: true };
+    const store = fakeStore({ apiKeys: { openai: '', publik: 'pk_live_' + 'a'.repeat(12) + '_' + 'b'.repeat(32) } });
+    const oldId = publik.newInstallId();
+    store.setPublik({ installId: oldId, keyId: 'a'.repeat(12), claimUrl: 'https://publikhq.com/claim/OLD1-CODE', disclosureAccepted: 1, revoked: true, disconnected: true });
+    gw.refuseAll = true;
+    const events = [];
+    const r = await publik.provisionInstall({ build, store, device: { appVersion: '0.2.5', platform: 'win32', arch: 'x64' }, log: (e) => events.push(e) });
+    assert.equal(r.ok, false);
+    assert.equal(r.error.status, 403);
+    assert.equal(r.error.type, 'install_revoked');
+    const posts = gw.requests.filter((q) => q.url === '/api/v1/installs');
+    assert.equal(posts.length, 2, 'one retry with a fresh install_id, then stop');
+    assert.equal(posts[0].body.install_id, oldId);
+    assert.notEqual(posts[1].body.install_id, oldId);
+    assert.equal(store.data.publik.installId, posts[1].body.install_id, 'the fresh install_id is kept for the next press');
+    assert.equal(store.data.apiKeys.publik, '', 'the stale key is gone');
+    assert.equal(store.data.publik.claimUrl, '', 'the old claim link is gone');
+    assert.match(store.data.publik.lastError, /disconnected by its owner/);
+    // The settings card shows the gateway's answer, not the fixed copy.
+    const status = statusOf(store);
+    assert.equal(status.warn, true);
+    assert.match(status.text, /disconnected by its owner/);
+    assert.deepEqual(events.map((e) => e.event), ['publik_install_reprovisioned', 'publik_provision_failed']);
+    assert.equal(events[1].context.freshInstall, true);
+  } finally { await gw.close(); }
+});
+
 test('a rejected mint records lastError and leaves the store without a key', async () => {
   const gw = await startFakeGateway();
   try {
@@ -196,4 +290,81 @@ test('an unreachable gateway fails closed with no key and no crash', async () =>
   assert.equal(r.ok, false);
   assert.equal(store.data.apiKeys.publik, '');
   assert.ok(store.data.publik.lastError);
+});
+
+// Smoke test 2026-11-02 (v0.2.6): after a dashboard revoke the stored key still
+// looks live (revoked:false) until something reads the gateway. The error
+// toast offers Reconnect; v0.2.6's publik:reconnect only re-read the wallet on
+// that first press (which set revoked:true) and returned, so the person saw
+// nothing change. reconnectInstall goes on to mint in the same press.
+function mainLikeHandlers(store, build) {
+  const state = () => {
+    const s = store.getSettings();
+    return { connected: !!s.apiKeys.publik, revoked: !!s.publik.revoked, disconnected: !!s.publik.disconnected, keyId: s.publik.keyId, claimUrl: s.publik.claimUrl, lastError: s.publik.lastError };
+  };
+  const calls = { wallet: 0, provision: 0 };
+  // Same store writes as main.js publikRefreshWallet + publikHandleRevoked.
+  const refreshWallet = async () => {
+    calls.wallet += 1;
+    const s = store.getSettings();
+    try {
+      const w = await publik.fetchWallet({ baseUrl: build.baseUrl, apiKey: s.apiKeys.publik });
+      store.setPublik({ wallet: w, balanceMicros: w.balanceMicros, revoked: false, disconnected: false, lastError: '' });
+    } catch (e) {
+      if (e.status === 401) store.setPublik({ revoked: true, disconnected: e.type === 'key_revoked' && e.reprovision !== true, lastError: '' });
+    }
+    return state();
+  };
+  const provision = async () => { calls.provision += 1; await publik.provisionInstall({ build, store, device: { appVersion: '0.2.7', platform: 'darwin', arch: 'arm64' } }); return state(); };
+  return { state, refreshWallet, provision, calls };
+}
+
+test('one Reconnect press after a dashboard revoke mints a new install and claim link (stored key still looked live)', async () => {
+  const gw = await startFakeGateway();
+  try {
+    const build = { appToken: TOKEN, appSlug: 'cue', baseUrl: gw.baseUrl, disclosureVersion: 1, available: true };
+    const store = fakeStore({ provider: 'publik' });
+    store.setPublik({ disclosureAccepted: 1 });
+    await publik.provisionInstall({ build, store, device: { appVersion: '0.2.7', platform: 'darwin', arch: 'arm64' } });
+    const oldId = store.data.publik.installId;
+    const oldKey = store.data.apiKeys.publik;
+    gw.installs.get(oldId).ownerRevoked = true; // the owner pressed Revoke on publikhq.com/wallet
+    assert.equal(store.data.publik.revoked, false, 'precondition: cue has not noticed the revoke yet');
+
+    const h = mainLikeHandlers(store, build);
+    const after = await publik.reconnectInstall({ store, refreshWallet: h.refreshWallet, provision: h.provision, state: h.state });
+    assert.equal(h.calls.wallet, 1);
+    assert.equal(h.calls.provision, 1, 'the same press goes on to mint');
+    assert.equal(after.connected, true);
+    assert.equal(after.revoked, false);
+    assert.equal(after.disconnected, false);
+    assert.notEqual(store.data.apiKeys.publik, oldKey);
+    assert.notEqual(store.data.publik.installId, oldId, 'a finished install_id is never re-used');
+    assert.equal(after.claimUrl, 'https://publikhq.com/claim/HK7F-2QW2', 'a new claim link for the new install');
+  } finally { await gw.close(); }
+});
+
+test('Reconnect on a live key only re-reads the wallet and never mints', async () => {
+  const gw = await startFakeGateway();
+  try {
+    const build = { appToken: TOKEN, appSlug: 'cue', baseUrl: gw.baseUrl, disclosureVersion: 1, available: true };
+    const store = fakeStore({ provider: 'publik' });
+    store.setPublik({ disclosureAccepted: 1 });
+    await publik.provisionInstall({ build, store, device: { appVersion: '0.2.7', platform: 'darwin', arch: 'arm64' } });
+    const key = store.data.apiKeys.publik;
+    const h = mainLikeHandlers(store, build);
+    const after = await publik.reconnectInstall({ store, refreshWallet: h.refreshWallet, provision: h.provision, state: h.state });
+    assert.equal(h.calls.provision, 0);
+    assert.equal(after.connected, true);
+    assert.equal(store.data.apiKeys.publik, key);
+    assert.equal(gw.requests.filter((q) => q.url === '/api/v1/installs').length, 1);
+  } finally { await gw.close(); }
+});
+
+test('Reconnect before consent does nothing (only "Continue" may mint)', async () => {
+  const store = fakeStore({ provider: 'publik' });
+  let touched = 0;
+  const after = await publik.reconnectInstall({ store, refreshWallet: async () => { touched += 1; }, provision: async () => { touched += 1; }, state: () => 'state' });
+  assert.equal(after, 'state');
+  assert.equal(touched, 0);
 });

@@ -18,12 +18,15 @@ function loadMain(overrides = {}) {
     setSettings: (patch) => Object.assign(settings, patch),
     stripRendererPatch: (patch) => patch, redactForRenderer: (s) => s,
   };
+  const timers = { setTimeout, clearTimeout, ...overrides.timers };
+  const realGiveUp = requireMain('./src/give-up');
   const mocks = {
     electron: { app, ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => listeners.set(name, fn) }, ...overrides.electron },
     './src/store': store,
     './src/applink': { recordEvent() {} },
     './src/llm': { createLLM: () => ({ ready: true, stream: async () => 'synthetic answer' }) },
     './src/stt-streaming': { createStreamingSTT: () => ({ type: 'batch' }) },
+    './src/give-up': { giveUpTimer: (ms, msg, t) => realGiveUp.giveUpTimer(ms, msg, t || timers) },
     ...overrides.modules,
   };
   const context = vm.createContext({

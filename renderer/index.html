@@ -122,82 +122,35 @@
 
       <!-- Tab bar -->
       <div class="s-tabs">
-        <button class="s-tab on" data-tab="keys">🔑 API Keys</button>
+        <button class="s-tab on" data-tab="keys" id="s-tab-main">🪙 publik</button>
         <button class="s-tab" data-tab="transcription">🔉 Audio</button>
         <button class="s-tab" data-tab="style">✨ Style</button>
         <button class="s-tab" data-tab="appearance">🌗 Appearance</button>
       </div>
 
-      <!-- Tab: Keys -->
+      <!-- Tab: publik (first). The publik card comes first; every key and
+           provider control sits in the closed "Use your own API key instead"
+           section at the bottom. -->
       <div class="s-body s-tab-pane" data-pane="keys">
-        <label class="s-label">Provider</label>
-        <div class="s-seg" id="provider-seg">
-          <button data-provider="publik" id="provider-publik" class="hidden">publik API <span class="s-default-badge">default</span></button>
-          <button data-provider="cerebras">Cerebras</button>
-          <button data-provider="openai">OpenAI</button>
-          <button data-provider="anthropic">Anthropic</button>
-          <button data-provider="gemini">Gemini</button>
-          <button data-provider="groq">Groq</button>
-          <button data-provider="custom">Custom</button>
-          <button data-provider="ollama">Ollama</button>
-          <button data-provider="minimax">MiniMax</button>
-          <button data-provider="deepseek">DeepSeek</button>
-          <button data-provider="azure">Azure AI</button>
-        </div>
-
-        <label class="s-label">API keys &amp; URLs <span class="s-hint">stored locally · never sent to any server</span></label>
-        <div class="s-field" data-key-for="cerebras"><span>Cerebras</span><input id="key-cerebras" type="password" placeholder="csk-..." autocomplete="off" /></div>
-        <div class="s-field" data-key-for="openai"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
-        <div class="s-field" data-key-for="anthropic"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
-        <div class="s-field" data-key-for="anthropic"><span>Base URL</span><input id="anthropic-base-url" type="text" placeholder="optional · a relay like https://api.tokenrouter.com" autocomplete="off" /></div>
-        <div class="s-field" data-key-for="gemini"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
-        <div class="s-field" data-key-for="deepgram"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
-        <div class="s-field" data-key-for="groq"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
-        <div class="s-field" data-key-for="custom"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
-        <div class="s-field" data-key-for="minimax"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
-
-        <div id="minimax-region-settings" class="hidden">
-          <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
-          <div class="s-seg" id="minimax-region-seg">
-            <button data-region="global_en">Global</button>
-            <button data-region="cn_zh">China</button>
-          </div>
-        </div>
-
-        <div id="custom-endpoint-settings" class="hidden">
-          <label class="s-label" for="base-url">Custom endpoint <span class="s-hint">OpenAI-compatible chat API</span></label>
-          <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
-          <div class="s-help">Your Custom key and LLM requests are sent to this URL. To also use it for speech-to-text, pick Custom on the Audio tab — otherwise transcription uses OpenAI or Groq.</div>
-        </div>
-
-        <!-- publik API: the packaged-build default. Text and buttons are filled by
-             renderPublikBlock() from publik:state so the copy has one source. -->
+        <!-- Text and buttons are filled by renderPublikBlock() from publik:state
+             and renderer/publik-card.js, so the copy has one source. -->
         <div id="publik-settings" class="publik-card hidden">
-          <div class="publik-line" id="publik-status-note">Not connected</div>
+          <div class="publik-lede" id="publik-lede">cue runs on your publik balance. You need no API key.</div>
+          <div class="publik-line" id="publik-status-note">Not connected.</div>
           <div class="publik-line warn hidden" id="publik-low-note"></div>
+          <button id="publik-primary" class="s-action primary publik-primary hidden"></button>
           <div class="s-note" id="publik-cost-note"></div>
           <details class="publik-why" id="publik-why">
             <summary id="publik-why-summary">Why it costs money</summary>
             <div class="s-note" id="publik-why-text"></div>
           </details>
           <div class="s-note" id="publik-data-note"></div>
-          <div class="whisper-actions">
-            <button id="publik-setup" class="s-action hidden">Set up publik API</button>
-            <button id="publik-link" class="s-action primary hidden">Link this computer &amp; pick a plan</button>
+          <div class="whisper-actions publik-secondary">
+            <button id="publik-manage" class="s-action hidden">Manage plan</button>
             <button id="publik-add-credit" class="s-action hidden">Add a plan or pack</button>
-            <button id="publik-reconnect" class="s-action hidden">Reconnect</button>
             <button id="publik-pricing" class="s-action">How pricing works</button>
-            <button id="publik-byo" class="s-action">Use my own key instead</button>
-            <button id="publik-disconnect" class="s-action danger hidden">Disconnect publik API</button>
+            <button id="publik-disconnect" class="s-action danger hidden">Disconnect publik</button>
           </div>
-        </div>
-        <div class="s-field" data-key-for="ollama"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
-        <div class="s-field" data-key-for="deepseek"><span>DeepSeek</span><input id="key-deepseek" type="password" placeholder="sk-..." autocomplete="off" /></div>
-        <div class="s-field" data-key-for="azure"><span>Azure AI Foundry</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
-
-        <div id="azure-endpoint-settings" class="hidden">
-          <label class="s-label" for="azure-endpoint">Azure endpoint <span class="s-hint">Azure OpenAI: https://&lt;resource&gt;.openai.azure.com/openai · AI Foundry: https://&lt;host&gt;.cognitiveservices.azure.com (cue adds /openai/v1)</span></label>
-          <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
         </div>
 
         <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
@@ -209,6 +162,59 @@
 
         <label class="s-label">Assistant access <span class="s-hint">programs allowed to see what cue is doing</span></label>
         <div class="s-callers" id="applink-callers"></div>
+
+        <details id="byo-section" class="byo-section">
+          <summary id="byo-summary"><span id="byo-title">Use your own API key instead</span> <span class="s-hint" id="byo-current"></span></summary>
+          <div class="byo-body">
+            <label class="s-label">Provider</label>
+            <div class="s-seg" id="provider-seg">
+              <button data-provider="cerebras">Cerebras</button>
+              <button data-provider="openai">OpenAI</button>
+              <button data-provider="anthropic">Anthropic</button>
+              <button data-provider="gemini">Gemini</button>
+              <button data-provider="groq">Groq</button>
+              <button data-provider="custom">Custom</button>
+              <button data-provider="ollama">Ollama</button>
+              <button data-provider="minimax">MiniMax</button>
+              <button data-provider="deepseek">DeepSeek</button>
+              <button data-provider="azure">Azure AI</button>
+            </div>
+
+            <label class="s-label">API keys &amp; URLs <span class="s-hint">stored locally · never sent to any server</span></label>
+            <div class="s-field" data-key-for="cerebras"><span>Cerebras</span><input id="key-cerebras" type="password" placeholder="csk-..." autocomplete="off" /></div>
+            <div class="s-field" data-key-for="openai"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
+            <div class="s-field" data-key-for="anthropic"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
+            <div class="s-field" data-key-for="anthropic"><span>Base URL</span><input id="anthropic-base-url" type="text" placeholder="optional · a relay like https://api.tokenrouter.com" autocomplete="off" /></div>
+            <div class="s-field" data-key-for="gemini"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
+            <div class="s-field" data-key-for="deepgram"><span>Deepgram</span><input id="key-deepgram" type="password" placeholder="dg-..." autocomplete="off" /></div>
+            <div class="s-field" data-key-for="groq"><span>Groq</span><input id="key-groq" type="password" placeholder="gsk_..." autocomplete="off" /></div>
+            <div class="s-field" data-key-for="custom"><span>Custom</span><input id="key-custom" type="password" placeholder="optional" autocomplete="off" /></div>
+            <div class="s-field" data-key-for="minimax"><span>MiniMax</span><input id="key-minimax" type="password" placeholder="MiniMax API key" autocomplete="off" /></div>
+
+            <div id="minimax-region-settings" class="hidden">
+              <label class="s-label">MiniMax region <span class="s-hint">keys are region-bound — a Global key will 401 against China, and vice versa</span></label>
+              <div class="s-seg" id="minimax-region-seg">
+                <button data-region="global_en">Global</button>
+                <button data-region="cn_zh">China</button>
+              </div>
+            </div>
+
+            <div id="custom-endpoint-settings" class="hidden">
+              <label class="s-label" for="base-url">Custom endpoint <span class="s-hint">OpenAI-compatible chat API</span></label>
+              <div class="s-field"><span>Base URL</span><input id="base-url" type="url" placeholder="http://127.0.0.1:18789/v1" autocomplete="off" spellcheck="false" /></div>
+              <div class="s-help">Your Custom key and LLM requests are sent to this URL. To also use it for speech-to-text, pick Custom on the Audio tab — otherwise transcription uses OpenAI or Groq.</div>
+            </div>
+
+            <div class="s-field" data-key-for="ollama"><span>Ollama URL</span><input id="key-ollama" type="text" placeholder="http://localhost:11434" autocomplete="off" /></div>
+            <div class="s-field" data-key-for="deepseek"><span>DeepSeek</span><input id="key-deepseek" type="password" placeholder="sk-..." autocomplete="off" /></div>
+            <div class="s-field" data-key-for="azure"><span>Azure AI Foundry</span><input id="key-azure" type="password" placeholder="azure key or Entra token" autocomplete="off" /></div>
+
+            <div id="azure-endpoint-settings" class="hidden">
+              <label class="s-label" for="azure-endpoint">Azure endpoint <span class="s-hint">Azure OpenAI: https://&lt;resource&gt;.openai.azure.com/openai · AI Foundry: https://&lt;host&gt;.cognitiveservices.azure.com (cue adds /openai/v1)</span></label>
+              <div class="s-field"><span>Endpoint</span><input id="azure-endpoint" type="text" placeholder="https://host.cognitiveservices.azure.com" autocomplete="off" /></div>
+            </div>
+          </div>
+        </details>
 
         <div class="s-status" id="s-status"></div>
       </div>
@@ -224,7 +230,7 @@
           <button data-stt-provider="deepgram">Deepgram</button>
           <button data-stt-provider="custom">Custom</button>
         </div>
-        <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider. Groq, OpenAI and Deepgram use their key on the API Keys tab, whichever chat provider you picked. Deepgram and OpenAI stream live; Groq sends each sentence after you pause. Custom sends audio to the Base URL and Custom key set on the API Keys tab (requires both).</div>
+        <div class="s-note">Local mode keeps microphone and meeting audio on this computer. It never silently falls back to a cloud transcription provider. Groq, OpenAI and Deepgram use their key under “Use your own API key instead” on the first tab, whichever chat provider you picked. Deepgram and OpenAI stream live; Groq sends each sentence after you pause. Custom sends audio to the Base URL and Custom key set under “Use your own API key instead” on the first tab (requires both).</div>
 
         <label class="s-label">Meeting audio <span class="s-hint">transcribe the other side of a call</span></label>
         <div class="s-seg" id="meeting-audio-seg">
@@ -317,7 +323,11 @@
       <div class="ob-icon" id="ob-icon"></div>
       <div class="ob-title" id="ob-title"></div>
       <div class="ob-body" id="ob-body"></div>
+      <!-- A step's failure (publik setup): outside the scrolling text so it is always in view. -->
+      <div class="ob-error hidden" id="ob-error" role="alert"></div>
       <div class="ob-buttons" id="ob-buttons"></div>
+      <!-- Fine print under a step's buttons (the publik step: cost, data path, terms). -->
+      <div class="ob-after hidden" id="ob-after"></div>
       <div class="ob-actions">
         <button id="ob-skip" class="ob-ghost">Skip</button>
         <div class="spacer"></div>
@@ -342,6 +352,7 @@
   </div>
 
   <script src="icons.js"></script>
+  <script src="publik-card.js"></script>
   <script src="renderer.js"></script>
   <script src="privacy.js"></script>
 </body>

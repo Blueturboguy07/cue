@@ -38,13 +38,13 @@ const BYO = 'or use your own key in Settings.';
 const COPY = {
   label: PROVIDER_LABEL,
   cost: 'Every request is priced per use at 50% of the model\'s published list price. Most people spend under $2 a month.',
-  dataPath: 'Your prompts and screenshots go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time.',
+  dataPath: 'Your prompts, screenshots and, while cue listens, your audio go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time.',
   disclosure: {
     title: 'cue uses publik API',
     intro: 'cue needs an AI model to work. By default it runs on publik API, so you need no key of your own.',
     cost: 'Every request is priced per use at 50% of the model\'s published list price, from your publik balance. A new computer starts at $0.00. Linking this computer to your publik account gives $0.05 of free use, once. Most people spend under $2 a month. You can see every charge in the app and at publikhq.com.',
-    dataPath: 'Your prompts and screenshots go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time in Settings.',
-    accept: 'Continue with publik API',
+    dataPath: 'Your prompts, screenshots and, while cue listens, your audio go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time in Settings.',
+    accept: 'Sign in with publik',
     decline: 'Use my own key instead',
     terms: 'By continuing you agree to the publik API terms.'
   },
@@ -215,6 +215,7 @@ function normalizeWallet(b) {
   const week = w.week && typeof w.week === 'object' ? w.week : {};
   const starter = w.starter && typeof w.starter === 'object' ? w.starter : {};
   const plan = w.plan && typeof w.plan === 'object' ? w.plan : {};
+  const pack = w.pack && typeof w.pack === 'object' ? w.pack : {};
   const claimState = w.claim_state === 'claimed' ? 'claimed' : 'anonymous';
   const claimUrl = safeLink(w.claim_url);
   const addCreditUrl = safeLink(w.add_credit_url);
@@ -223,6 +224,7 @@ function normalizeWallet(b) {
     balanceMicros: firstMicros(w.balance_micros, w.available_micros),
     starterRemainingMicros: micros(starter.remaining_micros),
     starterExpiresAt: typeof starter.expires_at === 'string' ? starter.expires_at : '',
+    packRemainingMicros: micros(pack.remaining_micros),
     planId: typeof plan.id === 'string' ? plan.id : 'none',
     planLabel: typeof plan.label === 'string' ? plan.label : '',
     weekUsedMicros: micros(week.used_micros),
@@ -332,15 +334,18 @@ function describeGatewayError({ status, body, model, retryAfter } = {}) {
         action: { kind: 'reprovision' }
       };
     }
+    // `revoked` tells main.js the key on disk is dead, so the state (and
+    // Settings) says so at once and the first Reconnect press mints a new
+    // key instead of only re-reading the wallet (smoke test 2026-11-02).
     if (type === 'key_revoked') {
       return {
         message: `${PROVIDER_LABEL} is disconnected. This computer was removed from your publik account. Reconnect to set it up again, ${BYO}`,
-        action: { kind: 'reconnect', label: 'Reconnect' }
+        action: { kind: 'reconnect', label: 'Reconnect', revoked: 'key_revoked' }
       };
     }
     return {
       message: `${PROVIDER_LABEL} did not accept this computer's key. Reconnect to set it up again, ${BYO}`,
-      action: { kind: 'reconnect', label: 'Reconnect' }
+      action: { kind: 'reconnect', label: 'Reconnect', revoked: 'invalid_key' }
     };
   }
   if (status === 429) {
@@ -483,6 +488,26 @@ function lowStarterNotice(p) {
 }
 
 /**
+ * The one status sentence on the settings card, with its warn flag. The
+ * gateway's own answer (lastError) wins over the fixed revoked/disconnected
+ * copy: after a dashboard revoke the stale key is still on disk and `revoked`
+ * is set, so the fixed copy used to hide why Reconnect had just failed.
+ */
+function statusLine(p) {
+  const warn = (text) => ({ text, warn: true });
+  if (!p) return { text: '', warn: false };
+  // A failed setup reads in plain words (plainProblem); a gateway sentence
+  // with no failure kind passes through unchanged.
+  const said = p.lastError ? ((typeof p.problem === 'string' && p.problem) || plainProblem(p) || p.lastError) : '';
+  if (p.connected && p.revoked) return warn(said || `${PROVIDER_LABEL} key was revoked. Reconnect to set this computer up again.`);
+  if (p.connected) return { text: `Connected · key ${p.keyId} · ${p.line || 'Ready'}`, warn: false };
+  if (p.disconnected) return warn(said || `${PROVIDER_LABEL} is disconnected. This computer was removed from your publik account.`);
+  if (!p.disclosureAccepted) return { text: 'Not set up yet — no key needed to set it up.', warn: false };
+  if (p.lastError) return warn(said);
+  return { text: 'Connecting…', warn: false };
+}
+
+/**
  * What publik:open may hand to the system browser: the requested link when it
  * is on publikhq.com, else the stored fallback when that is, else nothing.
  * A link off publikhq.com is dropped, never rewritten to a third origin.
@@ -502,11 +527,113 @@ function markCardSeen(store) {
 }
 
 /**
+ * True when the gateway says this install_id is finished for good: the owner
+ * revoked it from the dashboard (403 install_revoked, reprovision:false) or it
+ * was removed for abuse. The server never re-keys such an install_id, so the
+ * only way back is a fresh one.
+ */
+function isInstallFinished(e) {
+  if (!e) return false;
+  if (e.type === 'install_revoked') return true;
+  return e.status === 410;
+}
+
+// ---- failures in plain words -------------------------------------------
+// A failed setup keeps the raw message in lastError (logs, tests) and its
+// kind next to it, so the app can say what happened without "fetch failed".
+
+/** 'network' | 'rate' | 'server' | 'http' for a provision() failure. */
+function failureKind(e) {
+  const status = Number(e && e.status) || 0;
+  if (status === 429 || (e && e.type === 'rate_limited')) return 'rate';
+  if (status >= 500) return 'server';
+  if (status) return 'http';
+  return 'network'; // fetch failed, DNS, refused, timed out (AbortError)
+}
+
+function failureFields(e, now = Date.now()) {
+  const retry = Number(e && e.retryAfter) || 0;
+  return { lastErrorKind: failureKind(e), lastErrorStatus: Number(e && e.status) || 0, lastErrorRetryAt: retry > 0 ? now + retry * 1000 : 0 };
+}
+
+/**
+ * The sentence a person reads after a failed setup. Never the raw gateway
+ * text for the common failures; the server's own sentence only for the rare
+ * ones it words for people (replay, unknown kinds from older settings files).
+ */
+function plainProblem(p, now = Date.now()) {
+  if (!p || !p.lastError) return '';
+  switch (p.lastErrorKind) {
+    case 'network': return 'cue could not reach publik. Check your internet connection, then try again.';
+    case 'rate': {
+      const left = p.lastErrorRetryAt ? Math.max(0, Math.ceil((p.lastErrorRetryAt - now) / 1000)) : 0;
+      const wait = formatRetryAfter(left);
+      return wait
+        ? `publik is limiting new setups from this network. Try again in ${wait}.`
+        : 'publik is limiting new setups from this network. Try again in a few minutes.';
+    }
+    case 'server': return 'publik had a problem on its side. Nothing was charged. Try again in a minute.';
+    case 'http': return `publik did not accept the setup (error ${p.lastErrorStatus || 'unknown'}). Try again, or use your own API key.`;
+    default: return p.lastError;
+  }
+}
+
+/**
+ * runFeature with publik selected and no working key: the message and its
+ * one button always agree.
+ */
+function notReadyMessage(p) {
+  if (!p || !p.disclosureAccepted) {
+    return { message: 'Sign in with publik to start. cue runs on your publik balance, so you need no API key.', action: { kind: 'disclosure' } };
+  }
+  // main.js passes its publikState() view, which carries the plain sentence
+  // as `problem` (the stored kind fields stay behind in the store).
+  const problem = typeof p.problem === 'string' ? p.problem : plainProblem(p);
+  // Reconnect marks the key revoked before it mints, so a failed mint after
+  // a Reconnect press is still "Setup did not finish", not "disconnected".
+  const setupFailed = !!(p.lastError && (p.setupFailed || p.lastErrorKind));
+  if (problem && (setupFailed || !(p.revoked || p.disconnected))) {
+    return { message: `Setup did not finish. ${problem}`, action: { kind: 'reconnect', label: 'Reconnect' } };
+  }
+  if (p.revoked || p.disconnected) {
+    return { message: 'publik is disconnected on this computer. Press Reconnect to set it up again. You need no API key.', action: { kind: 'reconnect', label: 'Reconnect' } };
+  }
+  return { message: 'cue is still connecting to publik. Press Reconnect if this does not clear in a moment.', action: { kind: 'reconnect', label: 'Reconnect' } };
+}
+
+/** Own provider not ready, in a build with publik: publik first, proper name. */
+/**
+ * An own provider refused the key (a 401, or Gemini's "API key not valid"),
+ * on a question or in the free startup check (src/own-key-check.js). A
+ * 0.2.4/0.2.5 user who pasted a bad key gets one plain sentence and publik
+ * first: "Switch to publik" is the blue button, "Fix my key" the second.
+ */
+function ownKeyFailedMessage({ providerName, publikAvailable = true } = {}) {
+  const name = providerName || 'API';
+  if (!publikAvailable) {
+    return { message: `Your ${name} key did not work. Check the key in Settings.`, action: { kind: 'fix-key', label: 'Fix my key' } };
+  }
+  return {
+    message: `Your ${name} key did not work. Switch to publik to use cue with no API key, or fix your key in Settings.`,
+    action: { kind: 'switch', label: 'Switch to publik' },
+    secondary: { kind: 'fix-key', label: 'Fix my key' }
+  };
+}
+
+function ownProviderNotReadyMessage({ providerName, missingKey, configurationError }) {
+  if (missingKey) return `Switch to publik, or add your ${providerName} key in Settings.`;
+  const rest = String(configurationError || `Complete the ${providerName} settings.`);
+  return `Switch to publik, or ${rest.charAt(0).toLowerCase()}${rest.slice(1)}`;
+}
+
+/**
  * The provisioning flow main.js runs after the disclosure is accepted (and on
  * Reconnect). `store` is the app's settings store: getSettings(), setPublik(),
  * setSettings(). Rules:
  *   - never mint twice for a live key;
  *   - a 200 replay with no credential on disk mints a fresh install_id once;
+ *   - a finished install_id (403 install_revoked: revoked from the dashboard)
+ *     drops the stale key and mints a fresh install_id once;
  *   - only apiKeys.publik and publik.* are written — no user-entered key is
  *     ever touched, and the provider is not switched here.
  */
@@ -524,21 +651,30 @@ async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, 
       signal?.throwIfAborted();
     } catch (e) {
       if (signal?.aborted) return { ok: false, cancelled: true };
-      store.setPublik({ installId, lastError: e.message });
-      log({ level: 'error', event: 'publik_provision_failed', msg: e.message, context: { status: e.status || null, type: e.type || '' } });
+      if (isInstallFinished(e) && !mintedFresh) {
+        // The old key, claim link and wallet belong to the finished install;
+        // the file keeps the new install_id so a retry stays idempotent.
+        const finished = installId;
+        installId = randomUUID(); mintedFresh = true;
+        store.setPublik({ installId, apiKey: '', keyId: '', claimUrl: '', claimCode: '', claimState: '', balanceMicros: null, wallet: null, lastError: '' });
+        log({ level: 'info', event: 'publik_install_reprovisioned', msg: finished, context: { status: e.status || null, type: e.type || '' } });
+        continue;
+      }
+      store.setPublik({ installId, lastError: e.message, ...failureFields(e) });
+      log({ level: 'error', event: 'publik_provision_failed', msg: e.message, context: { status: e.status || null, type: e.type || '', freshInstall: mintedFresh } });
       return { ok: false, error: e };
     }
     if (r.replay) {
       if (!s.apiKeys.publik && !mintedFresh) { installId = randomUUID(); mintedFresh = true; continue; }
       const e = new Error(`${PROVIDER_LABEL} could not set up this computer. Reconnect to try again, ${BYO}`);
-      store.setPublik({ installId, lastError: e.message });
+      store.setPublik({ installId, lastError: e.message, lastErrorKind: 'replay', lastErrorRetryAt: 0 });
       log({ level: 'error', event: 'publik_provision_replayed', msg: 'replay without a key', context: {} });
       return { ok: false, error: e };
     }
     store.setPublik({
       apiKey: r.key, installId, keyId: r.keyId, baseUrl: r.baseUrl, claimUrl: r.claimUrl || '', claimCode: r.claimCode,
       claimState: r.claimState, starterMicros: r.starterMicros, balanceMicros: r.balanceMicros, balanceAt: Date.now(),
-      wallet: r.wallet, revoked: false, disconnected: false, lastError: '',
+      wallet: r.wallet, revoked: false, disconnected: false, lastError: '', lastErrorKind: '', lastErrorRetryAt: 0,
       // A new starter grant must be shown on the card before it is spent (§12.4).
       ...(r.starterMicros > 0 ? { cardShown: false } : {})
     });
@@ -548,10 +684,34 @@ async function provisionInstall({ build, store, device = {}, fetchImpl = fetch, 
   }
 }
 
+/**
+ * The Reconnect button (main.js publik:reconnect). `refreshWallet()` re-reads
+ * GET /wallet and returns the new publik state (it marks the key revoked on a
+ * 401); `provision()` runs provisionInstall and returns the new state.
+ *   - not consented: nothing happens (only "Continue" may mint);
+ *   - a key that still looks live: re-read the wallet; when the gateway now
+ *     says the key is revoked (a dashboard revoke), mint in the SAME press.
+ *     Before 0.2.7 the first press stopped after the wallet read, so the
+ *     person saw nothing change and had to press a second time;
+ *   - no key, or a revoked one: mint (a finished install_id gets a fresh one).
+ */
+async function reconnectInstall({ store, refreshWallet, provision, state }) {
+  const s = store.getSettings();
+  if (!s.publik.disclosureAccepted) return state();
+  if (s.apiKeys.publik && !s.publik.revoked) {
+    const after = await refreshWallet();
+    if (!after || !after.revoked) return after;
+  }
+  store.setPublik({ revoked: true });
+  return provision();
+}
+
 module.exports = {
+  reconnectInstall, ownKeyFailedMessage,
   PUBLIK_PROVIDER, PROVIDER_LABEL, DEFAULT_BASE_URL, DEFAULT_MODELS, TIER_NAMES, LINKS, COPY, KEY_RE,
   loadBuildConfig, provision, provisionInstall, fetchWallet, revokeInstall, normalizeWallet, readGatewayHeaders,
   describeGatewayError, balanceLine, isSafePublikLink, formatMicros, formatResetTime, osName, pickModels,
-  starterLine, ctaView, settingsCta, lowStarterNotice, resolveOpenTarget, markCardSeen, LOW_STARTER_FRACTION,
-  newInstallId: randomUUID
+  starterLine, ctaView, settingsCta, lowStarterNotice, statusLine, resolveOpenTarget, markCardSeen, isInstallFinished,
+  LOW_STARTER_FRACTION, newInstallId: randomUUID,
+  failureKind, failureFields, plainProblem, notReadyMessage, ownProviderNotReadyMessage
 };

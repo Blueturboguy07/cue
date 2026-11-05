@@ -206,7 +206,8 @@ test('copy rule: the CTA copy says "publik API", dollars, never "credits", never
   }
   // The renderer and the settings card carry the same labels and the one sentence's toggle.
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
-  assert.match(html, /id="publik-link"[^>]*>Link this computer &amp; pick a plan</);
+  // One primary button on the card; its label comes from renderer/publik-card.js.
+  assert.match(html, /id="publik-primary"/);
   assert.match(html, /id="publik-why-summary"[^>]*>Why it costs money</);
   assert.match(html, /id="publik-why-text"/);
   const js = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');

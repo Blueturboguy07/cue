@@ -122,5 +122,5 @@ test('Settings lets chat and speech-to-text use different providers', () => {
   // The STT provider's key field must be visible even when chat is on another provider.
   assert.match(renderer, /el\.dataset\.keyFor !== provider && el\.dataset\.keyFor !== sttProvider/);
   // A Groq STT key must not switch chat away from a keyless Custom endpoint.
-  assert.match(renderer, /!\['custom', 'ollama', 'publik'\]\.includes\(settings\.provider\)/);
+  assert.match(renderer, /!\['custom', 'ollama'\]\.includes\(settings\.provider\)/);
 });

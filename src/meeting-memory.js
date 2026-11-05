@@ -31,6 +31,7 @@ function createMeetingMemory(opts) {
   let current = null;        // the meeting the live transcript is being written to
   let notesTurnCount = 0;    // transcript length when notes were last written for `current`
   let notesInFlight = null;
+  const hasDestinationPolicy = typeof opts.getNotesDestination === 'function';
   const getNotesDestination = opts.getNotesDestination || (() => null);
   const notesRequests = new Set();
   let notesGeneration = 0;
@@ -49,8 +50,8 @@ function createMeetingMemory(opts) {
   // null when there is nothing to do (too short, no usable provider, failure).
   async function writeNotes(m) {
     if (!m || m.notesSuppressed || m.transcript.length < cfg.minTurnsForNotes) return null;
-    const destination = getNotesDestination();
-    if (!destination || m.notesDestination !== destination) return null;
+    const destination = hasDestinationPolicy ? getNotesDestination() : null;
+    if (hasDestinationPolicy && (!destination || m.notesDestination !== destination)) return null;
     const llm = llmFactory();
     if (!llm || !llm.ready) return null;
     const request = new AbortController();
@@ -61,9 +62,12 @@ function createMeetingMemory(opts) {
         system: NOTES_SYSTEM,
         turns: [{ role: 'user', text: buildNotesPrompt(turns) }],
         signal: request.signal,
+        // Stored notes never carry the chat answer's "(Cut off: …)" note: a
+        // cut is trimmed and ends with "…", as slide captions do.
+        lengthCut: 'ellipsis',
         onToken: () => {}
       }), request.signal);
-      if (request.signal.aborted || getNotesDestination() !== destination) return null;
+      if (request.signal.aborted || (hasDestinationPolicy && getNotesDestination() !== destination)) return null;
       const notes = parseNotes(text);
       if (!notes.summary) return null;
       store.update(m.id, { ...notes, title: titleFor(notes.summary, m.startedAt), notesAt: now(), notesTurns: turns.length });

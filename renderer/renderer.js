@@ -101,8 +101,28 @@
     messages.appendChild(aiEl);
   }
 
+  // "Thinking…" while a reasoning model thinks and no answer text has come
+  // yet. Only this placeholder shows, never the reasoning itself. The first
+  // answer token replaces it (appendToken), and so does the final message
+  // (finalizeAi re-renders the bubble from its text).
+  function showThinking() {
+    if (!aiEl || aiEl.dataset.raw) return;
+    if (aiEl.querySelector('.ai-thinking')) return;
+    const el = document.createElement('span');
+    el.className = 'ai-thinking';
+    el.textContent = 'Thinking…';
+    if (caretEl && caretEl.parentNode === aiEl) aiEl.insertBefore(el, caretEl);
+    else aiEl.appendChild(el);
+  }
+
+  function clearThinking() {
+    const el = aiEl && aiEl.querySelector('.ai-thinking');
+    if (el) el.remove();
+  }
+
   function appendToken(t) {
     if (!aiEl) startAi(false);
+    clearThinking();
     aiEl.dataset.raw += t;
     const span = document.createElement('span');
     span.className = 'w';
@@ -127,9 +147,20 @@
     busy = v;
     $('#send-btn').classList.toggle('busy', v);
     clearTimeout(busyFailsafe);
-    // Failsafe: main has a 60s stream watchdog that always sends llm:done/llm:error, but if a
-    // terminal event is ever lost the whole UI stays frozen — self-clear after a generous window.
-    if (v) busyFailsafe = setTimeout(() => { busy = false; $('#send-btn').classList.toggle('busy', false); }, 75000);
+    if (v) armBusyFailsafe();
+  }
+
+  // Failsafe: main has a 25s stream watchdog that always sends llm:done/llm:error, but if a
+  // terminal event is ever lost the whole UI stays frozen — self-clear after a generous window.
+  // The window counts from the last sign of life (thinking or answer text), so a long answer
+  // that is still streaming is never cleared under it.
+  function armBusyFailsafe() {
+    clearTimeout(busyFailsafe);
+    busyFailsafe = setTimeout(() => { busy = false; $('#send-btn').classList.toggle('busy', false); }, 40000);
+  }
+
+  function onAnswerActivity() {
+    if (busy) armBusyFailsafe();
   }
 
   // ---- transcript helpers ------------------------------------------------
@@ -1232,15 +1263,23 @@
     });
     setBusy(true);
   });
-  cue.on('llm:token', ({ text }) => appendToken(text));
+  cue.on('llm:thinking', () => {
+    showThinking();
+    onAnswerActivity(); // a long think is not a lost answer: keep the failsafe away
+  });
+  cue.on('llm:token', ({ text }) => {
+    appendToken(text);
+    onAnswerActivity(); // nor is a long answer that is still streaming
+  });
   cue.on('llm:done', () => { finalizeAi(); setBusy(false); });
-  cue.on('llm:error', ({ message, action }) => {
+  cue.on('llm:error', ({ message, action, secondary }) => {
     if (!aiEl) startAi(true);
     aiEl.dataset.raw = message; finalizeAi(); setBusy(false);
     // publik errors carry one action: the renderer's markdown emits no anchors,
     // so a link needs a real button (same pattern as the mic banner).
     if (action && action.kind === 'card') { showPublikCard(); return; }
-    if (action && action.kind) showStatus(message, publikActionButton(action));
+    // A bad own key carries two: "Switch to publik" (blue) and "Fix my key".
+    if (action && action.kind) showStatus(message, [publikActionButton(action), publikActionButton(secondary, true)]);
   });
   cue.on('transcript', ({ channel, text }) => {
     if (!text || text.trim().length < 2 || /^[?!.,;:\-…]+$/.test(text.trim())) return;
@@ -1280,14 +1319,34 @@
       }
     }
     el.textContent = message;
-    if (button) el.appendChild(button);
+    const buttons = (Array.isArray(button) ? button : [button]).filter(Boolean);
+    buttons.forEach((b) => el.appendChild(b));
+    // What the toast asks for, so a later state can tell it is stale.
+    el.dataset.actions = buttons.map((b) => b.dataset.kind || '').join(' ');
     el.classList.add('show');
     clearTimeout(statusTimer);
-    statusTimer = setTimeout(() => el.classList.remove('show'), button ? 30000 : 11000);
+    statusTimer = setTimeout(() => el.classList.remove('show'), buttons.length ? 30000 : 11000);
   }
-  cue.on('status', ({ message }) => {
+  // A toast that asked for Reconnect, a sign-in or a switch is stale once
+  // publik is selected and its key is live again (smoke test v0.2.8: the old
+  // "disconnected [Reconnect]" toast stayed up to 30 s after Reconnect worked).
+  const PUBLIK_FIX_KINDS = ['reconnect', 'disclosure', 'switch', 'fix-key'];
+  function clearStalePublikToast(p) {
+    if (!p || !p.connected || p.revoked || !settings || settings.provider !== 'publik') return false;
+    const el = document.getElementById('cue-status');
+    if (!el || !el.classList.contains('show')) return false;
+    const kinds = (el.dataset.actions || '').split(' ');
+    if (!kinds.some((k) => PUBLIK_FIX_KINDS.includes(k))) return false;
+    el.classList.remove('show');
+    el.dataset.actions = '';
+    clearTimeout(statusTimer);
+    return true;
+  }
+  cue.on('status', ({ message, action }) => {
     cue.log('[status] ' + message);
-    showStatus(message);
+    // A publik transcription failure carries one button (Reconnect, or a
+    // publikhq.com link), the same as a failed question.
+    showStatus(message, action && action.kind ? publikActionButton(action) : undefined);
     if (sttState !== 'disconnected') {
       const lower = message.toLowerCase();
       if (lower.includes('error') || lower.includes(' off')) setSttState('error');
@@ -1354,10 +1413,23 @@
 
   // ---- settings ----------------------------------------------------------
   const scrim = $('#settings-scrim');
+  function showSettingsTab(name) {
+    document.querySelectorAll('.s-tab').forEach((t) => t.classList.toggle('on', t.dataset.tab === name));
+    document.querySelectorAll('.s-tab-pane').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== name));
+  }
+  // Settings always opens on the first tab (publik), with the own-key section
+  // closed unless this build has no publik at all.
   function openSettings() {
     fillSettings();
+    showSettingsTab('keys');
+    const byo = $('#byo-section');
+    if (byo) byo.open = !(publikState && publikState.available);
     scrim.classList.remove('hidden');
     refreshWhisperModels();
+    // A sign-in finished in the browser shows up here without a restart.
+    if (publikState && publikState.connected && !publikState.revoked && cue.publikRefresh) {
+      cue.publikRefresh().then((state) => { if (state) { publikState = state; renderPublikBlock(); renderSetupCta(); } }).catch(() => {});
+    }
   }
   // Only hide after a successful save. A second closeSettings used to shadow
   // this one and always dismiss the modal, so validation errors (and any
@@ -1369,6 +1441,8 @@
     closingSettings = true;
     try {
       if (await saveSettings()) scrim.classList.add('hidden');
+      // A save can change what answers, so the first-run prompt follows it.
+      renderSetupCta();
     } finally {
       closingSettings = false;
     }
@@ -1399,34 +1473,69 @@
       el.classList.toggle('hidden', el.dataset.keyFor !== provider && el.dataset.keyFor !== sttProvider);
     });
     $('#custom-endpoint-settings').classList.toggle('hidden', provider !== 'custom' && sttProvider !== 'custom');
-    $('#publik-settings').classList.toggle('hidden', provider !== 'publik');
     const minimaxRegionSettings = $('#minimax-region-settings');
     if (minimaxRegionSettings) minimaxRegionSettings.classList.toggle('hidden', provider !== 'minimax');
     const azureEndpointSettings = $('#azure-endpoint-settings');
     if (azureEndpointSettings) azureEndpointSettings.classList.toggle('hidden', provider !== 'azure');
+    // The closed "Use your own API key instead" section says which own
+    // provider is in use, so nobody has to open it to find out.
+    const current = $('#byo-current');
+    if (current) {
+      const names = window.cuePublikCard.PROVIDER_NAMES;
+      current.textContent = provider && provider !== 'publik' ? `· using ${names[provider] || provider} now` : '';
+    }
     renderPublikBlock();
   }
 
   // ---- publik API (packaged-build default) --------------------------------
-  function publikActionButton(action) {
+  function publikActionButton(action, secondary) {
     if (!action || !action.kind) return null;
     const btn = document.createElement('button');
+    btn.dataset.kind = action.kind;
+    if (secondary) btn.classList.add('secondary');
     if (action.kind === 'link' && action.url) {
       btn.textContent = action.label || 'Open publikhq.com';
-      btn.addEventListener('click', () => cue.publikOpen(action.url));
+      btn.addEventListener('click', () => openPublikLink(action.url));
     } else if (action.kind === 'reconnect') {
       btn.textContent = action.label || 'Reconnect';
-      btn.addEventListener('click', async () => { btn.disabled = true; publikState = await cue.publikReconnect(); renderPublikBlock(); });
+      // The same path as the overlay Reconnect: a new key, the claim page,
+      // the link poll. Only when no claim page opens (already linked, or the
+      // mint failed) does the toast say what happened.
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        if (!(await reconnectPublik())) showReconnectResult(publikState);
+        renderSetupCta();
+      });
     } else if (action.kind === 'disclosure') {
-      btn.textContent = 'Set up publik API';
-      btn.addEventListener('click', () => showPublikDisclosure());
+      btn.textContent = 'Sign in with publik';
+      btn.addEventListener('click', () => signInWithPublik());
+    } else if (action.kind === 'switch') {
+      btn.textContent = 'Switch to publik';
+      btn.addEventListener('click', () => switchToPublik());
     } else if (action.kind === 'card') {
-      btn.textContent = 'Show the publik API card';
+      btn.textContent = 'Show the publik card';
       btn.addEventListener('click', () => showPublikCard());
+    } else if (action.kind === 'fix-key') {
+      btn.textContent = action.label || 'Fix my key';
+      btn.addEventListener('click', () => fixOwnKey());
     } else {
       return null;
     }
     return btn;
+  }
+
+  // What a Reconnect press did, said in the overlay: before, the button only
+  // went grey and the person could not tell whether anything happened.
+  function showReconnectResult(p) {
+    if (!p) return;
+    if (p.connected && !p.revoked) {
+      const cta = p.settingsCta;
+      const linkBtn = cta ? publikActionButton({ kind: 'link', label: cta.label, url: cta.url }) : null;
+      showStatus(`publik API is connected again · key ${p.keyId}.${p.claimState !== 'claimed' ? ' Link this computer to your publik account to use your balance.' : ''}`, linkBtn || undefined);
+      return;
+    }
+    const status = p.status && p.status.text ? p.status.text : 'publik API could not reconnect. Open Settings to try again.';
+    showStatus(status, publikActionButton({ kind: 'reconnect', label: 'Try again' }));
   }
 
   // Low starter (CONTRACT §12 / task 3): one non-blocking banner with one
@@ -1439,10 +1548,143 @@
     showStatus(p.lowStarter.message, publikActionButton(p.lowStarter.action));
   }
 
+  // "Fix my key": Settings with the own-key section open on the provider in
+  // use and its key field selected, so a pasted key replaces the bad one.
+  function fixOwnKey() {
+    openSettings();
+    const section = $('#byo-section');
+    if (section) section.open = true;
+    const input = document.getElementById(`key-${settings.provider}`);
+    if (input) { input.focus(); if (input.select) input.select(); }
+    if (section && section.scrollIntoView) section.scrollIntoView({ block: 'nearest' });
+  }
+
+  // "Use my own key": open the closed section at the bottom of the first tab
+  // and pick OpenAI, the most common own key.
   function selectByoProvider() {
+    const section = $('#byo-section');
+    if (section) section.open = true;
     const openaiBtn = document.querySelector('#provider-seg button[data-provider="openai"]');
     if (openaiBtn) openaiBtn.click();
     $('#key-openai').focus();
+    if (section && section.scrollIntoView) section.scrollIntoView({ block: 'nearest' });
+  }
+
+  // Main may write models.publik (aliases from the mint) and the provider;
+  // take just those from disk so unsaved edits in Settings survive.
+  async function adoptPublikSelection() {
+    settings.provider = 'publik';
+    try {
+      const fresh = await cue.settingsGet();
+      if (fresh && fresh.models && fresh.models.publik) settings.models.publik = fresh.models.publik;
+    } catch (_) { /* keep the local copy */ }
+    document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.remove('on'));
+    const m = settings.models.publik || { fast: '', smart: '' };
+    $('#model-fast').value = m.fast || ''; $('#model-smart').value = m.smart || '';
+    updateCustomProviderFields();
+    $('#s-status').textContent = statusText();
+    updateSmartTooltip();
+    renderSetupCta();
+  }
+
+  // After the key is minted: open the claim link (sign in on publikhq.com and
+  // link this computer) and watch the wallet until the link lands.
+  async function openClaimLink() {
+    const view = window.cuePublikCard.cardView(publikState, 'publik');
+    if (!view.primary || view.primary.kind !== 'link') return false;
+    cue.publikOpen(view.primary.url);
+    if (publikState.card && !publikState.cardShown) publikState = await cue.publikCardSeen();
+    renderPublikBlock();
+    startLinkPoll();
+    return true;
+  }
+
+  // Every Reconnect button (the overlay prompt, the Settings card, a toast
+  // or a failed question): a new key, then the claim page, then the link
+  // poll. True when the claim page opened. Before 0.2.10 the toast Reconnect
+  // only made the key: the person had to press a second button, and cue did
+  // not see the sign-in until the next answer (smoke test v0.2.9).
+  async function reconnectPublik() {
+    publikState = await cue.publikReconnect();
+    renderPublikBlock();
+    return openClaimLink();
+  }
+
+  // A publikhq.com link from a toast or the first-run card (the claim page,
+  // "Link this computer & pick a plan", "Link now"): cue watches the wallet
+  // after it opens, so a sign-in there shows here without another answer.
+  function openPublikLink(url) {
+    cue.publikOpen(url);
+    startLinkPoll();
+  }
+
+  // The browser does the sign-in; cue learns about it from GET /wallet.
+  let linkPollTimer = null;
+  function startLinkPoll() {
+    clearInterval(linkPollTimer);
+    const until = Date.now() + 5 * 60 * 1000;
+    linkPollTimer = setInterval(async () => {
+      if (Date.now() > until || !publikState || !publikState.connected || publikState.claimState === 'claimed') { clearInterval(linkPollTimer); return; }
+      try {
+        publikState = await cue.publikRefresh(); renderPublikBlock(); renderSetupCta();
+        // Not linked a tick ago (see the check above): say it when it lands.
+        showLinkedNotice(publikState);
+      } catch (_) { /* next tick */ }
+    }, 4000);
+  }
+
+  // The moment the sign-in lands: the overlay says so with the balance,
+  // in place of any toast that still asked for the link or a Reconnect.
+  function showLinkedNotice(p) {
+    if (!p || !p.connected || p.revoked || p.claimState !== 'claimed') return false;
+    const view = window.cuePublikCard.cardView(p, 'publik');
+    if (!view.status) return false;
+    showStatus(/[.!?]$/.test(view.status) ? view.status : `${view.status}.`);
+    return true;
+  }
+
+  // "Sign in with publik": consent first (the disclosure dialog states the
+  // cost and the data path; only its button mints a key), then the claim link.
+  async function signInWithPublik() {
+    if (!publikState || !publikState.available) return;
+    if (!publikState.disclosureAccepted) { showPublikDisclosure(); return; }
+    if (!publikState.connected || publikState.revoked) {
+      publikState = await cue.publikReconnect();
+      renderPublikBlock();
+    }
+    if (settings.provider !== 'publik') { publikState = await cue.publikAcceptDisclosure(); await adoptPublikSelection(); }
+    await openClaimLink();
+  }
+
+  // "Switch to publik" from an own key. Nothing else changes: the own keys
+  // stay saved in the closed section.
+  async function switchToPublik() {
+    if (!publikState || !publikState.available) return;
+    if (!publikState.disclosureAccepted) { showPublikDisclosure(); return; }
+    publikState = await cue.publikAcceptDisclosure();
+    await adoptPublikSelection();
+    if (!(await openClaimLink())) renderPublikBlock();
+    // The toast's own "Switch to publik" button lands here too: the overlay
+    // prompt and any stale "key did not work" toast follow the new state.
+    renderSetupCta();
+  }
+
+  async function onPublikPrimary() {
+    const view = window.cuePublikCard.cardView(publikState, settings.provider);
+    const primary = view.primary;
+    if (!primary) return;
+    const btn = $('#publik-primary');
+    btn.disabled = true;
+    try {
+      if (primary.kind === 'switch') await switchToPublik();
+      else if (primary.kind === 'signin') await signInWithPublik();
+      else if (primary.kind === 'link' || primary.kind === 'credit' || primary.kind === 'plan') openPublikLink(primary.url);
+      else if (primary.kind === 'reconnect') await reconnectPublik();
+    } finally {
+      btn.disabled = false;
+      renderPublikBlock();
+      renderSetupCta();
+    }
   }
 
   function renderPublikBlock() {
@@ -1450,53 +1692,97 @@
     const block = $('#publik-settings');
     if (!block || !p || !settings) return;
     const show = (id, on) => $(id).classList.toggle('hidden', !on);
+    const view = window.cuePublikCard.cardView(p, settings.provider);
+    block.classList.toggle('hidden', !view.show);
+    if (!view.show) return;
+    $('#publik-lede').textContent = view.lede;
     $('#publik-cost-note').textContent = p.copy.cost;
     $('#publik-data-note').textContent = p.copy.dataPath;
+    // The status sentence: the card view decides it from publik:state, and
+    // keeps the gateway's last answer (lastError) when there is one.
     const note = $('#publik-status-note');
-    note.classList.remove('warn');
-    let line;
-    if (p.connected && p.revoked) {
-      line = 'publik API key was revoked. Reconnect to set this computer up again.'; note.classList.add('warn');
-    } else if (p.connected) {
-      line = `Connected · key ${p.keyId} · ${p.line || 'Ready'}`;
-    } else if (p.disconnected) {
-      line = 'publik API is disconnected. This computer was removed from your publik account.'; note.classList.add('warn');
-    } else if (!p.disclosureAccepted) {
-      line = 'Not set up yet — no key needed to set it up.';
-    } else if (p.lastError) {
-      line = p.lastError; note.classList.add('warn');
-    } else {
-      line = 'Connecting…';
-    }
-    note.textContent = line;
+    note.classList.toggle('warn', !!view.warn);
+    note.textContent = view.status;
     // Low starter: the same sentence the banner used, kept on the card.
     const low = $('#publik-low-note');
-    low.textContent = p.lowStarter ? p.lowStarter.message : '';
-    low.classList.toggle('hidden', !p.lowStarter);
+    const lowText = settings.provider === 'publik' && p.lowStarter ? p.lowStarter.message : '';
+    low.textContent = lowText;
+    low.classList.toggle('hidden', !lowText);
     // "Why it costs money" — the one justification sentence (CONTRACT §12).
     $('#publik-why-summary').textContent = p.copy.whyItCostsToggle;
     $('#publik-why-text').textContent = p.copy.whyItCosts;
-    // The primary button (CONTRACT §12.2): "Link this computer & pick a plan"
-    // while anonymous, "Pick a plan" / "Manage plan" once claimed.
-    const cta = p.settingsCta;
-    $('#publik-link').textContent = cta ? cta.label : '';
-    show('#publik-setup', !p.connected && !p.disclosureAccepted);
-    show('#publik-reconnect', p.disclosureAccepted && (!p.connected || p.revoked));
-    show('#publik-link', !!cta);
-    show('#publik-add-credit', p.connected && !p.revoked && p.claimState === 'claimed' && !!p.addCreditUrl);
-    show('#publik-disconnect', p.connected && !p.revoked);
+    // Exactly one primary button, chosen by state (renderer/publik-card.js).
+    const primary = $('#publik-primary');
+    primary.textContent = view.primary ? view.primary.label : '';
+    show('#publik-primary', !!view.primary);
+    $('#publik-manage').textContent = view.manage ? view.manage.label : '';
+    show('#publik-manage', !!view.manage);
+    $('#publik-add-credit').textContent = view.credit ? view.credit.label : '';
+    show('#publik-add-credit', !!view.credit);
+    show('#publik-disconnect', view.disconnect);
     if (settings.provider === 'publik') $('#s-status').textContent = statusText();
   }
-  $('#publik-setup').addEventListener('click', () => showPublikDisclosure());
-  $('#publik-link').addEventListener('click', () => { const cta = publikState && publikState.settingsCta; if (cta) cue.publikOpen(cta.url); });
-  $('#publik-add-credit').addEventListener('click', () => cue.publikOpen(publikState && publikState.addCreditUrl));
+  $('#publik-primary').addEventListener('click', () => { void onPublikPrimary(); });
+  $('#publik-manage').addEventListener('click', () => { const v = window.cuePublikCard.cardView(publikState, settings.provider); if (v.manage) cue.publikOpen(v.manage.url); });
+  $('#publik-add-credit').addEventListener('click', () => { const v = window.cuePublikCard.cardView(publikState, settings.provider); if (v.credit) { cue.publikOpen(v.credit.url); startLinkPoll(); } });
   $('#publik-pricing').addEventListener('click', () => cue.publikOpen(publikState ? publikState.links.pricing : ''));
-  $('#publik-reconnect').addEventListener('click', async () => { $('#publik-reconnect').disabled = true; try { publikState = await cue.publikReconnect(); } finally { $('#publik-reconnect').disabled = false; } renderPublikBlock(); });
-  $('#publik-disconnect').addEventListener('click', async () => { publikState = await cue.publikDisconnect(); renderPublikBlock(); });
-  $('#publik-byo').addEventListener('click', selectByoProvider);
-  cue.on('publik:state', (state) => { publikState = state; renderPublikBlock(); maybeShowLowStarter(state); });
+  $('#publik-disconnect').addEventListener('click', async () => { publikState = await cue.publikDisconnect(); renderPublikBlock(); renderSetupCta(); });
+  cue.on('publik:state', (state) => { publikState = state; renderPublikBlock(); renderSetupCta(); maybeShowLowStarter(state); });
 
+  // ---- first-run prompt in the overlay ------------------------------------
+  // While nothing can answer, the top of the panel says how to start. With
+  // publik in the build that is always "Sign in with publik", never "add a key".
+  function renderSetupCta() {
+    if (!settings || !publikState) return false;
+    clearStalePublikToast(publikState);
+    const prompt = window.cuePublikCard.setupPrompt(settings, publikState);
+    let el = document.getElementById('setup-cta');
+    if (!prompt) {
+      if (el) { el.remove(); if (!messages.children.length) showExample(); }
+      return false;
+    }
+    // The example conversation never sits under the prompt: it would read as
+    // if cue were already answering.
+    messages.querySelectorAll('.is-example').forEach((node) => node.remove());
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'setup-cta';
+      el.className = 'setup-cta';
+      const panelMain = document.getElementById('panel-main');
+      panelMain.insertBefore(el, panelMain.firstChild);
+    }
+    el.innerHTML = '';
+    const title = document.createElement('div'); title.className = 'setup-title'; title.textContent = prompt.title;
+    const body = document.createElement('div'); body.className = 'setup-body'; body.textContent = prompt.body;
+    const row = document.createElement('div'); row.className = 'setup-actions';
+    const primary = document.createElement('button'); primary.className = 'setup-primary'; primary.id = 'setup-primary'; primary.textContent = prompt.primary.label;
+    primary.addEventListener('click', () => { void runSetupAction(prompt.primary.kind); });
+    row.appendChild(primary);
+    if (prompt.secondary) {
+      const secondary = document.createElement('button'); secondary.className = 'setup-secondary'; secondary.textContent = prompt.secondary.label;
+      secondary.addEventListener('click', () => { void runSetupAction(prompt.secondary.kind); });
+      row.appendChild(secondary);
+    }
+    el.append(title, body, row);
+    return true;
+  }
+  async function runSetupAction(kind) {
+    if (kind === 'signin') await signInWithPublik();
+    else if (kind === 'link') await openClaimLink();
+    else if (kind === 'switch') await switchToPublik();
+    else if (kind === 'reconnect') await reconnectPublik();
+    else if (kind === 'byo') { openSettings(); selectByoProvider(); }
+    else if (kind === 'fix-key') fixOwnKey();
+    else if (kind === 'settings') openSettings();
+    renderPublikBlock();
+    renderSetupCta();
+  }
+
+  // Keys as they were when Settings opened: saveSettings only follows a key
+  // the person typed in this visit (see there).
+  let keysAtOpen = {};
   function fillSettings() {
+    keysAtOpen = { ...(settings.apiKeys || {}) };
     // Keys tab
     document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
     $('#key-cerebras').value = settings.apiKeys.cerebras || '';
@@ -1590,7 +1876,7 @@
 
   function statusText() {
     const k = settings.apiKeys;
-    const labels = { publik: 'publik API', cerebras: 'Cerebras', openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', deepseek: 'DeepSeek', azure: 'Azure AI Foundry' };
+    const labels = { publik: 'publik', cerebras: 'Cerebras', openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax', deepseek: 'DeepSeek', azure: 'Azure AI Foundry' };
     const has = Object.keys(labels).filter((p) => k[p]).map((p) => labels[p]);
     const publikPart = settings.provider === 'publik' && publikState
       ? ` · ${publikState.connected ? (publikState.balanceLabel ? `balance ${publikState.balanceLabel}` : 'connected') : 'not set up'}`
@@ -1598,7 +1884,12 @@
     // 'auto' walks the same fallback chain src/stt.js builds; an explicit choice
     // is reported as-is so the status line matches what will actually be used.
     const selectedSttProvider = settings.sttProvider || 'auto';
-    const automaticStt = k.deepgram ? 'Deepgram' : k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : 'none');
+    const publikStt = settings.provider === 'publik' && publikState && publikState.connected && !publikState.revoked;
+    // With publik as the provider, Auto means publik API only (src/stt.js
+    // publikOwnsAutoAudio); own keys count only for another provider.
+    const automaticStt = settings.provider === 'publik'
+      ? (publikStt ? 'publik API' : 'none')
+      : (k.deepgram ? 'Deepgram' : (k.openai ? 'OpenAI Realtime' : (k.groq ? 'Groq Whisper' : (k.gemini ? 'Gemini' : 'none'))));
     const stt = selectedSttProvider === 'auto' ? automaticStt : selectedSttProvider;
     return `${labels[settings.provider] || settings.provider}${publikPart} · STT: ${stt}`;
   }
@@ -1805,11 +2096,16 @@
     // this, `settings.provider` stays on its default ('openai') forever and
     // cue keeps reporting itself unconfigured even though a valid key was
     // saved for the provider the user actually meant to use.
-    // Custom and Ollama can run keyless and publik's key is redacted here, so
-    // an empty slot doesn't mean unconfigured — don't let a Groq STT key steal chat.
-    if (!settings.apiKeys[settings.provider] && !['custom', 'ollama', 'publik'].includes(settings.provider)) {
+    // The renderer never sees the publik key (apiKeys.publik is always ''),
+    // so "the active provider has no key" was always true for publik: every
+    // Settings close sent a person who had just picked publik back to an old
+    // own key (smoke test 2026-11-02, a 0.2.4 file with an OpenAI key). Two
+    // rules now: a connected publik stays selected, and only a key typed in
+    // this visit can move the provider.
+    const publikLive = settings.provider === 'publik' && !!(publikState && publikState.connected && !publikState.revoked);
+    if (!publikLive && !settings.apiKeys[settings.provider] && !['custom', 'ollama'].includes(settings.provider)) {
       const keyedProviders = ['cerebras', 'openai', 'anthropic', 'gemini', 'groq', 'minimax', 'deepseek', 'azure'];
-      const justFilled = keyedProviders.find((p) => settings.apiKeys[p]);
+      const justFilled = keyedProviders.find((p) => settings.apiKeys[p] && settings.apiKeys[p] !== (keysAtOpen[p] || ''));
       if (justFilled) settings.provider = justFilled;
     }
     // Transcription
@@ -1835,6 +2131,7 @@
     if (opacitySlider) settings.opacity = clampOpacity(Number(opacitySlider.value) / 100);
     try {
       settings = await cue.settingsSet(settings);
+      keysAtOpen = { ...(settings.apiKeys || {}) };
       $('#s-status').textContent = statusText();
       updateSmartTooltip();
       return true;
@@ -1854,6 +2151,8 @@
     ai.className = 'ai-text';
     ai.textContent = '“A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.”';
     messages.appendChild(ai);
+    // Marked so the sign-in prompt can take its place (renderSetupCta).
+    messages.querySelectorAll('.user-bubble, .ai-text').forEach((el) => el.classList.add('is-example'));
   }
 
   // ---- global keys -------------------------------------------------------
@@ -1964,19 +2263,23 @@
     {
       icon: '👋',
       title: 'Welcome to cue',
-      body: 'cue is a private AI copilot that floats over your screen. It can see your screen, hear your meetings, and help you answer questions – while staying hidden from screen shares.'
+      body: 'cue is a private AI copilot that floats over your screen. It can see your screen, hear your meetings, and help you answer questions – while staying hidden from screen shares.',
+      welcome: true
     },
     {
       icon: '🔐',
       title: 'Allow cue to see & hear',
-      body: permissionHelp + '<ul><li><strong>Microphone</strong> – to hear you</li><li><strong>Screen recording</strong> – to see your screen and hear your meeting</li></ul>',
-      buttons: permissionButtons
+      body: permissionHelp + '<ul><li><strong>Microphone</strong> – to hear you</li><li><strong>Screen recording</strong> – to see your screen and hear your meeting</li></ul>' +
+        `<span class="ob-fine">You can also do this later in ${isWindows ? 'Windows Settings' : 'System Settings'}.</span>`,
+      buttons: permissionButtons,
+      permissions: true
     },
     {
       icon: '⚙️',
-      title: 'Connect an AI provider',
-      body: 'cue uses API keys for <span class="hl">Cerebras API</span> and options to enable real-time transcription via a local or hosted transcription model.',
-      buttons: [{ label: 'Configure cue settings', action: () => { finishOnboard(); openSettings(); } }]
+      connectModel: true,
+      title: 'Connect an AI model',
+      body: 'cue needs an AI model to answer. Add an API key for any provider in Settings.',
+      buttons: [{ label: 'Open Settings', action: () => { finishOnboard(); openSettings(); } }]
     },
     {
       icon: '✨',
@@ -1987,25 +2290,58 @@
   // First-run disclosure (R21 §4.3): two disclosures — cost and data path —
   // and a visible "use my own key" branch. Copy comes from main (one source).
   // Only "Continue" mints a key; Next/Skip never provision.
+  // A failed setup keeps the person on this step with the reason in plain
+  // words and "Try again", instead of moving on to "You're all set".
+  let obPublikError = '';
+  // In onboarding this is step 1, "Welcome to cue": one line that cue runs on
+  // the publik balance with no key, the blue "Sign in with publik", a small
+  // "Use my own key instead" link, and the cost and data-path fine print
+  // under the buttons (smoke test v0.2.8: at 3 s a new user saw only a
+  // welcome card, and the sign-in was on step 3 of 4). Opened as a dialog
+  // (Settings, the overlay) it keeps its own title and full text.
+  const WELCOME_SUB = 'A private AI copilot over your screen. It sees your screen, hears your meetings, and stays hidden from screen shares.';
   function publikStep() {
     const c = publikState.copy.disclosure;
-    return {
-      icon: '🪙',
-      title: c.title,
-      body: () => `${esc(c.intro)}<br><br><strong>Cost.</strong> ${esc(c.cost)}<br><br><strong>Where your prompts go.</strong> ${esc(c.dataPath)}` +
-        `<span class="ob-fine">${esc(c.terms)} <a id="ob-publik-terms">publik API terms</a></span>`,
+    // Already signed in (the guide reopened from the help icon): nothing to press.
+    const live = () => !!(publikState.connected && !publikState.revoked && settings && settings.provider === 'publik');
+    const step = {
+      icon: () => (obDialog ? '🪙' : '👋'),
+      title: () => (obDialog ? c.title : 'Welcome to cue'),
+      body: () => (obDialog
+        ? `${esc(c.intro)}<br><br><strong>Cost.</strong> ${esc(c.cost)}<br><br><strong>Where your prompts go.</strong> ${esc(c.dataPath)}` +
+          `<span class="ob-fine">${esc(c.terms)} <a id="ob-publik-terms">publik API terms</a></span>`
+        : `<div class="ob-lede">${esc(live() ? 'cue runs on your publik balance. This computer is signed in.' : window.cuePublikCard.COPY.lede)}</div>` +
+          `<div class="ob-sub">${esc(WELCOME_SUB)}</div>`),
+      after: () => (obDialog || live() ? ''
+        : `<p><strong>Cost.</strong> ${esc(c.cost)}</p><p><strong>Where your prompts go.</strong> ${esc(c.dataPath)}</p>` +
+          `<p>${esc(c.terms)} <a id="ob-publik-terms">publik API terms</a></p>`),
+      hideButtons: () => !obDialog && live(),
+      error: () => (obPublikError ? `<strong>Setup did not finish.</strong> ${esc(obPublikError)}` : ''),
       buttons: [
-        { label: c.accept, action: async () => {
+        { label: c.accept, primary: true, action: async () => {
           const btns = $('#ob-buttons').querySelectorAll('button'); btns.forEach((b) => { b.disabled = true; });
-          publikState = await cue.publikAcceptDisclosure(); settings.provider = 'publik'; renderPublikBlock();
+          publikState = await cue.publikAcceptDisclosure(); await adoptPublikSelection();
+          if (!publikState.connected || publikState.revoked) {
+            obPublikError = publikState.problem || 'Setup did not finish.';
+            step.buttons[0].label = 'Try again';
+            renderOnboard();
+            return;
+          }
+          obPublikError = '';
+          step.buttons[0].label = c.accept;
+          // "Sign in with publik": straight to the claim link on publikhq.com,
+          // which links this computer to the account. The card is marked seen
+          // there, as its own primary button does.
+          if (await openClaimLink()) { if (obDialog) hideOnboardDialog(); else { obIndex++; renderOnboard(); } return; }
           // CONTRACT §12.1: the card comes right after POST /installs succeeds,
           // with the real balance on it. Nothing is spent before it is seen.
           if (publikState.card) { showPublikCard(); return; }
           if (obDialog) { hideOnboardDialog(); } else { obIndex++; renderOnboard(); }
         } },
-        { label: c.decline, action: () => { if (obDialog) hideOnboardDialog(); else finishOnboard(); openSettings(); selectByoProvider(); } }
+        { label: c.decline, link: true, action: () => { if (obDialog) hideOnboardDialog(); else finishOnboard(); openSettings(); selectByoProvider(); } }
       ]
     };
+    return step;
   }
   // The first-run card (CONTRACT §12.1), in this order: (a) the balance line
   // from the mint response, (b) the one-sentence justification, (c) the
@@ -2023,7 +2359,7 @@
     };
     const buttons = [];
     if (card.primary) {
-      buttons.push({ label: card.primary.label, primary: true, action: async () => { cue.publikOpen(card.primary.url); await done(); } });
+      buttons.push({ label: card.primary.label, primary: true, action: async () => { openPublikLink(card.primary.url); await done(); } });
     }
     buttons.push({ label: card.secondary.label, action: done });
     return {
@@ -2070,13 +2406,21 @@
   let obIndex = 0;
   function renderOnboard() {
     const step = OB_STEPS[obIndex];
-    $('#ob-icon').textContent = step.icon;
-    $('#ob-title').textContent = step.title;
-    $('#ob-body').innerHTML = typeof step.body === 'function' ? step.body() : step.body;
+    const val = (x) => (typeof x === 'function' ? x() : x);
+    $('#ob-icon').textContent = val(step.icon);
+    $('#ob-title').textContent = val(step.title);
+    $('#ob-body').innerHTML = val(step.body);
+    const stepError = typeof step.error === 'function' ? step.error() : '';
+    $('#ob-error').innerHTML = stepError;
+    $('#ob-error').classList.toggle('hidden', !stepError);
+    const after = val(step.after) || '';
+    $('#ob-after').innerHTML = after;
+    $('#ob-after').classList.toggle('hidden', !after);
     const termsLink = $('#ob-publik-terms');
     if (termsLink) termsLink.addEventListener('click', () => cue.publikOpen(publikState.links.terms));
     const btns = $('#ob-buttons'); btns.innerHTML = '';
-    (step.buttons || []).forEach((b) => { const el = document.createElement('button'); el.textContent = b.label; if (b.primary) el.classList.add('ob-cta'); el.addEventListener('click', b.action); btns.appendChild(el); });
+    const noButtons = typeof step.hideButtons === 'function' && step.hideButtons();
+    (noButtons ? [] : step.buttons || []).forEach((b) => { const el = document.createElement('button'); el.textContent = b.label; if (b.primary) el.classList.add('ob-cta'); if (b.link) el.classList.add('ob-link'); el.addEventListener('click', b.action); btns.appendChild(el); });
     // The publik card has its own two buttons and no Next/Skip: leaving it any
     // other way would spend the starter without the card being acknowledged.
     $('#onboard').classList.toggle('card', !!step.publikCard);
@@ -2084,6 +2428,8 @@
     OB_STEPS.forEach((_, i) => { const d = document.createElement('span'); if (i === obIndex) d.className = 'on'; dots.appendChild(d); });
     $('#ob-back').style.visibility = obIndex === 0 ? 'hidden' : 'visible';
     $('#ob-next').textContent = obIndex === OB_STEPS.length - 1 ? 'Done' : 'Next';
+    // On the publik step the one blue button is "Sign in with publik"; Next stays quiet.
+    $('#ob-next').classList.toggle('quiet', !!step.publik && !noButtons);
     $('#ob-skip').style.visibility = obIndex === OB_STEPS.length - 1 ? 'hidden' : 'visible';
   }
   function showOnboard() { obDialog = false; $('#onboard').classList.remove('dialog'); obIndex = 0; renderOnboard(); obScrim.classList.remove('hidden'); setIgnore(false); }
@@ -2105,7 +2451,19 @@
     // A build with no app token never shows the option, and keeps the BYO
     // onboarding card. With one, the "Connect an AI provider" card becomes the
     // publik disclosure; the BYO branch stays one tap away on that card.
-    if (publikState.available) OB_STEPS.splice(2, 1, { ...publikStep(), publik: true });
+    // Settings opens on the publik tab; a build without publik names that tab
+    // for keys, since keys are all it can offer.
+    if (!publikState.available) {
+      $('#s-tab-main').textContent = '🔑 API Keys';
+      $('#byo-title').textContent = 'API keys';
+    }
+    // publik first: with publik in the build, step 1 is the sign-in (it
+    // replaces the plain welcome), the permissions step comes after it, and
+    // the "Connect an AI model" step goes.
+    if (publikState.available) {
+      OB_STEPS.splice(OB_STEPS.findIndex((st) => st.connectModel), 1);
+      OB_STEPS.splice(OB_STEPS.findIndex((st) => st.welcome), 1, { ...publikStep(), publik: true });
+    }
 
     // R4: shortcut hints
     const sayHintEl = document.getElementById('say-shortcut-hint');
@@ -2129,13 +2487,15 @@
     // with a more helpful note instead of an invalid settings link.
     if (isWindows && platformInfo.winBuild > 0 && platformInfo.winBuild < 22000) {
       // Windows 10: update the onboarding screen recording button to be more helpful
-      const ob = OB_STEPS[1];
+      const ob = OB_STEPS.find((st) => st.permissions);
       ob.buttons = ob.buttons.filter((b) => !b.label.toLowerCase().includes('screen'));
-      ob.body = 'cue needs microphone permission to hear you. Click the button below to open Windows microphone settings and allow cue.<br><br><strong>Screen capture works automatically on Windows 10</strong> — no additional permission needed.<ul><li><strong>Microphone</strong> — to hear you</li><li><strong>Screen recording</strong> — works automatically on Windows 10</li></ul>';
+      ob.body = 'cue needs microphone permission to hear you. Click the button below to open Windows microphone settings and allow cue.<br><br><strong>Screen capture works automatically on Windows 10</strong> — no additional permission needed.<ul><li><strong>Microphone</strong> — to hear you</li><li><strong>Screen recording</strong> — works automatically on Windows 10</li></ul><span class="ob-fine">You can also do this later in Windows Settings.</span>';
     }
 
     smartBtn.classList.toggle('on', !!settings.smart);
-    showExample();
+    // Nothing can answer yet → the "Sign in with publik" prompt instead of the
+    // example conversation.
+    if (!renderSetupCta()) showExample();
     syncPlaceholder();
     updateSendButtonState(); // Initialize send button state
 

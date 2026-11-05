@@ -4,6 +4,7 @@
 const { pcmToWav } = require('./wav');
 const { abortable } = require('./abort');
 const { formatProviderErrorMessage, isQuotaError, isRateLimitError, isNotFoundError, resolveGeminiModel, CURRENT_GEMINI_DEFAULT, GEMINI_TRANSCRIBE_MODEL } = require('./llm');
+const { PUBLIK_PROVIDER, DEFAULT_BASE_URL: PUBLIK_DEFAULT_BASE_URL } = require('./publik');
 
 const BASE_VOCAB = 'CI/CD, Docker, Kubernetes, Terraform, Jenkins, AWS, Azure, GCP, ' +
   'CodeCommit, CodePipeline, CodeBuild, CodeDeploy, DevOps, SRE, microservices, deployment, ' +
@@ -109,22 +110,50 @@ async function transcribeGemini(apiKey, wav, signal) {
   return transcribeGeminiWith(new GoogleGenAI({ apiKey }), wav, Date.now(), signal);
 }
 
+// whisper-1 answers in verbose_json with the clip's real duration, so the
+// gateway meters the exact length. (A gpt-*-transcribe model reports usage
+// by tokens; without a duration the gateway falls back to a size estimate
+// that is about ten times a 16 kHz WAV clip.)
+const PUBLIK_STT_MODEL = 'whisper-1';
+
+/** { apiKey, baseURL, model } when publik can transcribe for this person, else null. */
+function publikTranscription(settings) {
+  const s = settings || {};
+  const keys = s.apiKeys || {};
+  const p = s.publik || {};
+  if (s.provider !== PUBLIK_PROVIDER || !keys.publik || p.revoked) return null;
+  const base = String(p.baseUrl || PUBLIK_DEFAULT_BASE_URL).replace(/\/+$/, '');
+  return { apiKey: keys.publik, baseURL: base, model: PUBLIK_STT_MODEL };
+}
+
+// With publik as the provider, "Auto" transcription means publik API. An own
+// audio key (OpenAI, Groq, Gemini, Deepgram) is used only when the person
+// picked that provider on the Audio tab. Before 0.2.9 Auto tried an old own
+// OpenAI key first: a 0.2.4 user who switched to publik saw "Incorrect API
+// key" and got a split transcript (smoke test 2026-11-02, v0.2.8).
+function publikOwnsAutoAudio(settings) {
+  const s = settings || {};
+  return s.provider === PUBLIK_PROVIDER && (s.sttProvider || 'auto') === 'auto';
+}
+
 function createSTT(settings) {
   const keys = settings.apiKeys || {};
   const selectedProvider = settings.sttProvider || 'auto';
   const vocabPrompt = buildVocabPrompt(settings);
   const chain = [];
+  // 'auto' for the own-key providers below; off while publik owns Auto.
+  const ownAuto = selectedProvider === 'auto' && !publikOwnsAutoAudio(settings);
   // Each entry carries the model id it actually sends, so a failure can name
   // that id back to the user instead of a hardcoded one they never picked.
-  if ((selectedProvider === 'auto' || selectedProvider === 'openai') && keys.openai) {
+  if ((ownAuto || selectedProvider === 'openai') && keys.openai) {
     const model = settings.sttModel || 'whisper-1';
     chain.push({ p: 'openai', m: model, fn: (wav, signal) => transcribeOpenAI(keys.openai, wav, model, undefined, vocabPrompt, signal) });
   }
-  if ((selectedProvider === 'auto' || selectedProvider === 'groq') && keys.groq) {
+  if ((ownAuto || selectedProvider === 'groq') && keys.groq) {
     const model = 'whisper-large-v3-turbo';
     chain.push({ p: 'groq', m: model, fn: (wav, signal) => transcribeOpenAI(keys.groq, wav, model, 'https://api.groq.com/openai/v1', vocabPrompt, signal) });
   }
-  if ((selectedProvider === 'auto' || selectedProvider === 'gemini') && keys.gemini) {
+  if ((ownAuto || selectedProvider === 'gemini') && keys.gemini) {
     // transcribeGemini always tries the dedicated GEMINI_TRANSCRIBE_MODEL first
     // (falling back to CURRENT_GEMINI_DEFAULT only on a 404/429 cooldown); `m`
     // here is just what error messages/`stt.models` report, resolved the same
@@ -141,6 +170,15 @@ function createSTT(settings) {
     chain.push({ p: 'custom', fn: (wav, signal) => transcribeOpenAI(keys.custom, wav, settings.sttModel, settings.baseUrl, vocabPrompt, signal) });
   }
   if (keys.openai && chain.length > 1) chain.unshift(chain.splice(chain.findIndex((c) => c.p === 'openai'), 1)[0]);
+  // publik API: the transcription path for a person who runs cue on publik
+  // (smoke test 2026-11-02: such a Mac user got "No transcription key set"
+  // and no transcript). In 'auto' it is the only entry (publikOwnsAutoAudio);
+  // only while publik is the selected provider and its key is live, so a
+  // person who moved to another provider is never charged on publik for audio.
+  const publikStt = publikTranscription(settings);
+  if (selectedProvider === 'auto' && publikStt) {
+    chain.push({ p: 'publik', m: publikStt.model, fn: (wav) => transcribeOpenAI(publikStt.apiKey, wav, publikStt.model, publikStt.baseURL, vocabPrompt) });
+  }
 
   let disabledUntil = 0;
   let lastProvider = null;
@@ -175,8 +213,12 @@ function createSTT(settings) {
           // the old status===429 catch-all inside isQuotaError; now that a
           // rate limit is classified separately, it has to be named here too).
           const backOff = isQuotaError(e) || isRateLimitError(e);
-          const message = formatProviderErrorMessage(e, c.p, c.m);
+          // publik failures come back as an Error with one action (Reconnect,
+          // or a publikhq.com link); every other provider as a string.
+          const formatted = formatProviderErrorMessage(e, c.p, c.m);
+          const message = formatted instanceof Error ? formatted.message : formatted;
           lastErr = { status: e && e.status, code: e && e.code, message, provider: c.p, model: c.m };
+          if (formatted instanceof Error && formatted.action) lastErr.action = formatted.action;
           if (backOff) {
             lastProvider = c.p;
             disabledUntil = now + 30000;
@@ -189,4 +231,4 @@ function createSTT(settings) {
   };
 }
 
-module.exports = { createSTT, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };
+module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };

@@ -137,6 +137,19 @@ function isRateLimitError(error) {
     /\b429\b|too many requests|rate limit/i.test(text);
 }
 
+// An own provider refused the key itself: OpenAI/Groq/DeepSeek/Anthropic
+// answer 401 ("Incorrect API key provided", invalid_api_key,
+// authentication_error); Gemini answers 400 "API key not valid". A 403
+// alone is not enough (it also means "no access to this model").
+function isAuthError(error) {
+  const status = error && (error.status || error.statusCode || error.response?.status);
+  const code = error && (error.code || error.error?.code || error.error?.type);
+  const rawMessage = (error && (error.message || String(error))) || '';
+  const text = `${rawMessage} ${code || ''}`.toLowerCase();
+  if (status === 401) return true;
+  return /incorrect api key|invalid[ _-]?api[ _-]?key|invalid x-api-key|api key not valid|api_key_invalid|authentication_error/.test(text);
+}
+
 function isNotFoundError(error) {
   const status = error && (error.status || error.statusCode || error.response?.status);
   const code = error && (error.code || error.error?.code);
@@ -192,12 +205,23 @@ function describePublikError(error, model) {
 }
 
 function formatProviderErrorMessage(error, provider, model) {
+  // An empty or cut answer already carries its plain sentence (settleAnswer).
+  if (error && error.emptyAnswer) return error;
   const label = normalizeProviderName(provider);
   const rawMessage = (error && (error.message || String(error))) || '';
 
   if (provider === PUBLIK_PROVIDER) {
     const described = describePublikError(error, model);
     if (described) return described;
+  }
+
+  // A bad own key: one plain sentence, never the provider's raw 401 (which
+  // also echoes part of the key). main.js adds "Switch to publik" and
+  // "Fix my key" (src/publik.js ownKeyFailedMessage).
+  if (provider !== PUBLIK_PROVIDER && isAuthError(error)) {
+    const failed = new Error(`Your ${label} key did not work.`);
+    failed.ownKeyFailed = { provider, providerName: label };
+    return failed;
   }
 
   if (isQuotaError(error)) {
@@ -245,7 +269,63 @@ const OPENAI_THINKING_HEADROOM = { fast: 2048, smart: 4096 };
 // requests skip the failed first attempt.
 const usesMaxCompletionTokens = new Set();
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, thinking, headroom = OPENAI_THINKING_HEADROOM[thinking ? 'smart' : 'fast'], onToken, onResponse, signal }) {
+// What a stream that ends with no usable answer says, instead of a blank
+// bubble. Reasoning models think inside the output cap: when the thinking
+// uses it all, the stream ends with finish_reason "length" and no text
+// (Cue audit 2026-11-04: 118 of 2,675 fast-tier answers came back empty).
+const LENGTH_EMPTY_MESSAGE = 'No answer this time: the model used its whole length limit on thinking and wrote nothing. Ask again, or ask a shorter question.';
+const EMPTY_ANSWER_MESSAGE = 'The model sent back an empty answer. Ask again.';
+const LENGTH_CUT_NOTE = '\n\n(Cut off: the answer reached its length limit.)';
+
+function emptyAnswerError(finishReason) {
+  let message = EMPTY_ANSWER_MESSAGE;
+  if (finishReason === 'length') message = LENGTH_EMPTY_MESSAGE;
+  else if (finishReason === 'content_filter') message = "The model's provider blocked this answer with its safety filter.";
+  const error = new Error(message);
+  error.emptyAnswer = true;
+  error.finishReason = finishReason || null;
+  return error;
+}
+
+// The end of an OpenAI-style stream: never a blank answer, and an answer cut
+// at the cap says so. lengthCut 'ellipsis' (slide captions) trims the cut
+// text and ends it with "…" instead of the cut-off note.
+function settleAnswer(full, finishReason, onToken, lengthCut) {
+  if (!String(full || '').trim()) throw emptyAnswerError(finishReason);
+  if (finishReason !== 'length') return full;
+  if (lengthCut === 'ellipsis') return trimCut(full) + '…';
+  onToken(LENGTH_CUT_NOTE);
+  return full + LENGTH_CUT_NOTE;
+}
+
+// A cut caption ends without a dangling space, comma, colon or dash.
+function trimCut(text) {
+  return String(text).replace(/[\s,;:\-\u2013\u2014]+$/u, '');
+}
+
+// One streamed chunk: its text (if any) and its finish reason (if any).
+// Every chunk counts as activity, reasoning-only ones included, so a model
+// that thinks for a while is not taken for a stalled stream. onActivity gets
+// the chunk's kind: 'text', 'thinking' (reasoning only) or 'other'. The
+// reasoning text itself never leaves this function.
+function readChunk(part, onActivity) {
+  const choice = part && part.choices && part.choices[0];
+  const delta = (choice && choice.delta) || {};
+  const text = delta.content || '';
+  const thinking = !text && !!(delta.reasoning || delta.reasoning_content ||
+    (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length));
+  if (typeof onActivity === 'function') {
+    try { onActivity(text ? 'text' : thinking ? 'thinking' : 'other'); } catch { /* a watchdog hook must never break the answer */ }
+  }
+  return { text, finish: (choice && choice.finish_reason) || '' };
+}
+
+// SDK request options that carry cue's cancel signal (none: SDK defaults).
+function requestOptions(signal) {
+  return signal ? { signal } : undefined;
+}
+
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse, lengthCut, signal }) {
   const OpenAI = require('openai');
   const client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = [{ role: 'system', content: system }];
@@ -263,7 +343,7 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
     }
   });
   const open = async (limitParam) => {
-    const pending = client.chat.completions.create({ model, messages, stream: true, [limitParam]: maxTokens + headroom }, { signal });
+    const pending = client.chat.completions.create({ model, messages, stream: true, [limitParam]: maxTokens }, requestOptions(signal));
     if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
       // The gateway stamps x-publik-* headers at admission; hand the raw
       // Response to the caller so the balance line can move before settlement.
@@ -284,20 +364,13 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
     stream = await open('max_completion_tokens');
   }
   let full = '';
-  let finishReason = null;
+  let finish = '';
   for await (const part of stream) {
-    const choice = part.choices && part.choices[0];
-    const d = choice && choice.delta && choice.delta.content;
-    if (d) { full += d; onToken(d); }
-    if (choice && choice.finish_reason) finishReason = choice.finish_reason;
+    const chunk = readChunk(part, onActivity);
+    if (chunk.text) { full += chunk.text; onToken(chunk.text); }
+    if (chunk.finish) finish = chunk.finish;
   }
-  // A filtered or budget-exhausted reply streams nothing; say so instead of a blank panel.
-  if (!full) {
-    throw new Error(finishReason === 'content_filter'
-      ? "The model's provider blocked this answer with its safety filter."
-      : `The model returned an empty answer${finishReason ? ` (finish reason: ${finishReason})` : ''}.`);
-  }
-  return full;
+  return settleAnswer(full, finish, onToken, lengthCut);
 }
 
 // Azure AI Foundry Models API (cognitiveservices.azure.com hosts) lives under
@@ -311,7 +384,7 @@ function normalizeAzureBaseURL(raw) {
   return u;
 }
 
-async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, endpoint, signal }) {
+async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, endpoint, lengthCut, signal }) {
   const url = normalizeAzureBaseURL(endpoint);
   if (!url) throw new Error('Missing Azure endpoint. Add your Azure AI Foundry or Azure OpenAI endpoint in Settings.');
   const messages = [{ role: 'system', content: system }];
@@ -341,13 +414,15 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
     };
     client = new OpenAI({ baseURL: url, apiKey, fetch: azureFetch });
   }
-  const stream = await client.chat.completions.create({ model, messages, stream: true, max_completion_tokens: maxTokens }, { signal });
+  const stream = await client.chat.completions.create({ model, messages, stream: true, max_completion_tokens: maxTokens }, requestOptions(signal));
   let full = '';
+  let finish = '';
   for await (const part of stream) {
-    const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
-    if (d) { full += d; onToken(d); }
+    const chunk = readChunk(part, onActivity);
+    if (chunk.text) { full += chunk.text; onToken(chunk.text); }
+    if (chunk.finish) finish = chunk.finish;
   }
-  return full;
+  return settleAnswer(full, finish, onToken, lengthCut);
 }
 
 async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, effort, onToken, onActivity, signal }) {
@@ -366,7 +441,7 @@ async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDat
   });
   // Effort only takes hold with adaptive thinking, and thinking spends from max_tokens, so lift the cap.
   const strength = effort ? { thinking: { type: 'adaptive' }, output_config: { effort }, max_tokens: maxTokens + 16000 } : {};
-  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true, ...strength }, { signal });
+  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true, ...strength }, requestOptions(signal));
   let full = '';
   let stopReason = null;
   for await (const ev of stream) {
@@ -460,7 +535,8 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
       method: 'POST',
       signal,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, stream: true })
+      body: JSON.stringify({ model, messages, stream: true }),
+      ...(signal ? { signal } : {})
     });
   } catch (err) {
     throw new Error(`Ollama fetch failed: ${err.message}. Is Ollama running at ${baseUrl}?`);
@@ -502,12 +578,41 @@ async function streamOllama({ apiKey, model, system, turns, imageDataUrl, maxTok
   return full;
 }
 
+// publik's tiers are reasoning models, and the thinking counts inside the
+// output cap. A 700-token cap was often all thinking: 118 of 2,675 fast-tier
+// answers came back empty (output 700, reasoning 700), and on 0.2.10 one
+// screenshot answer in five was cut at 700 (prod audit 2026-11-04). As with
+// Gemini above, the cap gets headroom for thoughts, so maxTokens stays the
+// visible budget. Prod reasoning on these models: publik-fast p99 628 and max
+// 960 tokens; publik-balanced p95 1,013 and p99 2,691. So publik-fast gets
+// 2,048 tokens of room, and every other publik call (publik-balanced: Smart,
+// and screenshot questions on the fast tier) gets 4,096. The user pays for
+// the tokens used, not for the cap.
+const PUBLIK_THINKING_HEADROOM = { fast: 2048, smart: 4096 };
+function publikOutputCap(visibleTokens, model) {
+  const room = model === publik.DEFAULT_MODELS.fast ? PUBLIK_THINKING_HEADROOM.fast : PUBLIK_THINKING_HEADROOM.smart;
+  return visibleTokens + room;
+}
+
+// The publik model a screenshot question uses. On the smart tier that is the
+// model already chosen. On the fast tier it is the smart alias (the user's
+// Smart field, else the provisioning response's, else publik-balanced),
+// unless the user typed their own Fast model: an explicit choice stands.
+function publikVisionModel(settings, fastOrSmartModel) {
+  if (settings.smart) return fastOrSmartModel;
+  const tierModels = (settings.models || {})[PUBLIK_PROVIDER] || {};
+  const fast = String(tierModels.fast || '').trim();
+  if (fast && !publik.TIER_NAMES.includes(fast)) return fastOrSmartModel;
+  return String(tierModels.smart || '').trim() || publik.DEFAULT_MODELS.smart;
+}
+
 function createLLM(settings) {
   const provider = settings.provider;
   const keys = settings.apiKeys || {};
   let apiKey = keys[provider];
   let baseURL = '';
   let configurationError = '';
+  let missingKey = false;
   const tier = settings.smart ? 'smart' : 'fast';
   const models = settings.models || {};
   let model = (models[provider] || {})[tier];
@@ -535,7 +640,7 @@ function createLLM(settings) {
     } catch (error) {
       configurationError = error.message;
     }
-    if (!apiKey) configurationError = `${publik.PROVIDER_LABEL} is not set up on this computer yet.`;
+    if (!apiKey) configurationError = 'Sign in with publik to start. cue runs on your publik balance, so you need no API key.';
   } else if (provider === CUSTOM_PROVIDER) {
     try {
       const clientOptions = createCompatibleClientOptions(apiKey, settings.baseUrl);
@@ -549,7 +654,8 @@ function createLLM(settings) {
     }
   } else if (provider !== 'ollama' && !apiKey) {
     // Ollama is a local server: the field holds a URL, and no key is required.
-    configurationError = `Add your ${provider} API key in Settings.`;
+    configurationError = `Add your ${normalizeProviderName(provider)} key in Settings.`;
+    missingKey = true;
   }
 
   // Azure needs a second credential: the resource endpoint.
@@ -559,24 +665,37 @@ function createLLM(settings) {
 
   const ready = !configurationError && !!model;
   const maxTokens = settings.smart ? 1400 : 700;
+  // publik's fast tier encodes a screenshot too coarsely to read a real
+  // screen (smoke test 2026-11-02: it named "Jira" and "Itch.io" for a
+  // LinkedIn page, from ~20-40 image tokens, while publik-balanced read it
+  // right). A question that carries a screenshot goes to the smart alias;
+  // text-only questions stay on the fast tier.
+  const visionModel = provider === PUBLIK_PROVIDER ? publikVisionModel(settings, model) : model;
 
   return {
-    provider, model, apiKey, baseURL,
+    provider, model, visionModel, apiKey, baseURL,
     ready,
     configurationError,
+    missingKey,
+    providerName: normalizeProviderName(provider),
     async stream(params) {
       const signal = params.signal;
       signal?.throwIfAborted();
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
-      const args = { apiKey, baseURL, endpoint, model, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
+      const useModel = params && params.imageDataUrl ? visionModel : model;
+      const args = { apiKey, baseURL, endpoint, model: useModel, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
+      // An explicit maxTokens: undefined (or any non-number) falls back to the
+      // default cap; it must never reach the request as NaN.
+      if (!(Number.isFinite(args.maxTokens) && args.maxTokens > 0)) args.maxTokens = maxTokens;
+      if (provider === PUBLIK_PROVIDER) args.maxTokens = publikOutputCap(args.maxTokens, useModel);
+      if (provider === CUSTOM_PROVIDER) args.maxTokens = args.maxTokens + OPENAI_THINKING_HEADROOM[settings.smart ? 'smart' : 'fast'];
       for (const hook of ['onToken', 'onActivity', 'onResponse']) {
         if (typeof params[hook] === 'function') args[hook] = (...values) => { signal?.throwIfAborted(); return params[hook](...values); };
       }
       const dispatch = async () => {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
-        // publik's gateway lives outside this repo and may price against the cap; leave it unchanged.
-        if (provider === PUBLIK_PROVIDER) return await streamOpenAI({ ...args, headroom: 0 });
+        if (provider === PUBLIK_PROVIDER) return await streamOpenAI(args);
         if (provider === 'ollama') return await streamOllama(args);
         if (provider === 'groq') return await streamOpenAI({ ...args, baseURL: 'https://api.groq.com/openai/v1' });
         if (provider === 'cerebras') return await streamOpenAI({ ...args, baseURL: CEREBRAS_BASE_URL });
@@ -597,7 +716,7 @@ function createLLM(settings) {
         signal?.throwIfAborted();
         // publik branches return an Error carrying `.action`; the string
         // branches keep working unchanged.
-        const wrapped = formatProviderErrorMessage(error, provider, model);
+        const wrapped = formatProviderErrorMessage(error, provider, useModel);
         throw wrapped instanceof Error ? wrapped : new Error(wrapped);
       }
     }
@@ -607,9 +726,16 @@ function createLLM(settings) {
 module.exports = {
   createLLM,
   formatProviderErrorMessage,
+  isAuthError,
+  normalizeProviderName,
   isQuotaError,
   isNotFoundError,
   geminiGenerationConfig,
+  publikOutputCap,
+  PUBLIK_THINKING_HEADROOM,
+  LENGTH_EMPTY_MESSAGE,
+  EMPTY_ANSWER_MESSAGE,
+  LENGTH_CUT_NOTE,
   resolveGeminiModel,
   CURRENT_GEMINI_DEFAULT,
   GEMINI_TRANSCRIBE_MODEL,

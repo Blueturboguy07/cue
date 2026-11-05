@@ -257,7 +257,10 @@ test('routes DeepSeek to its OpenAI-compatible endpoint', async () => {
 test('reports a configuration error when the DeepSeek key is missing', () => {
   const llm = createLLM(deepseekSettings({ apiKeys: { deepseek: '' } }));
   assert.equal(llm.ready, false);
-  assert.match(llm.configurationError, /Add your deepseek API key/);
+  // The provider's proper name, never the lowercase id.
+  assert.equal(llm.configurationError, 'Add your DeepSeek key in Settings.');
+  assert.equal(llm.missingKey, true);
+  assert.equal(llm.providerName, 'DeepSeek');
 });
 
 // ---- Gemini 404/429 error mapping ------------------------------------------
@@ -500,10 +503,13 @@ test('publik: cleared model fields fall back to the per-tier aliases', () => {
   assert.equal(createLLM(publikSettings({ smart: true, models: { publik: { fast: '', smart: '' } } })).model, 'publik-balanced');
 });
 
-test('publik: missing key → not ready, "not set up", no request', () => {
+test('publik: missing key → not ready, "Sign in with publik", no request', () => {
   const llm = createLLM(publikSettings({ apiKeys: { publik: '' } }));
   assert.equal(llm.ready, false);
-  assert.match(llm.configurationError, /publik API is not set up/);
+  // The first thing a person reads names publik and its button, never a key to add.
+  assert.match(llm.configurationError, /^Sign in with publik/);
+  assert.match(llm.configurationError, /no API key/);
+  assert.doesNotMatch(llm.configurationError, /Add your|paste/i);
   assert.equal(capturedClientOptions, null);
 });
 
@@ -642,7 +648,7 @@ test('OpenAI-compatible cap leaves room for hidden thinking; publik keeps its ow
   await stream(createLLM(createCustomSettings({ smart: true })));
   assert.equal(capturedCompletionRequest.max_tokens, 1400 + 4096);
   await stream(createLLM(publikSettings()));
-  assert.equal(capturedCompletionRequest.max_tokens, 700);
+  assert.equal(capturedCompletionRequest.max_tokens, 700 + 2048);
 });
 
 test('a model that rejects max_tokens is retried once with max_completion_tokens, and remembered', async () => {
@@ -666,10 +672,10 @@ test('a safety-filtered empty reply surfaces as an error instead of a blank answ
 });
 
 test('an empty reply for any other reason names the finish reason', async () => {
-  fakeStreamParts = [{ choices: [{ delta: {}, finish_reason: 'length' }] }];
+  fakeStreamParts = [{ choices: [{ delta: {}, finish_reason: 'stop' }] }];
   await assert.rejects(
     createLLM(createCustomSettings()).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} }),
-    /empty answer \(finish reason: length\)/
+    /empty answer/
   );
 });
 
