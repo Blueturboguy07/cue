@@ -412,9 +412,11 @@ async function flushChannel(channel) {
   const stt = createSTT(settings);
   let pcm = voiced;
   if (stt.providers[0] === publik.PUBLIK_PROVIDER) {
-    // publik API: whole utterances, so two busy channels stay under the
-    // key's 60 requests a minute (src/publik-stt-batcher.js).
-    pcm = publikSttBatchers[channel].push(voiced);
+    // publik API: whole utterances cut at pauses, so two busy channels stay
+    // under the key's 60 requests a minute and a long question is never cut
+    // mid-sentence (src/publik-stt-batcher.js). The batcher gets the raw
+    // window, pauses included: it finds them in 30 ms frames.
+    pcm = publikSttBatchers[channel].push(windowPcm);
   } else {
     publikSttBatchers[channel].reset();
   }

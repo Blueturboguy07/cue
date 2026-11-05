@@ -112,6 +112,7 @@
     el.textContent = 'Thinking…';
     if (caretEl && caretEl.parentNode === aiEl) aiEl.insertBefore(el, caretEl);
     else aiEl.appendChild(el);
+    scrollAnswerToEnd();
   }
 
   function clearThinking() {
@@ -132,6 +133,7 @@
     } else {
       aiEl.appendChild(span);
     }
+    scrollAnswerToEnd();
   }
 
   function finalizeAi() {
@@ -139,7 +141,39 @@
     const raw = aiEl.dataset.raw || '';
     aiEl.innerHTML = renderMarkdown(raw);
     aiEl = null; caretEl = null;
+    scrollAnswerToEnd(); // the final text (or the honest message) can be taller
   }
+
+  // ---- follow the answer ---------------------------------------------------
+  // #messages is at most 50vh tall. A long answer, or the honest message that
+  // takes the place of an empty one, grows past its bottom edge (0.2.11 smoke
+  // test: the end stayed hidden). While an answer comes in, keep its end in
+  // view. When the person scrolls up to read, stop following; when they
+  // scroll back to the end, follow again. llm:start turns following on.
+  let followAnswer = false;
+  let followFrame = 0;
+  let lastMessagesTop = 0;
+  const FOLLOW_SLACK_PX = 40;
+  function atAnswerEnd() {
+    return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= FOLLOW_SLACK_PX;
+  }
+  function scrollAnswerToEnd() {
+    if (!followAnswer || followFrame) return;
+    // One scroll per frame, after the DOM has the new text.
+    followFrame = requestAnimationFrame(() => {
+      followFrame = 0;
+      if (followAnswer) messages.scrollTop = messages.scrollHeight;
+    });
+  }
+  // A wheel up only counts when the area can scroll (an answer that still fits moves nothing).
+  messages.addEventListener('wheel', (e) => {
+    if (e.deltaY < 0 && messages.scrollHeight > messages.clientHeight) followAnswer = false;
+  }, { passive: true });
+  messages.addEventListener('scroll', () => {
+    const top = messages.scrollTop;
+    if (!followAnswer && top > lastMessagesTop && atAnswerEnd()) followAnswer = true;
+    lastMessagesTop = top;
+  }, { passive: true });
 
   let busyFailsafe = null;
   function setBusy(v) {
@@ -1212,6 +1246,7 @@
     aiEl.appendChild(caretEl);
     group.appendChild(aiEl);
     messages.appendChild(group);
+    followAnswer = true; // the tokens keep the end of this answer in view
     // Use requestAnimationFrame so the DOM is fully updated before scrolling.
     // Scroll #messages directly rather than calling sep.scrollIntoView(): that
     // scrolls *every* scrollable ancestor, and once the panel is tall enough it
