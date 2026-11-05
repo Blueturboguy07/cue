@@ -112,6 +112,7 @@
     el.textContent = 'Thinking…';
     if (caretEl && caretEl.parentNode === aiEl) aiEl.insertBefore(el, caretEl);
     else aiEl.appendChild(el);
+    scrollAnswerToEnd();
   }
 
   function clearThinking() {
@@ -132,6 +133,7 @@
     } else {
       aiEl.appendChild(span);
     }
+    scrollAnswerToEnd();
   }
 
   function finalizeAi() {
@@ -139,7 +141,44 @@
     const raw = aiEl.dataset.raw || '';
     aiEl.innerHTML = renderMarkdown(raw);
     aiEl = null; caretEl = null;
+    scrollAnswerToEnd(); // the final text (or the honest message) can be taller
   }
+
+  // ---- follow the answer ---------------------------------------------------
+  // #messages is at most 50vh tall. A long answer, or the honest message that
+  // takes the place of an empty one, grows past its bottom edge (0.2.11 smoke
+  // test: the end stayed hidden). While an answer comes in, keep its end in
+  // view, but only while the view is at the end: a scroll that leaves the
+  // last FOLLOW_SLACK_PX by any means (wheel, scrollbar drag, PageUp, a
+  // trackpad) stops following, and a scroll back to the end starts it again.
+  // cue's own scrolls are told apart by the position they set. llm:start
+  // turns following on.
+  let followAnswer = false;
+  let followFrame = 0;
+  let ownScrollTop = -1;
+  const FOLLOW_SLACK_PX = 40;
+  function atAnswerEnd() {
+    return messages.scrollHeight - messages.scrollTop - messages.clientHeight <= FOLLOW_SLACK_PX;
+  }
+  function scrollMessagesToEnd() {
+    const end = Math.max(0, messages.scrollHeight - messages.clientHeight);
+    ownScrollTop = end;
+    messages.scrollTop = end;
+    ownScrollTop = messages.scrollTop; // what the browser kept (it can round)
+  }
+  function scrollAnswerToEnd() {
+    if (!followAnswer || followFrame) return;
+    // One scroll per frame, after the DOM has the new text.
+    followFrame = requestAnimationFrame(() => {
+      followFrame = 0;
+      if (followAnswer) scrollMessagesToEnd();
+    });
+  }
+  messages.addEventListener('scroll', () => {
+    if (Math.abs(messages.scrollTop - ownScrollTop) <= 2) return; // cue's own scroll
+    ownScrollTop = -1;
+    followAnswer = atAnswerEnd();
+  }, { passive: true });
 
   let busyFailsafe = null;
   function setBusy(v) {
@@ -1212,18 +1251,16 @@
     aiEl.appendChild(caretEl);
     group.appendChild(aiEl);
     messages.appendChild(group);
-    // Use requestAnimationFrame so the DOM is fully updated before scrolling.
+    followAnswer = true; // the tokens keep the end of this answer in view
     // Scroll #messages directly rather than calling sep.scrollIntoView(): that
     // scrolls *every* scrollable ancestor, and once the panel is tall enough it
     // scrolls the document too, aligning the separator to the top of the window
     // and pushing #toolbar out of view. html/body are overflow:hidden, so there
     // is no scrollbar or wheel gesture to undo it — the Stop/Hide/Quit controls
-    // just never come back.
-    requestAnimationFrame(() => {
-      if (sep && sep.isConnected) {
-        messages.scrollTo({ top: sep.offsetTop - messages.offsetTop, behavior: 'smooth' });
-      }
-    });
+    // just never come back. The new answer starts at the end of the area (its
+    // separator is at the top whenever the area has room), in one step: the
+    // steps of a smooth scroll would read as the person scrolling away.
+    scrollMessagesToEnd();
     setBusy(true);
   });
   cue.on('llm:thinking', () => {

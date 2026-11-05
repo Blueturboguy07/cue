@@ -31,10 +31,10 @@ function buildVocabPrompt(settings) {
   return prompt;
 }
 
-async function transcribeOpenAI(apiKey, wav, model, baseURL, prompt) {
+async function transcribeOpenAI(apiKey, wav, model, baseURL, prompt, clientOptions = {}) {
   const OpenAI = require('openai');
   const toFile = OpenAI.toFile || require('openai/uploads').toFile;
-  const client = new OpenAI({ apiKey, baseURL });
+  const client = new OpenAI({ apiKey, baseURL, ...clientOptions });
   const file = await toFile(wav, 'audio.wav', { type: 'audio/wav' });
   const res = await client.audio.transcriptions.create({
     file,
@@ -109,6 +109,71 @@ async function transcribeGemini(apiKey, wav) {
 // by tokens; without a duration the gateway falls back to a size estimate
 // that is about ten times a 16 kHz WAV clip.)
 const PUBLIK_STT_MODEL = 'whisper-1';
+// publik transcription requests: an answer within 30 s (a 14 s piece takes
+// about 3 s; the SDK default is 10 minutes, and a hung request blocks the
+// channel), and no SDK retries: main.js tries a failed piece once more
+// itself, after a pause that keeps the channel's 2.5 s spacing and the key's
+// 60 requests a minute.
+const PUBLIK_STT_CLIENT = { timeout: 30000, maxRetries: 0 };
+
+// Retry-After (seconds) or retry-after-ms of a failed request, in ms; 0 if none.
+function retryAfterHeaderMs(e) {
+  const h = e && e.headers;
+  if (!h) return 0;
+  const get = (k) => (typeof h.get === 'function' ? h.get(k) : h[k]);
+  const ms = Number(get('retry-after-ms'));
+  if (ms > 0) return Math.round(ms);
+  const s = Number(get('retry-after'));
+  return s > 0 ? Math.round(s * 1000) : 0;
+}
+
+// A piece that starts at a cut (the talk before it goes on): its prompt is
+// only the end of the text before it, as what was said just before, with
+// the vocabulary left out, and a final "." made a ",". With no context,
+// whisper guessed the first words of the piece ("My lead" -> "MyLED",
+// verify of eee01af). Measured on the verifier's `long` speech (whisper-1,
+// the same audio pieces, 2026-11-05):
+//   - "Who reviewed the fix? My lead reviewed it": vocabulary only "MyLED"
+//     2/2; vocabulary + context "Myled" 5/5 (context before or after the
+//     list); no prompt "Myled"; context only "My lead" 3/3.
+//   - "what interested you about this role,": context ending "team." gave
+//     "What interest did you about this role?" 4/4 (a new question); ending
+//     "team," gave "what interested you" 2/2; with no final mark, wrong.
+// whisper ends every piece as a sentence, so a "." before a cut is most often
+// a comma; "?" and "!" are kept. Short (at most CONTEXT_CHARS, whole words),
+// so the prompt stays small, and it is never the vocabulary list that read
+// back as "CodePipeline" over silence.
+const CONTEXT_CHARS = 160;
+
+function contextTail(context) {
+  const text = String(context || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= CONTEXT_CHARS) return text;
+  const cut = text.slice(-CONTEXT_CHARS);
+  const space = cut.indexOf(' ');
+  return space < 0 ? cut : cut.slice(space + 1);
+}
+
+function promptWithContext(vocabPrompt, context) {
+  const tail = contextTail(context);
+  if (!tail) return vocabPrompt;
+  if (/[?!]["')\]]*$/.test(tail)) return tail;
+  return tail.replace(/[\s.,;:\u2026]+$/, '') + ',';
+}
+
+// No repeat removal: in two live runs (verify of ba8a0fe) whisper read its
+// prompt back in 0 pieces, and removing "3 or more words that repeat the end
+// of the text before" deleted real speech ("go back, go back, until" ->
+// "Until", "talk to the team about the tests" -> "About the tests"). A
+// repeat across a cut is kept as said.
+
+// The text of a piece that starts at a cut is its own turn: when the text
+// before it ended a sentence, it starts with a capital ("describe a
+// situation" after "...about deadlines." and a "," prompt).
+function continuedText(text, context) {
+  if (!text || !/[.?!]["')\]]*$/.test(String(context || '').trim())) return text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 /** { apiKey, baseURL, model } when publik can transcribe for this person, else null. */
 function publikTranscription(settings) {
@@ -171,7 +236,11 @@ function createSTT(settings) {
   // person who moved to another provider is never charged on publik for audio.
   const publikStt = publikTranscription(settings);
   if (selectedProvider === 'auto' && publikStt) {
-    chain.push({ p: 'publik', m: publikStt.model, fn: (wav) => transcribeOpenAI(publikStt.apiKey, wav, publikStt.model, publikStt.baseURL, vocabPrompt) });
+    chain.push({ p: 'publik', m: publikStt.model, fn: async (wav, opts) => {
+      const context = opts && opts.context;
+      const text = await transcribeOpenAI(publikStt.apiKey, wav, publikStt.model, publikStt.baseURL, promptWithContext(vocabPrompt, context), PUBLIK_STT_CLIENT);
+      return context ? continuedText(text, context) : text;
+    } });
   }
 
   let disabledUntil = 0;
@@ -181,7 +250,9 @@ function createSTT(settings) {
     available: chain.length > 0,
     providers: chain.map((c) => c.p),
     models: chain.map((c) => c.m),
-    async transcribe(pcm) {
+    // opts.context: the text just before this piece when it starts at a cut
+    // (publik only; see promptWithContext).
+    async transcribe(pcm, opts = {}) {
       if (!chain.length || !pcm || pcm.length < 3200) return { text: '' };
       const now = Date.now();
       if (disabledUntil && now < disabledUntil) return { text: '', error: { provider: lastProvider, message: `Temporary ${lastProvider || 'provider'} quota or rate-limit; waiting 30s before retrying.` } };
@@ -189,7 +260,7 @@ function createSTT(settings) {
       let lastErr = null;
       for (const c of chain) {
         try {
-          const text = await c.fn(wav);
+          const text = await c.fn(wav, opts);
           disabledUntil = 0;
           lastProvider = c.p;
           if (looksLikeHallucination(text)) return { text: '', provider: c.p };
@@ -208,6 +279,8 @@ function createSTT(settings) {
           const formatted = formatProviderErrorMessage(e, c.p, c.m);
           const message = formatted instanceof Error ? formatted.message : formatted;
           lastErr = { status: e && e.status, code: e && e.code, message, provider: c.p, model: c.m };
+          const retryAfterMs = retryAfterHeaderMs(e);
+          if (retryAfterMs) lastErr.retryAfterMs = retryAfterMs;
           if (formatted instanceof Error && formatted.action) lastErr.action = formatted.action;
           if (backOff) {
             lastProvider = c.p;
@@ -221,4 +294,4 @@ function createSTT(settings) {
   };
 }
 
-module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };
+module.exports = { createSTT, publikTranscription, publikOwnsAutoAudio, PUBLIK_STT_MODEL, PUBLIK_STT_CLIENT, retryAfterHeaderMs, promptWithContext, continuedText, CONTEXT_CHARS, looksLikeHallucination, buildVocabPrompt, transcribeGemini, transcribeGeminiWith, extractGeminiTranscript };

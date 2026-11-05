@@ -206,7 +206,9 @@ button:focus { outline: none; }
   border-radius: var(--r-panel);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
 }
-#panel { position: relative; z-index: 1; padding: 20px 22px; animation: overlayIn 260ms cubic-bezier(0.22,1,0.36,1); }
+/* The top padding leaves room for #stt-status (top 14px + line 12px): the first
+   line of a scrolled answer never shows under the label (0.2.11 smoke test). */
+#panel { position: relative; z-index: 1; padding: 32px 22px 20px; animation: overlayIn 260ms cubic-bezier(0.22,1,0.36,1); }
 #panel-wrap.collapsed { display: none; } /* hides the panel with its status label, live dot, sidebar and toast */
 
 /* ============================ Messages ============================ */
@@ -885,7 +887,7 @@ button:focus { outline: none; }
 /* ============================ STT status ============================ */
 #stt-status {
   position: absolute; top: 14px; left: 14px; z-index: 4;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  font-size: 9px; line-height: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
   white-space: nowrap; pointer-events: none;
 }
 .stt-disconnected { color: rgba(255,255,255,0.25); }

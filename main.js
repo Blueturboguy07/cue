@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
-const { UtteranceBatcher } = require('./src/publik-stt-batcher');
+const { UtteranceBatcher, DEFAULT_MIN_GAP_MS } = require('./src/publik-stt-batcher');
 const { parseDocumentFile } = require('./src/resume');
 const { createLLM, normalizeProviderName } = require('./src/llm');
 const { giveUpTimer } = require('./src/give-up');
@@ -112,7 +112,14 @@ const state = { capturing: false, busy: false, transcribing: { you: false, them:
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
 const buffers = { you: [], them: [] };
 const publikSttBatchers = { you: new UtteranceBatcher(), them: new UtteranceBatcher() };
-let publikSttNoticeAt = 0; // last "Transcription paused" notice for a passing publik error
+const sttInFlight = { you: Promise.resolve(null), them: Promise.resolve(null) }; // the channel's transcription request, if any
+let sttSession = 0; // one per listening session; a piece only ever joins the session it was heard in
+let stopFlush = null; // the stop flush still running: { session, cancelled }
+const STOP_FLUSH_MS = 40000; // the stop flush starts no request after this
+const lastSttText = { you: '', them: '' }; // the channel's latest text, whisper context for a piece after a cut
+let sttSessionShown = false; // the current session has shown text (an old session's late text then waits no more)
+const NEW_SESSION_FIRST = { message: 'a new session started first' };
+let publikSttNoticeAt = 0; // last "not transcribed" notice for a lost piece (passing publik error)
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
 let meetingMemory = null; // persists the transcript per meeting + notes; see src/meeting-memory.js
@@ -412,9 +419,12 @@ async function flushChannel(channel) {
   const stt = createSTT(settings);
   let pcm = voiced;
   if (stt.providers[0] === publik.PUBLIK_PROVIDER) {
-    // publik API: whole utterances, so two busy channels stay under the
-    // key's 60 requests a minute (src/publik-stt-batcher.js).
-    pcm = publikSttBatchers[channel].push(voiced);
+    // publik API: whole utterances cut at pauses, so two busy channels stay
+    // under the key's 60 requests a minute and a question is never cut inside
+    // a word; a sentence reaches whisper within about 10 s of its end
+    // (src/publik-stt-batcher.js). The batcher gets the raw window, pauses
+    // included: it finds them in 30 ms frames.
+    pcm = publikSttBatchers[channel].push(windowPcm);
   } else {
     publikSttBatchers[channel].reset();
   }
@@ -424,28 +434,195 @@ async function flushChannel(channel) {
   // a Settings save, which clear sttDisabled.
   if (sttDisabled && stt.providers[0] === publik.PUBLIK_PROVIDER) return;
 
-  state.transcribing[channel] = true;
-  try {
-    if (!stt.available) {
-      if (!sttDisabled) { sttDisabled = true; send('status', { message: noTranscriptionMessage(settings) }); }
-      return;
+  const session = sttSession;
+  // A piece that starts at a cut goes with the text before it, so whisper
+  // reads its first words in context (src/stt.js promptWithContext).
+  const context = publikSttBatchers[channel].continuesCut(pcm) ? lastSttText[channel] : '';
+  const failed = await transcribePiece(channel, pcm, settings, stt, { context, session });
+  if (!failed || failed.stale) return;
+  // Stopped while it was in flight: the stop flush gives it its one more try.
+  if (session !== sttSession || !state.capturing) return;
+  failed.handled = true;
+  // A passing publik failure: the batcher sends the piece once more, first
+  // in line, after the delay; a second failure is final, and said.
+  if (!publikSttBatchers[channel].retry(pcm, failed.delayMs)) reportLostAudio(pcm, failed.error);
+}
+
+// publik API: busy (429), a server error, or no answer in time (no status)
+// is passing; anything else (balance used up, key revoked) is not.
+function isPassingSttError(err) {
+  return Boolean(err) && (err.status === 429 || !err.status || err.status >= 500);
+}
+
+// The wait before the one more try: the gateway's Retry-After (2.5 s to
+// 20 s), else 5 s after a 429 (the key allows 60 requests a minute, chat
+// included), else the channel's 2.5 s spacing (a 5xx or a timeout).
+function sttRetryDelayMs(err) {
+  if (err && err.retryAfterMs > 0) return Math.min(Math.max(err.retryAfterMs, DEFAULT_MIN_GAP_MS), 20000);
+  return err && err.status === 429 ? 5000 : DEFAULT_MIN_GAP_MS;
+}
+
+// "N s of the meeting were not transcribed": a piece lost after its one
+// more try. In a session at most once a minute; at Stop always.
+function lostAudioMessage(bytes, err, atStop) {
+  const secs = Math.max(1, Math.round(bytes / 32000));
+  const why = err && err.message ? ` (${err.message})` : '';
+  return atStop
+    ? `The last ${secs} s before Stop were not transcribed${why}.`
+    : `${secs} s of the meeting were not transcribed${why}. Listening goes on.`;
+}
+
+function reportLostAudio(pcm, err) {
+  recordEvent({ level: 'error', event: 'stt_lost', code: err && (err.code || (err.status ? 'http_' + err.status : null)), msg: err && err.message, frame: 'reportLostAudio', context: { bytes: pcm ? pcm.length : 0 } });
+  const now = Date.now();
+  if (now - publikSttNoticeAt <= 60000) return;
+  publikSttNoticeAt = now;
+  send('status', { message: lostAudioMessage(pcm ? pcm.length : 0, err, false) });
+}
+
+// Transcribes one piece for a channel and publishes its text. A passing
+// publik failure is not reported here: it comes back as
+// { error, delayMs, pcm, session, context } for the caller to try once more.
+// Text for a session that already ended while a newer one runs is never
+// published: it comes back as { stale } (nothing from an old session joins
+// a new one).
+function transcribePiece(channel, pcm, settings, stt, { context = '', session = sttSession } = {}) {
+  const run = (async () => {
+    state.transcribing[channel] = true;
+    try {
+      if (!stt.available) {
+        if (!sttDisabled) { sttDisabled = true; send('status', { message: noTranscriptionMessage(settings) }); }
+        return null;
+      }
+      const res = await stt.transcribe(pcm, { context });
+      if (session !== sttSession) {
+        // Stop, then Start before this text came back: the text is the old
+        // session's last words. Shown (and in the notes) while the new
+        // session has shown nothing, so the order holds; else said as lost.
+        const text = !res.error && res.text ? res.text.trim() : '';
+        if (text.length > 1 && !sttSessionShown && !/^[?!.,;:\-…]+$/.test(text)) {
+          const turn = { channel, text, ts: Date.now() };
+          pushTranscript(turn);
+          send('transcript', turn);
+          return null;
+        }
+        return { stale: true, pcm, session, error: res.error || (text ? NEW_SESSION_FIRST : null) };
+      }
+      if (res.error) {
+        if (res.error.provider === publik.PUBLIK_PROVIDER && isPassingSttError(res.error)) {
+          return { error: res.error, delayMs: sttRetryDelayMs(res.error), pcm, session, context };
+        }
+        handleSttError(res.error, settings);
+        return null;
+      }
+      if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
+        const turn = { channel, text: res.text.trim(), ts: Date.now() };
+        pushTranscript(turn);
+        send('transcript', turn);
+        lastSttText[channel] = turn.text;
+        sttSessionShown = true;
+      }
+      return null;
+    } catch (e) {
+      console.log('[stt] error', e && e.message);
+      recordEvent({ level: 'error', event: 'stt_failed', msg: e && e.message ? e.message : String(e), frame: 'transcribePiece', context: { channel } });
+      return null;
+    } finally {
+      state.transcribing[channel] = false;
     }
-    const res = await stt.transcribe(pcm);
-    if (res.error) {
-      handleSttError(res.error, settings);
-      return;
-    }
-    if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
-      const turn = { channel, text: res.text.trim(), ts: Date.now() };
-      pushTranscript(turn);
-      send('transcript', turn);
-    }
-  } catch (e) {
-    console.log('[stt] error', e && e.message);
-    recordEvent({ level: 'error', event: 'stt_failed', msg: e && e.message ? e.message : String(e), frame: 'flushChannel', context: { channel } });
-  } finally {
-    state.transcribing[channel] = false;
+  })();
+  sttInFlight[channel] = run.catch(() => null);
+  return run;
+}
+
+// A new listening session: nothing held, waiting for a retry or still in
+// the stop flush of the last session joins it (a piece that failed after
+// Stop came back as the first request of the next session, verify of eee01af).
+function startSttSession() {
+  sttSession++;
+  if (stopFlush) stopFlush.cancelled = true;
+  buffers.you = []; buffers.them = [];
+  publikSttBatchers.you.reset(); publikSttBatchers.them.reset();
+  lastSttText.you = ''; lastSttText.them = '';
+  sttSessionShown = false;
+}
+
+// The session stopped: what the publik batchers still hold (the sentence
+// being spoken at that moment, and audio that arrived since the last flush)
+// is taken now, before the buffers are cleared.
+function takeHeldAudio() {
+  const settings = store.getSettings();
+  const stt = createSTT(settings);
+  if (stt.providers[0] !== publik.PUBLIK_PROVIDER || sttDisabled) return null;
+  const pieces = {};
+  for (const channel of ['you', 'them']) {
+    const batcher = publikSttBatchers[channel];
+    const rest = buffers[channel].length ? Buffer.concat(buffers[channel]) : null;
+    buffers[channel] = [];
+    // A retry already waiting keeps what is left of its delay (Retry-After),
+    // at least the channel's 2.5 s spacing (verify of ba8a0fe: Retry-After
+    // 15 s, sent 3 s after the 429 at Stop).
+    const now = Date.now();
+    pieces[channel] = batcher.flush(rest).map((pcm) => ({
+      pcm,
+      tried: batcher.wasRetried(pcm) ? 1 : 0,
+      delayMs: Math.max(DEFAULT_MIN_GAP_MS, batcher.retryDueAt(pcm) - now),
+      continues: batcher.continuesCut(pcm)
+    }));
   }
+  return { session: sttSession, pieces };
+}
+
+// The stop flush. Per channel, in order: the request in flight at Stop
+// (when it fails, it gets its one more try here, not in the next session),
+// then the held pieces. A passing failure is tried once more after
+// sttRetryDelayMs (Retry-After honored up to 20 s), and the next request on
+// the channel waits as long. Each try gets a fresh transcriber, so its 30 s
+// local back-off never blocks the last words. Bounded by STOP_FLUSH_MS, and
+// ended by a new Start. Words lost in the end are named in a notice; the
+// meeting notes are written after this.
+async function sendHeldAudio(held) {
+  if (!held) return;
+  const flush = { session: held.session, cancelled: false };
+  stopFlush = flush;
+  const until = Date.now() + STOP_FLUSH_MS;
+  let lostBytes = 0;
+  let lastErr = null;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await Promise.all(['you', 'them'].map(async (channel) => {
+    const queue = [];
+    let notBefore = 0;
+    const inFlight = await sttInFlight[channel];
+    if (inFlight && inFlight.session === held.session && inFlight.pcm && !inFlight.handled) {
+      if (inFlight.stale) { if (inFlight.error) { lostBytes += inFlight.pcm.length; lastErr = inFlight.error; } } // no error: no words in it
+      else if (inFlight.error) {
+        queue.push({ pcm: inFlight.pcm, tried: publikSttBatchers[channel].wasRetried(inFlight.pcm) ? 2 : 1, error: inFlight.error, delayMs: inFlight.delayMs, context: inFlight.context });
+        notBefore = Date.now() + inFlight.delayMs;
+      }
+    }
+    queue.push(...held.pieces[channel]);
+    for (const item of queue) {
+      let done = false;
+      while (!done && item.tried < 2 && !flush.cancelled) {
+        const wait = Math.max(notBefore, item.tried ? Date.now() + item.delayMs : 0) - Date.now();
+        if (wait > 0) {
+          if (Date.now() + wait > until) break;
+          await sleep(wait);
+        }
+        if (flush.cancelled || Date.now() > until) break;
+        const settings = store.getSettings();
+        const context = item.context != null ? item.context : (item.continues ? lastSttText[channel] : '');
+        const res = await transcribePiece(channel, item.pcm, settings, createSTT(settings), { context, session: held.session });
+        item.tried++;
+        if (!res) done = true; // transcribed, or a lasting error already said
+        else if (res.stale) { if (res.error) item.error = res.error; else done = true; break; }
+        else { item.error = res.error; item.delayMs = res.delayMs; notBefore = Date.now() + res.delayMs; }
+      }
+      if (!done) { lostBytes += item.pcm.length; lastErr = item.error || lastErr || (flush.cancelled ? NEW_SESSION_FIRST : null); }
+    }
+  }));
+  if (stopFlush === flush) stopFlush = null;
+  if (lostBytes) send('status', { message: lostAudioMessage(lostBytes, lastErr, true) });
 }
 
 function handleSttError(err, settings) {
@@ -463,16 +640,13 @@ function handleSttError(err, settings) {
   if (sttDisabled) return;
   if (err.provider === publik.PUBLIK_PROVIDER) {
     // publik API: busy (429), unreachable (5xx, network) or a timeout is
-    // passing; say so at most once a minute and keep listening. Anything
+    // passing (after its one more try): say what was lost, at most once a
+    // minute, and keep listening. Anything
     // else (balance used up, key revoked, a refused request) stops
     // transcription with the gateway's own sentence and its one button --
     // "update your key" is wrong for a key cue minted.
-    const passing = err.status === 429 || !err.status || err.status >= 500;
-    if (passing) {
-      const now = Date.now();
-      if (now - publikSttNoticeAt > 60000) { publikSttNoticeAt = now; send('status', { message: `Transcription paused: ${err.message}` }); }
-      return;
-    }
+    const passing = isPassingSttError(err);
+    if (passing) { reportLostAudio(null, err); return; }
     sttDisabled = true;
     send('status', { message: `Transcription stopped: ${err.message}`, action: err.action || null });
     if (err.action) publikHandleErrorAction(err.action);
@@ -735,6 +909,7 @@ async function setCapturing(active) {
 
   if (active) {
     sttDisabled = false; // reset on re-enable
+    startSttSession();
     const settings = store.getSettings();
     if ((settings.sttProvider || 'auto') === 'local') {
       try {
@@ -787,10 +962,14 @@ async function setCapturing(active) {
   state.capturing = false;
   stopFlushLoop();
   stopStreamingSTT();
+  // The last words before the stop go out as final pieces, not dropped.
+  const lastWords = sendHeldAudio(takeHeldAudio()).catch(() => {});
   if (meetingMemory) {
     // Write/refresh the notes for this meeting in the background so the
     // summary survives even if cue is closed before the meeting formally ends.
-    meetingMemory.refreshNotes().then((notes) => {
+    // They wait for the last words, so the notes hold them too.
+    const memory = meetingMemory;
+    lastWords.then(() => memory.refreshNotes()).then((notes) => {
       if (notes) send('status', { message: `Meeting notes saved (${transcript.length} turns).` });
     }).catch(() => {});
   }

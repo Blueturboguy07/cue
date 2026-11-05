@@ -102,7 +102,10 @@ function rendererHarness() {
   }
   const fns = ['  function showThinking() {', '  function clearThinking() {', '  function appendToken(t) {', '  function finalizeAi() {']
     .map((h) => fnFrom(rendererSrc, h)).join('\n');
-  const ctx = vm.createContext({ document: { createElement: (t) => new El(t) }, renderMarkdown: (raw) => `<p>${raw}</p>`, startAi: () => { throw new Error('no bubble'); } });
+  const ctx = vm.createContext({
+    document: { createElement: (t) => new El(t) }, renderMarkdown: (raw) => `<p>${raw}</p>`, startAi: () => { throw new Error('no bubble'); },
+    scrollAnswerToEnd: () => {} // follow-the-answer scrolling (test/answer-area-ui.test.js)
+  });
   vm.runInContext(`var aiEl = null, caretEl = null;\n${fns}\nfunction newBubble() { aiEl = document.createElement('div'); aiEl.className = 'ai-text'; aiEl.dataset.raw = ''; caretEl = document.createElement('span'); caretEl.className = 'ai-caret'; aiEl.appendChild(caretEl); return aiEl; }`, ctx);
   return ctx;
 }
