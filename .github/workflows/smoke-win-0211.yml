@@ -1,0 +1,62 @@
+name: smoke-win-0211
+
+# Test-only branch. Smoke test of the RELEASED cue 0.2.11 Windows build with real
+# sound (VB-CABLE). No publik key is passed in: cue signs in through its own claim
+# code, which leaves the runner only RSA-encrypted (the private key stays on the
+# tester's Mac). The tester revokes the install afterwards.
+on:
+  push:
+    branches: ['smoke/cue-0.2.11-win']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  win:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Virtual audio output (VB-CABLE)
+        uses: LABSN/sound-ci-helpers@v1.0.4
+      - name: Prepare (default output, test speech, install the released exe)
+        shell: powershell
+        run: .\scripts\bugfix-lab\smoke-0211\win-prep.ps1 -Url 'https://github.com/Blueturboguy07/cue/releases/download/v0.2.11/cue-win-x64.exe' -Sha256 '9ddbb9699d0f29aa528acabd548a309288b461533a05795b0cc0cbcb61982815'
+      - name: Phase A (launch, Sign in with publik, encrypted claim URL)
+        shell: powershell
+        run: node scripts/bugfix-lab/smoke-0211/win-smoke.mjs a
+      - name: Hand the encrypted claim URL to the tester
+        uses: actions/upload-artifact@v4
+        with:
+          name: claim
+          path: out/claim/claim.enc
+          retention-days: 1
+      - name: Phase B (wait for the link, real sound, questions)
+        shell: powershell
+        run: node scripts/bugfix-lab/smoke-0211/win-smoke.mjs b
+      - name: cue log lines
+        if: always()
+        shell: powershell
+        run: |
+          if (Test-Path "$env:CUE_PROFILE\app.log") {
+            Select-String -Path "$env:CUE_PROFILE\app.log" -Pattern '\[audio\]|\[smoke\]|SMOKE-ALERT|capture started|system audio|mic error|\[llm\]' | ForEach-Object { $_.Line } | Tee-Object -FilePath out\cue-log-lines.txt
+          }
+      - name: Stop cue
+        if: always()
+        shell: powershell
+        run: Get-Process -Name cue -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      - name: Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-smoke-0211
+          path: |
+            out/*.json
+            out/*.png
+            out/*.txt
+            out/speech-source.wav
+          retention-days: 7
