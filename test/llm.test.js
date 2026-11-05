@@ -18,7 +18,9 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
           completions: {
             create: (completionRequest) => {
               capturedCompletionRequest = completionRequest;
-              const data = [{ choices: [{ delta: { content: 'ok' } }] }];
+              // A real stream ends with a finish chunk; one without it is
+              // incomplete (test/content-filter.test.js).
+              const data = [{ choices: [{ delta: { content: 'ok' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }];
               if (fakeCreateError) return Promise.reject(fakeCreateError);
               if (!fakeResponseHeaders) return Promise.resolve(data);
               const headers = fakeResponseHeaders;
