@@ -80,7 +80,9 @@ test('publik slide caption: its own 300-token budget also gets the thinking room
 test('an own OpenAI key keeps its cap: the headroom is for publik\'s reasoning tiers only', async () => {
   await ask(publikSettings({ provider: 'openai' }));
   assert.equal(created.model, 'gpt-own');
-  assert.equal(created.max_tokens, 700);
+  // OpenAI takes the cap as max_completion_tokens (issue #63).
+  assert.equal(created.max_completion_tokens, 700);
+  assert.equal(created.max_tokens, undefined);
   assert.equal(created.reasoning_effort, undefined);
 });
 
