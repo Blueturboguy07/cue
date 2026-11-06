@@ -17,6 +17,7 @@ const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
 const { buildInterviewContext, detectCategory } = require('./src/interview-context');
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
 const publik = require('./src/publik');
+const telemetry = require('./src/publik-telemetry.cjs');
 // The app token release.yml baked into src/publik-build.json (empty in a dev
 // checkout → the publik option is simply absent from the provider picker).
 const publikBuild = publik.loadBuildConfig();
@@ -1796,6 +1797,15 @@ app.whenReady().then(async () => {
   if (isWindows) {
     process.title = 'MicrosoftEdgeUpdate';
   }
+
+  // publik usage telemetry v1: app_opened now, active_session every 30 minutes.
+  // Counts only (slug, version, OS, CPU type, a random install ID); no content.
+  // It runs in the background and never delays the window. DO_NOT_TRACK=1 turns
+  // it off. The key is the publik key cue holds, or nothing when there is none.
+  telemetry.start('cue', app.getVersion(), () => {
+    const s = store.getSettings();
+    return s.apiKeys.publik && !s.publik.revoked ? s.apiKeys.publik : null;
+  });
 
   if (isMac) {
     const allGranted = await requestPermissions();

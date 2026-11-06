@@ -155,7 +155,7 @@ To use an OpenAI-compatible endpoint, select **Custom** and configure its Base U
 | OpenClaw local gateway | `http://127.0.0.1:18789/v1` | `openclaw/default` |
 | Ollama | `http://127.0.0.1:11434/v1` | An installed Ollama model ID |
 
-Your key is stored **only on your computer** (in `cue-data.json`) and is sent **only** to that provider. cue has no server and collects nothing.
+Your key is stored **only on your computer** (in `cue-data.json`) and is sent **only** to that provider. cue has no server of its own; the one thing it reports is the anonymous usage count described under [Privacy](#privacy).
 
 ### Optional — transcribe locally with whisper.cpp
 
@@ -281,13 +281,20 @@ Run `xattr -cr /Applications/cue.app` in Terminal once (see Install → Option A
 
 ## Privacy
 
-- No Cue accounts, hosted service, or telemetry. cue collects nothing.
+- No Cue accounts and no hosted Cue service. The only thing cue reports is the usage count below.
 - Your API keys live in a local file (`cue-data.json`) and are sent only to the provider you chose.
 - When Custom is selected, its API key and LLM request data are sent to the Base URL you configured.
 - Your optional résumé text also lives in `cue-data.json` and is sent with each model request to your selected AI provider. It is stored as plain text; clear it in Settings to remove it.
 - In Local transcription mode, microphone and meeting audio stay on your computer. In cloud transcription modes, audio is sent only to the selected speech provider.
 - Audio utterances and the current transcript stay in memory; Cue does not write captured audio to disk. Downloaded local model files remain on disk until you delete them.
 - Screenshots are sent to your selected chat provider only when a feature needs the screen.
+
+### Usage counts
+
+Packaged builds send two small events to publik: `app_opened` at each launch and `active_session` every 30 minutes while cue runs.
+Each event holds the app name (`cue`), the app version, the operating system, the CPU type and a random install ID. If cue holds a publik key, the key goes with the event so publik can count the install once.
+No audio, transcript, screenshot, prompt, file name or own provider key is ever sent.
+To turn it off, set `DO_NOT_TRACK=1` in the environment before you start cue. Details: <https://publikhq.com/skills/telemetry.md>
 
 ## Contributing
 
