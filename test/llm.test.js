@@ -18,7 +18,9 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
           completions: {
             create: (completionRequest) => {
               capturedCompletionRequest = completionRequest;
-              const data = [{ choices: [{ delta: { content: 'ok' } }] }];
+              // A real stream ends with a finish chunk; one without it is
+              // incomplete (test/content-filter.test.js).
+              const data = [{ choices: [{ delta: { content: 'ok' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }];
               if (fakeCreateError) return Promise.reject(fakeCreateError);
               if (!fakeResponseHeaders) return Promise.resolve(data);
               const headers = fakeResponseHeaders;
@@ -233,7 +235,10 @@ test('routes DeepSeek to its OpenAI-compatible endpoint', async () => {
 test('reports a configuration error when the DeepSeek key is missing', () => {
   const llm = createLLM(deepseekSettings({ apiKeys: { deepseek: '' } }));
   assert.equal(llm.ready, false);
-  assert.match(llm.configurationError, /Add your deepseek API key/);
+  // The provider's proper name, never the lowercase id.
+  assert.equal(llm.configurationError, 'Add your DeepSeek key in Settings.');
+  assert.equal(llm.missingKey, true);
+  assert.equal(llm.providerName, 'DeepSeek');
 });
 
 // ---- Gemini 404/429 error mapping ------------------------------------------
@@ -460,7 +465,10 @@ test('publik: routes through the publik base URL with the minted key, never the 
   assert.equal(llm.ready, true);
   assert.equal(llm.model, 'publik-fast');
   await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
-  assert.deepEqual(capturedClientOptions, { apiKey: PUBLIK_KEY, baseURL: 'https://publikhq.com/api/v1' });
+  // fetch: the pass-through that notes the stream's "data: [DONE]" (src/llm.js doneWatcher).
+  const { fetch: watchedFetch, ...clientOptions } = capturedClientOptions;
+  assert.deepEqual(clientOptions, { apiKey: PUBLIK_KEY, baseURL: 'https://publikhq.com/api/v1' });
+  assert.equal(typeof watchedFetch, 'function');
   assert.equal(capturedCompletionRequest.model, 'publik-fast');
 });
 
@@ -476,10 +484,13 @@ test('publik: cleared model fields fall back to the per-tier aliases', () => {
   assert.equal(createLLM(publikSettings({ smart: true, models: { publik: { fast: '', smart: '' } } })).model, 'publik-balanced');
 });
 
-test('publik: missing key → not ready, "not set up", no request', () => {
+test('publik: missing key → not ready, "Sign in with publik", no request', () => {
   const llm = createLLM(publikSettings({ apiKeys: { publik: '' } }));
   assert.equal(llm.ready, false);
-  assert.match(llm.configurationError, /publik API is not set up/);
+  // The first thing a person reads names publik and its button, never a key to add.
+  assert.match(llm.configurationError, /^Sign in with publik/);
+  assert.match(llm.configurationError, /no API key/);
+  assert.doesNotMatch(llm.configurationError, /Add your|paste/i);
   assert.equal(capturedClientOptions, null);
 });
 
@@ -624,17 +635,18 @@ test('OpenAI requests send max_completion_tokens, never max_tokens', async () =>
   assert.equal(capturedCompletionRequest.reasoning_effort, undefined, 'non-reasoning models get no effort parameter');
 });
 
-test('GPT-5 and o-series get room to reason and an effort level (Smart raises it)', async () => {
+test('GPT-5 and o-series get room to reason (more with Smart) and no reasoning_effort', async () => {
   for (const model of ['gpt-5', 'gpt-5-mini', 'o4-mini']) {
     await createLLM(openAISettings(model)).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], maxTokens: 700, onToken() {} });
     assert.equal(capturedCompletionRequest.max_tokens, undefined, model);
     assert.ok(capturedCompletionRequest.max_completion_tokens > 700, model + ' needs headroom for reasoning tokens');
-    assert.equal(capturedCompletionRequest.reasoning_effort, 'low', model);
+    assert.equal(capturedCompletionRequest.reasoning_effort, undefined, model + ': cue sends no reasoning_effort');
   }
-  await createLLM(openAISettings('gpt-5', { smart: true })).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} });
-  assert.equal(capturedCompletionRequest.reasoning_effort, 'medium');
-  await createLLM(openAISettings('gpt-5-chat-latest')).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} });
-  assert.equal(capturedCompletionRequest.reasoning_effort, undefined, 'gpt-5-chat is not a reasoning model');
+  const fast = capturedCompletionRequest.max_completion_tokens;
+  await createLLM(openAISettings('o4-mini', { smart: true })).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], maxTokens: 700, onToken() {} });
+  assert.ok(capturedCompletionRequest.max_completion_tokens > fast, 'Smart leaves more room to reason');
+  await createLLM(openAISettings('gpt-5-chat-latest')).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], maxTokens: 700, onToken() {} });
+  assert.equal(capturedCompletionRequest.max_completion_tokens, 700, 'gpt-5-chat is not a reasoning model');
 });
 
 test('OpenAI-compatible providers keep max_tokens', async () => {

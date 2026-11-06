@@ -93,8 +93,11 @@ test('provision sends the app token in the header and the body, and returns the 
       install_id: 'id', key: KEY, key_id: 'k'.repeat(12), base_url: 'https://publikhq.com/api/v1/',
       models: { fast: 'publik-fast', balanced: 'publik-balanced', smart: 'publik-smart' },
       claim_code: 'HK7F-2QWD', claim_url: 'https://publikhq.com/claim/HK7F-2QWD',
-      starter_micros: 250000, balance_micros: 250000, starting_credit_micros: 250000,
-      wallet: { claim_state: 'anonymous', balance_micros: 250000, starter: { remaining_micros: 250000 }, week: { used_micros: 0, budget_micros: null } }
+      // This install was already bound to a signed-in account at mint time, so
+      // it carries the once-per-account $0.05 starter (policy 0059); a plain
+      // anonymous mint always returns starter_micros: 0.
+      starter_micros: 50000, balance_micros: 50000, starting_credit_micros: 50000,
+      wallet: { claim_state: 'claimed', balance_micros: 50000, starter: { remaining_micros: 50000 }, week: { used_micros: 0, budget_micros: null } }
     });
   };
   const r = await publik.provision({ build: buildWith(), installId: 'u-1', appVersion: '0.2.3', platform: 'darwin', osVersion: '24.6.0', arch: 'arm64', deviceName: 'Test Mac', fetchImpl });
@@ -120,9 +123,9 @@ test('provision sends the app token in the header and the body, and returns the 
   assert.deepEqual(r.models, { fast: 'publik-fast', smart: 'publik-balanced' });
   assert.equal(r.claimUrl, 'https://publikhq.com/claim/HK7F-2QWD');
   assert.equal(r.claimCode, 'HK7F-2QWD');
-  assert.equal(r.starterMicros, 250000);
-  assert.equal(r.balanceMicros, 250000);
-  assert.equal(r.wallet.claimState, 'anonymous');
+  assert.equal(r.starterMicros, 50000);
+  assert.equal(r.balanceMicros, 50000);
+  assert.equal(r.wallet.claimState, 'claimed');
 });
 
 test('provision: a 200 replay comes back as replay:true with no key', async () => {
@@ -243,6 +246,11 @@ test('402 insufficient_credit renders the message plus exactly one link: top_up_
   assert.match(claimed.message, /^publik API balance is used up \(\$0\.00 left\)\. Add a plan or a pack at the link below, or use your own key in Settings\.$/);
   assert.equal(claimed.fromResponse, false);
   assert.deepEqual(claimed.action, { kind: 'link', label: 'Add a plan or pack', url: 'https://publikhq.com/dashboard/api/add' });
+  // Anonymous with no message (policy 0059): the install holds $0.00; linking pays $0.05 once. No promise of a starter already on the computer.
+  const anonLocal = publik.describeGatewayError({ status: 402, body: { type: 'insufficient_credit', available_micros: 0, claim_state: 'anonymous', top_up_url: 'https://publikhq.com/claim/HK7F-2QWD' } });
+  assert.equal(anonLocal.message, 'publik API: your balance is too low for this request. Link this computer to your publik account at the link below for $0.05 of free use, pick a plan there, or use your own key in Settings.');
+  assert.equal(anonLocal.fromResponse, false);
+  assert.deepEqual(anonLocal.action, { kind: 'link', label: 'Link this computer & pick a plan', url: 'https://publikhq.com/claim/HK7F-2QWD' });
 
   // A top_up_url on a foreign origin is dropped: the message still renders, with no link.
   const hostile = publik.describeGatewayError({ status: 402, body: { type: 'insufficient_credit', top_up_url: 'https://evil.example/x' } });
@@ -288,11 +296,58 @@ test('400 unknown_model, 413, 503 and network failures; anything else falls thro
   assert.equal(publik.describeGatewayError({ status: 500, body: {} }), null);
 });
 
+// ---- status line -------------------------------------------------------------
+
+test('statusLine shows the gateway\'s last answer over the fixed revoked/disconnected copy', () => {
+  const base = { connected: true, revoked: false, disconnected: false, keyId: 'k'.repeat(12), disclosureAccepted: 1, lastError: '', line: 'Ready · $0.18 left' };
+  assert.deepEqual(publik.statusLine(base), { text: `Connected · key ${'k'.repeat(12)} · Ready · $0.18 left`, warn: false });
+  // After a dashboard revoke the stale key is still on disk (connected) and
+  // revoked is set; a failed Reconnect must show why, not the generic line.
+  const masked = { ...base, revoked: true, lastError: 'This install was disconnected by its owner. Provision a new install.' };
+  assert.deepEqual(publik.statusLine(masked), { text: 'This install was disconnected by its owner. Provision a new install.', warn: true });
+  assert.deepEqual(publik.statusLine({ ...base, revoked: true }), { text: 'publik API key was revoked. Reconnect to set this computer up again.', warn: true });
+  // Key already cleared (Disconnect pressed first), then the dashboard revoke.
+  assert.deepEqual(publik.statusLine({ ...base, connected: false, disconnected: true, lastError: 'Too many installs from this network.' }), { text: 'Too many installs from this network.', warn: true });
+  assert.deepEqual(publik.statusLine({ ...base, connected: false, disconnected: true }), { text: 'publik API is disconnected. This computer was removed from your publik account.', warn: true });
+  assert.deepEqual(publik.statusLine({ ...base, connected: false, disclosureAccepted: 0, lastError: 'ignored before consent' }), { text: 'Not set up yet — no key needed to set it up.', warn: false });
+  assert.deepEqual(publik.statusLine({ ...base, connected: false, lastError: 'Unknown app token.' }), { text: 'Unknown app token.', warn: true });
+  assert.deepEqual(publik.statusLine({ ...base, connected: false }), { text: 'Connecting…', warn: false });
+  assert.deepEqual(publik.statusLine(null), { text: '', warn: false });
+});
+
+test('the settings card paints publik:state.status and keeps no status copy of its own', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');
+  const start = src.indexOf('function renderPublikBlock()');
+  assert.ok(start > -1, 'renderPublikBlock not found');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  // renderPublikBlock paints the card view; the card view takes the revoked
+  // and disconnected sentences from publik:state.status (statusLine).
+  assert.match(body, /cardView\(p, settings\.provider\)/);
+  assert.match(body, /view\.status/);
+  const card = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'publik-card.js'), 'utf8');
+  assert.match(card, /p\.status/);
+  for (const text of [body, card]) {
+    assert.doesNotMatch(text, /key was revoked/, 'the revoked copy lives in src/publik.js statusLine()');
+    assert.doesNotMatch(text, /is disconnected\./, 'the disconnected copy lives in src/publik.js statusLine()');
+  }
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /view\.status = publik\.statusLine\(view\)/);
+});
+
+test('isInstallFinished: 403 install_revoked and 410 end an install_id; a 401 key_revoked does not', () => {
+  assert.equal(publik.isInstallFinished({ status: 403, type: 'install_revoked', reprovision: false }), true);
+  assert.equal(publik.isInstallFinished({ status: 410, type: '' }), true);
+  assert.equal(publik.isInstallFinished({ status: 401, type: 'key_revoked', reprovision: false }), false);
+  assert.equal(publik.isInstallFinished({ status: 403, type: 'app_suspended' }), false);
+  assert.equal(publik.isInstallFinished({ status: 429, type: 'rate_limited' }), false);
+  assert.equal(publik.isInstallFinished(null), false);
+});
+
 // ---- balance line ------------------------------------------------------------
 
 test('balanceLine renders the anonymous, claimed-with-plan and claimed-no-plan forms', () => {
   assert.equal(publik.balanceLine({ connected: false }), '');
-  assert.equal(publik.balanceLine({ connected: true, claimState: 'anonymous', balanceMicros: 180000, starterMicros: 250000, wallet: { claimState: 'anonymous' } }), 'Ready · $0.18 left of $0.25 free starter usage');
+  assert.equal(publik.balanceLine({ connected: true, claimState: 'anonymous', balanceMicros: 30000, starterMicros: 50000, wallet: { claimState: 'anonymous' } }), 'Ready · $0.03 left of $0.05 free starter usage');
   assert.equal(publik.balanceLine({ connected: true, balanceMicros: 180000, starterMicros: 0, wallet: { claimState: 'anonymous' } }), 'Ready · $0.18 left');
   const now = Date.parse('2026-09-22T12:00:00Z');
   const plan = publik.balanceLine({ connected: true, balanceMicros: 3120000, wallet: { claimState: 'claimed', weekUsedMicros: 1200000, weekBudgetMicros: 4620000, weekResetsAt: '2026-09-25T17:04:11Z' } }, now);

@@ -113,17 +113,19 @@ cue can't help until your OS lets it see and hear. When you first use a feature 
 
 ### Step 2 — Pick how cue answers: publik API (default) or your own key
 
-The packaged builds from the Releases page run on **publik API** by default: no
-account and no key needed. The first-run guide shows a short disclosure — every
-request is priced per use at 50% of the model's published list price, from a
-publik balance that starts with a small free amount; most people spend under $2
-a month; your prompts and screenshots go through publik's servers to a shared
-model account, and publik never trains on them. Nothing is set up until you
-press **Continue with publik API**. Settings → Keys shows the balance line and a
-**Link this computer to your publik account** button (that is where you add
-credit once the free balance is used up). **Use my own key instead** switches to
-any of the providers below at any time; a key you have already entered is never
-replaced.
+The packaged builds from the Releases page run on **publik API** by default.
+You need no account and no key to open cue. The first-run guide shows a short
+disclosure. It states the price: every request costs 50% of the model's
+published list price. It also states the average cost: most people spend
+under $2 a month. It also states where your data goes: your prompts and
+screenshots go through publik's servers to a shared model account, and
+publik never trains on them. Nothing is set up until you press **Continue
+with publik API**. A new computer starts at $0.00. Settings → Keys shows
+the balance line and a **Link this computer & pick a plan** button. Linking
+this computer to your publik account gives $0.05 of free use, once. Then
+add a plan or a pack to keep going. **Use my own key instead** switches
+to any of the providers below at any time. cue never replaces a key you have
+already entered.
 
 A build from source has no publik app token unless you export
 `PUBLIK_APP_TOKEN`; without one the publik option does not appear and cue works

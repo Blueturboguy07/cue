@@ -1,11 +1,15 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences } = require('electron');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
+const { UtteranceBatcher, DEFAULT_MIN_GAP_MS } = require('./src/publik-stt-batcher');
 const { parseDocumentFile } = require('./src/resume');
-const { createLLM } = require('./src/llm');
+const { createLLM, normalizeProviderName } = require('./src/llm');
+const { giveUpTimer } = require('./src/give-up');
+const { checkOwnKey } = require('./src/own-key-check');
 const { MODES } = require('./src/prompts');
 const { rms16 } = require('./src/wav');
 const { createStreamingSTT } = require('./src/stt-streaming');
@@ -107,6 +111,15 @@ let appLaunched = false;
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
 const buffers = { you: [], them: [] };
+const publikSttBatchers = { you: new UtteranceBatcher(), them: new UtteranceBatcher() };
+const sttInFlight = { you: Promise.resolve(null), them: Promise.resolve(null) }; // the channel's transcription request, if any
+let sttSession = 0; // one per listening session; a piece only ever joins the session it was heard in
+let stopFlush = null; // the stop flush still running: { session, cancelled }
+const STOP_FLUSH_MS = 40000; // the stop flush starts no request after this
+const lastSttText = { you: '', them: '' }; // the channel's latest text, whisper context for a piece after a cut
+let sttSessionShown = false; // the current session has shown text (an old session's late text then waits no more)
+const NEW_SESSION_FIRST = { message: 'a new session started first' };
+let publikSttNoticeAt = 0; // last "not transcribed" notice for a lost piece (passing publik error)
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
 let meetingMemory = null; // persists the transcript per meeting + notes; see src/meeting-memory.js
@@ -121,6 +134,7 @@ let slideDisabled = false; // set when the chat key rejects slide captions (stop
 let slideTxCursor = 0; // transcript.length at last emitted slide
 const FLUSH_MS = 900;
 const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy can't wedge forever
+const THINKING_PING_MS = 5000; // at most one "Thinking…" signal to the renderer per 5 s
 const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
 const RMS_GATE = 180;
 let flushTimer = null;
@@ -378,39 +392,272 @@ function createWindow() {
 }
 
 // -------- STT flushing (batch mode fallback) --------
-async function flushChannel(channel) {
-  if (state.transcribing[channel]) return;
-  const chunks = buffers[channel];
-  if (!chunks.length) return;
-  const pcm = Buffer.concat(chunks);
-  buffers[channel] = [];
-  if (pcm.length < MIN_BYTES) return;
-  if (rms16(pcm) < RMS_GATE) return; // silence gate
-
-  state.transcribing[channel] = true;
-  try {
-    const settings = store.getSettings();
-    const stt = createSTT(settings);
-    if (!stt.available) {
-      if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription key set. Add an OpenAI (Whisper) or Groq key in Settings to enable listening. Screen/LeetCode features work without it.' }); }
-      return;
-    }
-    const res = await stt.transcribe(pcm);
-    if (res.error) {
-      handleSttError(res.error, settings);
-      return;
-    }
-    if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
-      const turn = { channel, text: res.text.trim(), ts: Date.now() };
-      pushTranscript(turn);
-      send('transcript', turn);
-    }
-  } catch (e) {
-    console.log('[stt] error', e && e.message);
-    recordEvent({ level: 'error', event: 'stt_failed', msg: e && e.message ? e.message : String(e), frame: 'flushChannel', context: { channel } });
-  } finally {
-    state.transcribing[channel] = false;
+// Said once when listening has no transcription path at all. With publik
+// selected and connected, src/stt.js transcribes through publik API, so this
+// only shows when publik is not set up (or its key was revoked) or another
+// provider without an audio key is selected.
+function noTranscriptionMessage(settings) {
+  const tail = 'Screen and coding features work without it.';
+  if (settings.provider === publik.PUBLIK_PROVIDER) {
+    return `Listening needs publik API to be connected. Set it up or press Reconnect in Settings, or choose Local transcription. ${tail}`;
   }
+  // publik first: it transcribes with no key of the person's own.
+  if (publikBuild.available) {
+    return `Transcription is off. Switch to publik in Settings to transcribe with no API key. You can also pick Local in Settings › Audio, or add an OpenAI or Groq key. ${tail}`;
+  }
+  return `Transcription is off. Pick Local in Settings › Audio to transcribe on this computer with no key, or add an OpenAI or Groq key. ${tail}`;
+}
+
+async function flushChannel(channel) {
+  const busy = state.transcribing[channel];
+  const settings = store.getSettings();
+  const stt = createSTT(settings);
+  const viaPublik = stt.providers[0] === publik.PUBLIK_PROVIDER;
+  // Another provider: the audio waits in the buffer while a request is in
+  // flight and goes out with the next window.
+  if (busy && !viaPublik) return;
+  const chunks = buffers[channel];
+  buffers[channel] = [];
+  const windowPcm = chunks.length ? Buffer.concat(chunks) : null;
+  // silence gate: a window that is too short or too quiet is not speech
+  const voiced = windowPcm && windowPcm.length >= MIN_BYTES && rms16(windowPcm) >= RMS_GATE ? windowPcm : null;
+  let pcm = voiced;
+  if (viaPublik) {
+    // publik API: whole utterances cut at pauses, so two busy channels stay
+    // under the key's 60 requests a minute and a question is never cut inside
+    // a word; a sentence reaches whisper within about 10 s of its end
+    // (src/publik-stt-batcher.js). The batcher gets the raw window, pauses
+    // included: it finds them in 30 ms frames. While this channel's request
+    // is in flight, the window still goes in (each pause is found where it
+    // is), and nothing is sent: a piece after a pause waits for its own
+    // request (0.2.12 smoke: "No." after a 2 s pause was joined to the
+    // sentence before it while a slow request ran, and whisper dropped it).
+    if (busy) { publikSttBatchers[channel].feed(windowPcm); return; }
+    pcm = publikSttBatchers[channel].push(windowPcm);
+  } else {
+    publikSttBatchers[channel].reset();
+  }
+  if (!pcm) return;
+  // After publik refused for good (balance used up, a refused request), do
+  // not send every utterance again; listening resumes on the next start or
+  // a Settings save, which clear sttDisabled.
+  if (sttDisabled && stt.providers[0] === publik.PUBLIK_PROVIDER) return;
+
+  const session = sttSession;
+  // A piece that starts at a cut goes with the text before it, so whisper
+  // reads its first words in context (src/stt.js promptWithContext).
+  const context = publikSttBatchers[channel].continuesCut(pcm) ? lastSttText[channel] : '';
+  const failed = await transcribePiece(channel, pcm, settings, stt, { context, session });
+  if (!failed || failed.stale) return;
+  // Stopped while it was in flight: the stop flush gives it its one more try.
+  if (session !== sttSession || !state.capturing) return;
+  failed.handled = true;
+  // A passing publik failure: the batcher sends the piece once more, first
+  // in line, after the delay; a second failure is final, and said.
+  if (!publikSttBatchers[channel].retry(pcm, failed.delayMs)) reportLostAudio(pcm, failed.error);
+}
+
+// publik API: busy (429), a server error, or no answer in time (no status)
+// is passing; anything else (balance used up, key revoked) is not.
+function isPassingSttError(err) {
+  return Boolean(err) && (err.status === 429 || !err.status || err.status >= 500);
+}
+
+// The wait before the one more try: the gateway's Retry-After (2.5 s to
+// 20 s), else 5 s after a 429 (the key allows 60 requests a minute, chat
+// included), else the channel's 2.5 s spacing (a 5xx or a timeout).
+function sttRetryDelayMs(err) {
+  if (err && err.retryAfterMs > 0) return Math.min(Math.max(err.retryAfterMs, DEFAULT_MIN_GAP_MS), 20000);
+  return err && err.status === 429 ? 5000 : DEFAULT_MIN_GAP_MS;
+}
+
+// Why a piece was lost, as part of a sentence. Not the error's own message:
+// a 429 says "Wait 2 seconds and try again", which does not apply to audio
+// that is gone (0.2.12 smoke).
+function lostAudioReason(err) {
+  if (!err) return '';
+  if (err === NEW_SESSION_FIRST) return 'a new session started first';
+  if (err.status === 429) return 'publik API was busy';
+  if (err.status >= 500) return 'publik API had a server error';
+  if (!err.status) return 'publik API did not answer in time';
+  return String(err.message || '').trim().replace(/[\s.!]+$/, '');
+}
+
+// "N s of the meeting were not transcribed": a piece lost after its one
+// more try. In a session at most once a minute; at Stop always.
+function lostAudioMessage(bytes, err, atStop) {
+  const secs = Math.max(1, Math.round(bytes / 32000));
+  const reason = lostAudioReason(err);
+  const why = reason ? ` because ${reason}` : '';
+  return atStop
+    ? `The last ${secs} s before Stop were not transcribed${why}.`
+    : `${secs} s of the meeting were not transcribed${why}. Listening goes on.`;
+}
+
+function reportLostAudio(pcm, err) {
+  recordEvent({ level: 'error', event: 'stt_lost', code: err && (err.code || (err.status ? 'http_' + err.status : null)), msg: err && err.message, frame: 'reportLostAudio', context: { bytes: pcm ? pcm.length : 0 } });
+  const now = Date.now();
+  if (now - publikSttNoticeAt <= 60000) return;
+  publikSttNoticeAt = now;
+  send('status', { message: lostAudioMessage(pcm ? pcm.length : 0, err, false) });
+}
+
+// Transcribes one piece for a channel and publishes its text. A passing
+// publik failure is not reported here: it comes back as
+// { error, delayMs, pcm, session, context } for the caller to try once more.
+// Text for a session that already ended while a newer one runs is never
+// published: it comes back as { stale } (nothing from an old session joins
+// a new one).
+function transcribePiece(channel, pcm, settings, stt, { context = '', session = sttSession } = {}) {
+  const run = (async () => {
+    state.transcribing[channel] = true;
+    try {
+      if (!stt.available) {
+        if (!sttDisabled) { sttDisabled = true; send('status', { message: noTranscriptionMessage(settings) }); }
+        return null;
+      }
+      const res = await stt.transcribe(pcm, { context });
+      if (session !== sttSession) {
+        // Stop, then Start before this text came back: the text is the old
+        // session's last words. Shown (and in the notes) while the new
+        // session has shown nothing, so the order holds; else said as lost.
+        const text = !res.error && res.text ? res.text.trim() : '';
+        if (text.length > 1 && !sttSessionShown && !/^[?!.,;:\-…]+$/.test(text)) {
+          const turn = { channel, text, ts: Date.now() };
+          pushTranscript(turn);
+          send('transcript', turn);
+          return null;
+        }
+        return { stale: true, pcm, session, error: res.error || (text ? NEW_SESSION_FIRST : null) };
+      }
+      if (res.error) {
+        if (res.error.provider === publik.PUBLIK_PROVIDER && isPassingSttError(res.error)) {
+          return { error: res.error, delayMs: sttRetryDelayMs(res.error), pcm, session, context };
+        }
+        handleSttError(res.error, settings);
+        return null;
+      }
+      if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
+        const turn = { channel, text: res.text.trim(), ts: Date.now() };
+        pushTranscript(turn);
+        send('transcript', turn);
+        lastSttText[channel] = turn.text;
+        sttSessionShown = true;
+      }
+      return null;
+    } catch (e) {
+      console.log('[stt] error', e && e.message);
+      recordEvent({ level: 'error', event: 'stt_failed', msg: e && e.message ? e.message : String(e), frame: 'transcribePiece', context: { channel } });
+      return null;
+    } finally {
+      state.transcribing[channel] = false;
+    }
+  })();
+  sttInFlight[channel] = run.catch(() => null);
+  return run;
+}
+
+// The meeting notes after a Stop. They wait for the last words, so they hold
+// them. "Meeting notes saved (N turns)." is said once, for the last Stop,
+// with the turns those notes were written from (0.2.12 smoke: Stop, Start
+// and Stop again within 5 s said "(13 turns)" twice, for notes that did not
+// hold the last turn).
+let notesStatusFor = 0;
+function notesAfterStop(memory, lastWords) {
+  const stop = ++notesStatusFor;
+  return lastWords.then(() => memory.refreshNotes()).then((notes) => {
+    if (notes && stop === notesStatusFor) send('status', { message: `Meeting notes saved (${notes.turns} turns).` });
+  }).catch(() => {});
+}
+
+// A new listening session: nothing held, waiting for a retry or still in
+// the stop flush of the last session joins it (a piece that failed after
+// Stop came back as the first request of the next session, verify of eee01af).
+function startSttSession() {
+  sttSession++;
+  if (stopFlush) stopFlush.cancelled = true;
+  buffers.you = []; buffers.them = [];
+  publikSttBatchers.you.reset(); publikSttBatchers.them.reset();
+  lastSttText.you = ''; lastSttText.them = '';
+  sttSessionShown = false;
+}
+
+// The session stopped: what the publik batchers still hold (the sentence
+// being spoken at that moment, and audio that arrived since the last flush)
+// is taken now, before the buffers are cleared.
+function takeHeldAudio() {
+  const settings = store.getSettings();
+  const stt = createSTT(settings);
+  if (stt.providers[0] !== publik.PUBLIK_PROVIDER || sttDisabled) return null;
+  const pieces = {};
+  for (const channel of ['you', 'them']) {
+    const batcher = publikSttBatchers[channel];
+    const rest = buffers[channel].length ? Buffer.concat(buffers[channel]) : null;
+    buffers[channel] = [];
+    // A retry already waiting keeps what is left of its delay (Retry-After),
+    // at least the channel's 2.5 s spacing (verify of ba8a0fe: Retry-After
+    // 15 s, sent 3 s after the 429 at Stop).
+    const now = Date.now();
+    pieces[channel] = batcher.flush(rest).map((pcm) => ({
+      pcm,
+      tried: batcher.wasRetried(pcm) ? 1 : 0,
+      delayMs: Math.max(DEFAULT_MIN_GAP_MS, batcher.retryDueAt(pcm) - now),
+      continues: batcher.continuesCut(pcm)
+    }));
+  }
+  return { session: sttSession, pieces };
+}
+
+// The stop flush. Per channel, in order: the request in flight at Stop
+// (when it fails, it gets its one more try here, not in the next session),
+// then the held pieces. A passing failure is tried once more after
+// sttRetryDelayMs (Retry-After honored up to 20 s), and the next request on
+// the channel waits as long. Each try gets a fresh transcriber, so its 30 s
+// local back-off never blocks the last words. Bounded by STOP_FLUSH_MS, and
+// ended by a new Start. Words lost in the end are named in a notice; the
+// meeting notes are written after this.
+async function sendHeldAudio(held) {
+  if (!held) return;
+  const flush = { session: held.session, cancelled: false };
+  stopFlush = flush;
+  const until = Date.now() + STOP_FLUSH_MS;
+  let lostBytes = 0;
+  let lastErr = null;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  await Promise.all(['you', 'them'].map(async (channel) => {
+    const queue = [];
+    let notBefore = 0;
+    const inFlight = await sttInFlight[channel];
+    if (inFlight && inFlight.session === held.session && inFlight.pcm && !inFlight.handled) {
+      if (inFlight.stale) { if (inFlight.error) { lostBytes += inFlight.pcm.length; lastErr = inFlight.error; } } // no error: no words in it
+      else if (inFlight.error) {
+        queue.push({ pcm: inFlight.pcm, tried: publikSttBatchers[channel].wasRetried(inFlight.pcm) ? 2 : 1, error: inFlight.error, delayMs: inFlight.delayMs, context: inFlight.context });
+        notBefore = Date.now() + inFlight.delayMs;
+      }
+    }
+    queue.push(...held.pieces[channel]);
+    for (const item of queue) {
+      let done = false;
+      while (!done && item.tried < 2 && !flush.cancelled) {
+        const wait = Math.max(notBefore, item.tried ? Date.now() + item.delayMs : 0) - Date.now();
+        if (wait > 0) {
+          if (Date.now() + wait > until) break;
+          await sleep(wait);
+        }
+        if (flush.cancelled || Date.now() > until) break;
+        const settings = store.getSettings();
+        const context = item.context != null ? item.context : (item.continues ? lastSttText[channel] : '');
+        const res = await transcribePiece(channel, item.pcm, settings, createSTT(settings), { context, session: held.session });
+        item.tried++;
+        if (!res) done = true; // transcribed, or a lasting error already said
+        else if (res.stale) { if (res.error) item.error = res.error; else done = true; break; }
+        else { item.error = res.error; item.delayMs = res.delayMs; notBefore = Date.now() + res.delayMs; }
+      }
+      if (!done) { lostBytes += item.pcm.length; lastErr = item.error || lastErr || (flush.cancelled ? NEW_SESSION_FIRST : null); }
+    }
+  }));
+  if (stopFlush === flush) stopFlush = null;
+  if (lostBytes) send('status', { message: lostAudioMessage(lostBytes, lastErr, true) });
 }
 
 function handleSttError(err, settings) {
@@ -426,6 +673,20 @@ function handleSttError(err, settings) {
     context: { provider: err.provider, status: err.status || null, alreadyDisabled: sttDisabled },
   });
   if (sttDisabled) return;
+  if (err.provider === publik.PUBLIK_PROVIDER) {
+    // publik API: busy (429), unreachable (5xx, network) or a timeout is
+    // passing (after its one more try): say what was lost, at most once a
+    // minute, and keep listening. Anything
+    // else (balance used up, key revoked, a refused request) stops
+    // transcription with the gateway's own sentence and its one button --
+    // "update your key" is wrong for a key cue minted.
+    const passing = isPassingSttError(err);
+    if (passing) { reportLostAudio(null, err); return; }
+    sttDisabled = true;
+    send('status', { message: `Transcription stopped: ${err.message}`, action: err.action || null });
+    if (err.action) publikHandleErrorAction(err.action);
+    return;
+  }
   const isQuota = err.status === 429 || err.code === 'RESOURCE_EXHAUSTED' || (err.message && err.message.includes('Quota exceeded'));
   const noAccess = err.status === 403 || err.status === 401 || err.code === 'model_not_found' || isQuota;
   sttDisabled = true; // stop hammering the API every few seconds
@@ -534,10 +795,9 @@ async function captionSlide(imageDataUrl, transcriptSlice) {
   const settings = store.getSettings();
   const llm = createLLM(settings);
   if (!llm.ready) throw new Error(llm.configurationError || 'Complete the provider settings.');
-  let watchdog = null;
-  const stalled = new Promise((_res, reject) => {
-    watchdog = setTimeout(() => reject(new Error('slide caption timed out')), STREAM_INACTIVITY_MS);
-  });
+  // A fixed 25 s total limit (never re-armed). When it gives up, the request
+  // is cancelled too, so a long think is not billed for a caption nobody sees.
+  const guard = giveUpTimer(STREAM_INACTIVITY_MS, 'slide caption timed out');
   try {
     return await Promise.race([
       llm.stream({
@@ -545,12 +805,17 @@ async function captionSlide(imageDataUrl, transcriptSlice) {
         turns: [{ role: 'user', text: buildSlideUser(transcriptSlice) }],
         imageDataUrl,
         maxTokens: 300,
-        onToken: () => {}
+        // A caption cut at the cap is trimmed and ends with "…", never with
+        // the chat answer's "(Cut off: …)" note.
+        lengthCut: 'ellipsis',
+        signal: guard.signal,
+        onToken: () => {},
+        onRetry: (r) => recordEvent({ level: 'info', event: 'llm_filter_retry', msg: `${r.from} -> ${r.to}`, frame: 'captionSlide', context: { mode: 'caption', from: r.from, to: r.to, finishReason: r.finishReason } })
       }),
-      stalled
+      guard.expired
     ]);
   } finally {
-    clearTimeout(watchdog);
+    guard.clear();
   }
 }
 
@@ -680,6 +945,7 @@ async function setCapturing(active) {
 
   if (active) {
     sttDisabled = false; // reset on re-enable
+    startSttSession();
     const settings = store.getSettings();
     if ((settings.sttProvider || 'auto') === 'local') {
       try {
@@ -732,15 +998,17 @@ async function setCapturing(active) {
   state.capturing = false;
   stopFlushLoop();
   stopStreamingSTT();
+  // The last words before the stop go out as final pieces, not dropped.
+  const lastWords = sendHeldAudio(takeHeldAudio()).catch(() => {});
   if (meetingMemory) {
     // Write/refresh the notes for this meeting in the background so the
     // summary survives even if cue is closed before the meeting formally ends.
-    meetingMemory.refreshNotes().then((notes) => {
-      if (notes) send('status', { message: `Meeting notes saved (${transcript.length} turns).` });
-    }).catch(() => {});
+    // They wait for the last words, so the notes hold them too.
+    notesAfterStop(meetingMemory, lastWords);
   }
   stopSlideLoop();
   buffers.you = []; buffers.them = [];
+  publikSttBatchers.you.reset(); publikSttBatchers.them.reset();
   vad.you.reset(); vad.them.reset();
   ringBuffers.you.clear(); ringBuffers.them.clear();
   const stoppingLocalTranscriber = localWhisperTranscriber;
@@ -779,15 +1047,18 @@ async function runFeature(mode, userText) {
       const message = llm.configurationError || ('Complete the ' + settings.provider + ' provider settings. Model: ' + (llm.model || 'unset') + '.');
       if (settings.provider === publik.PUBLIK_PROVIDER) {
         // No key yet: either the disclosure was never accepted (open it — the
-        // mint happens only on "Continue"), or the install was revoked or the
-        // last mint failed (offer Reconnect). The app never silently spends.
-        const action = !settings.publik.disclosureAccepted
-          ? { kind: 'disclosure' }
-          : { kind: 'reconnect', label: 'Reconnect' };
-        send('llm:error', { message, action });
+        // mint happens only on "Sign in with publik"), or the install was
+        // revoked or the last mint failed (offer Reconnect, and say why in
+        // plain words). The message and its one button always agree. The app
+        // never silently spends.
+        send('llm:error', publik.notReadyMessage(publikState()));
         return;
       }
-      send('llm:error', { message });
+      // An own provider with no key, in a build that has publik: publik
+      // first, the provider's proper name, one button that switches.
+      send('llm:error', publikBuild.available
+        ? { message: publik.ownProviderNotReadyMessage({ providerName: llm.providerName, missingKey: llm.missingKey, configurationError: message }), action: { kind: 'switch' } }
+        : { message });
       return;
     }
     // Never a silent starter (CONTRACT §12.4): the first-run card — balance,
@@ -840,36 +1111,60 @@ async function runFeature(mode, userText) {
 
     // Watchdog: a provider that stalls mid-stream would otherwise hang the await forever,
     // leaving state.busy = true and wedging every later question until an app restart.
-    let watchdog = null;
-    let rearm = () => {};
-    const stalled = new Promise((_res, reject) => {
-      rearm = () => {
-        clearTimeout(watchdog);
-        watchdog = setTimeout(() => reject(new Error('the model stopped responding (timed out). Please try again.')), STREAM_INACTIVITY_MS);
-      };
+    // When it gives up, the HTTP request is cancelled too (guard.signal), so the
+    // provider stops generating and billing an answer cue no longer shows.
+    const guard = giveUpTimer(STREAM_INACTIVITY_MS, 'the model stopped responding (timed out). Please try again.');
+    const rearm = guard.rearm;
+    // A reasoning model streams its thinking before any text: that is
+    // activity too, so a long think is not called a stalled stream. While it
+    // only thinks, the renderer shows "Thinking…" (never the reasoning text).
+    // The signal repeats at most every 5 s, which keeps the renderer's busy
+    // failsafe from firing during a long think.
+    let answerStarted = false;
+    let thinkingSentAt = 0;
+    const noteActivity = (kind) => {
+      if (streamSettled) return;
       rearm();
-    });
+      if (kind === 'thinking' && !answerStarted && Date.now() - thinkingSentAt >= THINKING_PING_MS) {
+        thinkingSentAt = Date.now();
+        send('llm:thinking', {});
+      }
+    };
     try {
       await Promise.race([
         llm.stream({
           system,
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
-          onToken: (t) => { if (streamSettled) return; rearm(); send('llm:token', { text: t }); },
-          onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined
+          onToken: (t) => { if (streamSettled) return; answerStarted = true; rearm(); send('llm:token', { text: t }); },
+          onActivity: noteActivity,
+          signal: guard.signal,
+          onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => publikNoteHeaders(res && res.headers) : undefined,
+          // A publik-balanced answer that the safety filter stopped before any
+          // text showed is asked once more on another publik tier (src/llm.js).
+          onRetry: (r) => recordEvent({ level: 'info', event: 'llm_filter_retry', msg: `${r.from} -> ${r.to}`, frame: 'runFeature', context: { mode, from: r.from, to: r.to, finishReason: r.finishReason } })
         }),
-        stalled
+        guard.expired
       ]);
     } finally {
       streamSettled = true;
-      clearTimeout(watchdog);
+      guard.clear();
     }
     send('llm:done', {});
+    // The own key answered: it is not bad (any more).
+    clearOwnKeyFailed(settings.provider);
     // Streams settle after their headers, so the charge is reconciled from
     // GET /wallet shortly after the answer — one request per answer, debounced.
     if (settings.provider === publik.PUBLIK_PROVIDER) publikScheduleWalletRefresh();
   } catch (e) {
-    recordEvent({ level: 'error', event: 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider } });
+    recordEvent({ level: 'error', event: e && e.emptyAnswer ? 'llm_empty_answer' : 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider, finishReason: (e && e.finishReason) || null, stopKind: (e && e.stopKind) || null, retryFailed: (e && e.retryFailed) || null } });
+    // A bad own key: plain words, "Switch to publik" first, "Fix my key"
+    // second; never the provider's raw 401.
+    if (e && e.ownKeyFailed) {
+      markOwnKeyFailed(e.ownKeyFailed.provider);
+      send('llm:error', publik.ownKeyFailedMessage({ providerName: e.ownKeyFailed.providerName, publikAvailable: publikBuild.available }));
+      return;
+    }
     const action = e && e.action ? e.action : null;
     send('llm:error', { message: e && e.message ? e.message : String(e), action });
     if (action) publikHandleErrorAction(action);
@@ -885,7 +1180,18 @@ async function runFeature(mode, userText) {
 ipcMain.handle('settings:get', () => store.redactForRenderer(store.getSettings()));
 ipcMain.handle('settings:set', (_e, patch) => {
   sttDisabled = false;
+  const before = store.getSettings();
+  const beforeProvider = before.provider;
+  const beforeKey = (before.apiKeys || {})[beforeProvider];
   const next = store.setSettings(store.stripRendererPatch(patch));
+  // After "Fix my key" (or another provider): a refused key that is no
+  // longer selected stops counting, and a new own key gets the same free
+  // check as at startup.
+  const nextKey = (next.apiKeys || {})[next.provider];
+  if (next.provider !== beforeProvider || nextKey !== beforeKey) {
+    if (ownKeyFailure && !ownKeyFailedFor(next)) { ownKeyFailure = null; publikPush(); }
+    checkSelectedOwnKey();
+  }
   // Restart slide polling with the new interval when capturing (keeps slides).
   if (state.capturing) startSlideLoop();
   return store.redactForRenderer(next);
@@ -897,6 +1203,54 @@ ipcMain.handle('settings:set', (_e, patch) => {
 // fed by the x-publik-* headers on every answer and reconciled from GET /wallet.
 let publikWalletTimer = null;
 let publikProvisioning = null;
+
+// -------- a bad own key (0.2.4/0.2.5 users with a home-made OpenAI key) --------
+// In memory only: the provider and a short hash of the key it refused, never
+// the key. It counts while the same provider and key are selected, so a new
+// key or another provider clears it by itself.
+let ownKeyFailure = null;
+function ownKeyHash(key) { return crypto.createHash('sha256').update(String(key || '')).digest('hex').slice(0, 16); }
+function ownKeyFailedFor(settings) {
+  if (!ownKeyFailure || !settings || settings.provider !== ownKeyFailure.provider) return null;
+  const key = (settings.apiKeys || {})[ownKeyFailure.provider];
+  if (!key || ownKeyHash(key) !== ownKeyFailure.keyHash) return null;
+  return { provider: ownKeyFailure.provider, providerName: normalizeProviderName(ownKeyFailure.provider) };
+}
+function markOwnKeyFailed(provider) {
+  const key = (store.getSettings().apiKeys || {})[provider];
+  if (!key || provider === publik.PUBLIK_PROVIDER) return;
+  ownKeyFailure = { provider, keyHash: ownKeyHash(key) };
+  publikPush();
+}
+function clearOwnKeyFailed(provider) {
+  if (!ownKeyFailure || ownKeyFailure.provider !== provider) return;
+  ownKeyFailure = null;
+  publikPush();
+}
+
+// Startup, no paid call: (1) a publik key that was revoked on the dashboard
+// while cue was closed shows Reconnect at once (GET /wallet marks it), not
+// "Connected" until the first question fails; (2) an own provider key is
+// checked with the provider's free "list models" call.
+function startupChecks() {
+  const s = store.getSettings();
+  if (publikBuild.available && s.apiKeys.publik && !s.publik.revoked) {
+    publikRefreshWallet().catch(() => {});
+  }
+  checkSelectedOwnKey();
+}
+function checkSelectedOwnKey() {
+  const s = store.getSettings();
+  const provider = s.provider;
+  const key = (s.apiKeys || {})[provider];
+  if (!provider || provider === publik.PUBLIK_PROVIDER || !key) return;
+  checkOwnKey({ provider, apiKey: key }).then((verdict) => {
+    recordEvent({ level: 'info', event: 'own_key_checked', msg: verdict, frame: 'checkSelectedOwnKey', context: { provider } });
+    // Only if the same key is still selected when the answer comes back.
+    const now = store.getSettings();
+    if (verdict === 'bad' && now.provider === provider && now.apiKeys[provider] === key) markOwnKeyFailed(provider);
+  }).catch(() => {});
+}
 
 function publikDevice() {
   let deviceName = '';
@@ -929,11 +1283,24 @@ function publikState() {
     disclosureAccepted: p.disclosureAccepted || 0,
     disclosureVersion: publikBuild.disclosureVersion,
     lastError: p.lastError || '',
+    // The failure in plain words (never "fetch failed"); the raw text stays in lastError.
+    problem: publik.plainProblem(p),
+    // True when the last mint failed (offline, rate limited, server error),
+    // as opposed to a gateway sentence such as a revoke. A failed Reconnect
+    // also sets `revoked`, and the failure is still the thing to say.
+    setupFailed: !!(p.lastError && p.lastErrorKind),
+    // An own provider refused its key (on a question or at startup):
+    // { provider, providerName } or null. Drives "Switch to publik" first.
+    ownKeyFailed: ownKeyFailedFor(s),
     cardShown: !!p.cardShown,
     copy: publik.COPY,
     links: publik.LINKS
   };
   view.line = publik.balanceLine(view);
+  // The status sentence on the settings card (the gateway's last answer wins
+  // over the fixed revoked/disconnected copy), computed here so the renderer
+  // only paints.
+  view.status = publik.statusLine(view);
   // CONTRACT §12: the first-run card (shown while connected && !cardShown),
   // the settings button, and the low-starter banner — all computed here so
   // the renderer only paints.
@@ -1015,8 +1382,19 @@ function publikHandleRevoked(e) {
   if (silent) publikProvision().catch(() => {});
 }
 function publikHandleErrorAction(action) {
-  if (!action || action.kind !== 'reprovision') return;
-  publikHandleRevoked({ type: 'key_revoked', reprovision: true });
+  if (!action) return;
+  if (action.kind === 'reprovision') {
+    publikHandleRevoked({ type: 'key_revoked', reprovision: true });
+    return;
+  }
+  // A 401 on a question (or a transcription): the key on disk is dead. Mark
+  // it now, so Settings shows Reconnect and the first Reconnect press mints.
+  if (action.kind === 'reconnect' && action.revoked) {
+    const s = store.getSettings();
+    if (!s.apiKeys.publik || s.publik.revoked) return;
+    publikHandleRevoked({ type: action.revoked === 'key_revoked' ? 'key_revoked' : 'invalid_api_key', reprovision: false });
+    publikPush();
+  }
 }
 
 ipcMain.handle('publik:state', () => publikState());
@@ -1028,13 +1406,11 @@ ipcMain.handle('publik:accept-disclosure', async () => {
   store.setSettings({ provider: publik.PUBLIK_PROVIDER });
   return publikProvision();
 });
-ipcMain.handle('publik:reconnect', async () => {
-  const s = store.getSettings();
-  if (!s.publik.disclosureAccepted) return publikState();
-  if (s.apiKeys.publik && !s.publik.revoked) return publikRefreshWallet();
-  store.setPublik({ revoked: true });
-  return publikProvision();
-});
+// One press reconnects: a wallet read that finds the key revoked goes on to
+// mint in the same press (src/publik.js reconnectInstall).
+ipcMain.handle('publik:reconnect', () => publik.reconnectInstall({
+  store, refreshWallet: publikRefreshWallet, provision: publikProvision, state: publikState
+}));
 ipcMain.handle('publik:refresh', () => publikRefreshWallet());
 ipcMain.handle('publik:disconnect', async () => {
   const s = store.getSettings();
@@ -1047,7 +1423,7 @@ ipcMain.handle('publik:disconnect', async () => {
 });
 // "Later" or the primary button on the first-run card: the card was shown for
 // this starter grant. Touches publik.cardShown only — the key stays in place
-// and the free starter is kept (§12.1).
+// and the balance is kept (§12.1).
 ipcMain.handle('publik:card-seen', () => {
   try { publik.markCardSeen(store); } catch (e) { recordEvent({ level: 'error', event: 'publik_card_seen_failed', msg: e.message, frame: 'publik:card-seen', context: {} }); }
   publikPush();
@@ -1343,7 +1719,8 @@ function launchApp() {
   meetingMemory = createMeetingMemory({
     store: createMeetingStore({ file: path.join(app.getPath('userData'), 'meetings.json'), debounceMs: 1500 }),
     llmFactory: () => createLLM(store.getSettings()),
-    log: (msg) => console.log('[meetings]', msg)
+    log: (msg) => console.log('[meetings]', msg),
+    onRetry: (r) => recordEvent({ level: 'info', event: 'llm_filter_retry', msg: `${r.from} -> ${r.to}`, frame: 'meetingNotes', context: { mode: 'notes', from: r.from, to: r.to, finishReason: r.finishReason } })
   });
   restoredTurns = meetingMemory.resumeOpen();
   if (restoredTurns.length) transcript.push(...restoredTurns.slice(-MAX_TRANSCRIPT_TURNS));
@@ -1410,6 +1787,7 @@ function launchApp() {
 
   createWindow();
   registerShortcuts();
+  startupChecks();
 }
 
 // -------- lifecycle --------

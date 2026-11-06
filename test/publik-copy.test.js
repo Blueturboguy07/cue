@@ -8,7 +8,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const FILES = ['src/publik.js', 'src/llm.js', 'src/store.js', 'main.js', 'renderer/renderer.js', 'renderer/index.html'];
+const FILES = ['src/publik.js', 'src/llm.js', 'src/store.js', 'main.js', 'renderer/renderer.js', 'renderer/index.html', 'renderer/publik-card.js'];
 const FORBIDDEN = [
   /OpenAI API access/i,
   /ChatGPT credits?/i,
@@ -31,7 +31,8 @@ test('the provider is labelled "publik API", never "Custom" or a vendor name', (
   const publik = require('../src/publik');
   assert.equal(publik.PROVIDER_LABEL, 'publik API');
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
-  assert.match(html, /data-provider="publik"[^>]*>publik API/);
+  // Settings opens on a tab named for publik; the brand is lowercase.
+  assert.match(html, /id="s-tab-main"[^>]*>🪙 publik</);
   const { formatProviderErrorMessage } = require('../src/llm');
   const err = Object.assign(new Error('x'), { status: 404 });
   assert.match(String(formatProviderErrorMessage(err, 'publik', 'm').message), /publik API/);
@@ -44,4 +45,9 @@ test('the provider is labelled "publik API", never "Custom" or a vendor name', (
   assert.match(publik.COPY.cost, /Most people spend under \$2 a month/);
   assert.match(publik.COPY.disclosure.cost, /priced per use at 50% of the model's published list price/);
   assert.match(publik.COPY.disclosure.cost, /Most people spend under \$2 a month/);
+  // Policy 0059: a new install holds $0.00; the one free thing is $0.05 when this
+  // computer is linked, once. The sheet never promises use before that.
+  assert.match(publik.COPY.disclosure.cost, /A new computer starts at \$0\.00\./);
+  assert.match(publik.COPY.disclosure.cost, /Linking this computer to your publik account gives \$0\.05 of free use, once\./);
+  assert.doesNotMatch(JSON.stringify(publik.COPY.disclosure), /start right away|without an account|free balance|free starter|starts with/i);
 });

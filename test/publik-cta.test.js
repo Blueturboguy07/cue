@@ -43,8 +43,10 @@ function mintResponse(overrides = {}) {
     install_id: 'x', key: KEY, key_id: 'k'.repeat(12), base_url: 'https://publikhq.com/api/v1',
     models: { fast: 'publik-fast', balanced: 'publik-balanced', smart: 'publik-smart' },
     claim_code: 'HK7F-2QWD', claim_url: CLAIM_URL,
-    starter_micros: 250000, balance_micros: 250000, starting_credit_micros: 250000,
-    wallet: { claim_state: 'anonymous', balance_micros: 250000, starter: { remaining_micros: 250000 }, week: { used_micros: 0, budget_micros: null, resets_at: '2026-09-25T17:04:11Z' }, claim_url: CLAIM_URL },
+    // Policy 0059: a plain anonymous mint is $0.00. A different starter grant
+    // (below) models an install minted already bound to a signed-in account.
+    starter_micros: 0, balance_micros: 0, starting_credit_micros: 0,
+    wallet: { claim_state: 'anonymous', balance_micros: 0, starter: { remaining_micros: 0 }, week: { used_micros: 0, budget_micros: null, resets_at: '2026-09-25T17:04:11Z' }, claim_url: CLAIM_URL },
     ...overrides
   };
 }
@@ -81,15 +83,21 @@ test('the first-run card renders, in order, the balance from the mint response, 
 
   const v = viewOf(store);
   assert.ok(v.card, 'the card exists as soon as the install is connected');
-  assert.equal(v.card.balance, '$0.25 of free starter usage');
+  // Policy 0059: a plain anonymous mint is $0.00 — no lifetime starter until
+  // this computer is linked to a publik account.
+  assert.equal(v.card.balance, '$0.00 of publik API usage available');
   assert.equal(v.card.why, WHY);
   assert.deepEqual(v.card.primary, { label: 'Link this computer & pick a plan', url: CLAIM_URL });
   assert.deepEqual(v.card.secondary, { label: 'Later' });
   assert.deepEqual(Object.keys(v.card), ['title', 'balance', 'why', 'primary', 'secondary'], 'balance, then why, then the buttons');
-  // The amount is the server's, not a constant: a different grant shows a different line.
+  // The amount is the server's, not a constant: an install minted already
+  // bound to a signed-in account carries the once-per-account starter instead.
   const other = fakeStore();
-  await publik.provisionInstall({ build: build(), store: other, fetchImpl: fetchReturning(201, mintResponse({ starter_micros: 500000, balance_micros: 500000, starting_credit_micros: 500000 })) });
-  assert.equal(viewOf(other).card.balance, '$0.50 of free starter usage');
+  await publik.provisionInstall({ build: build(), store: other, fetchImpl: fetchReturning(201, mintResponse({
+    starter_micros: 50000, balance_micros: 50000, starting_credit_micros: 50000,
+    wallet: { claim_state: 'claimed', balance_micros: 50000, starter: { remaining_micros: 50000 }, week: { used_micros: 0, budget_micros: null } }
+  })) });
+  assert.equal(viewOf(other).card.balance, '$0.05 of free starter usage');
   // No card before provisioning, and none for a build without a key.
   assert.equal(publik.ctaView({ connected: false }), null);
   assert.equal(publik.ctaView(null), null);
@@ -115,7 +123,7 @@ test('a claim_url off publikhq.com is dropped: the card has no button and publik
   assert.equal(publik.resolveOpenTarget('https://publikhq.com/dashboard/api', ''), 'https://publikhq.com/dashboard/api');
 
   // The low-starter banner drops a foreign top_up_url too.
-  const low = publik.lowStarterNotice({ connected: true, claimState: 'anonymous', starterMicros: 250000, balanceMicros: 10000, topUpUrl: 'https://evil.example/top-up', claimUrl: '' });
+  const low = publik.lowStarterNotice({ connected: true, claimState: 'anonymous', starterMicros: 50000, balanceMicros: 2000, topUpUrl: 'https://evil.example/top-up', claimUrl: '' });
   assert.ok(low);
   assert.equal(low.action, null);
 });
@@ -130,10 +138,10 @@ test('"Later" marks the card seen and leaves the key, the provider and the balan
 
   const after = store.data;
   assert.equal(after.apiKeys.publik, KEY, 'the key stays');
-  assert.equal(after.provider, 'publik', 'still on publik API — the free starter is kept');
+  assert.equal(after.provider, 'publik', 'still on publik API — the balance is kept');
   assert.equal(after.publik.cardShown, true);
-  assert.equal(after.publik.starterMicros, 250000);
-  assert.equal(after.publik.balanceMicros, 250000);
+  assert.equal(after.publik.starterMicros, 0);
+  assert.equal(after.publik.balanceMicros, 0);
   assert.equal(after.publik.claimUrl, CLAIM_URL, 'the settings button can still open the claim page later');
   for (const k of Object.keys(before.publik)) {
     if (k === 'cardShown') continue;
@@ -186,8 +194,8 @@ test('a 402 is the response\'s message plus exactly one link, top_up_url', () =>
 
 test('copy rule: the CTA copy says "publik API", dollars, never "credits", never the provider, never "OpenAI API access"', () => {
   assert.equal(publik.COPY.whyItCosts, WHY);
-  const strings = [publik.COPY.whyItCosts, publik.COPY.whyItCostsToggle, ...Object.values(publik.COPY.cta), publik.starterLine({ starterMicros: 250000 })];
-  const low = publik.lowStarterNotice({ connected: true, claimState: 'anonymous', starterMicros: 250000, balanceMicros: 1000, topUpUrl: CLAIM_URL });
+  const strings = [publik.COPY.whyItCosts, publik.COPY.whyItCostsToggle, ...Object.values(publik.COPY.cta), publik.starterLine({ starterMicros: 50000 })];
+  const low = publik.lowStarterNotice({ connected: true, claimState: 'anonymous', starterMicros: 50000, balanceMicros: 1000, topUpUrl: CLAIM_URL });
   strings.push(low.message, low.action.label);
   for (const s of strings) {
     assert.doesNotMatch(s, /OpenAI API access/i, s);
@@ -198,7 +206,8 @@ test('copy rule: the CTA copy says "publik API", dollars, never "credits", never
   }
   // The renderer and the settings card carry the same labels and the one sentence's toggle.
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
-  assert.match(html, /id="publik-link"[^>]*>Link this computer &amp; pick a plan</);
+  // One primary button on the card; its label comes from renderer/publik-card.js.
+  assert.match(html, /id="publik-primary"/);
   assert.match(html, /id="publik-why-summary"[^>]*>Why it costs money</);
   assert.match(html, /id="publik-why-text"/);
   const js = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');

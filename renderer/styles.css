@@ -206,7 +206,9 @@ button:focus { outline: none; }
   border-radius: var(--r-panel);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
 }
-#panel { position: relative; z-index: 1; padding: 20px 22px; animation: overlayIn 260ms cubic-bezier(0.22,1,0.36,1); }
+/* The top padding leaves room for #stt-status (top 14px + line 12px): the first
+   line of a scrolled answer never shows under the label (0.2.11 smoke test). */
+#panel { position: relative; z-index: 1; padding: 32px 22px 20px; animation: overlayIn 260ms cubic-bezier(0.22,1,0.36,1); }
 #panel-wrap.collapsed { display: none; } /* hides the panel with its status label, live dot, sidebar and toast */
 
 /* ============================ Messages ============================ */
@@ -244,6 +246,7 @@ button:focus { outline: none; }
 }
 .ai-text code { font-family: var(--mono); font-size: 0.92em; }
 .ai-text p code { background: rgba(255,255,255,0.10); padding: 1px 5px; border-radius: 5px; }
+.ai-thinking { color: var(--tx-mut); font-style: italic; margin-right: 4px; }
 .ai-caret { display:inline-block; width:7px; height:1.05em; vertical-align:-2px; background: var(--accent); border-radius:1px; animation: blink 1s step-end infinite; margin-left: 2px; }
 .status-line { color: var(--tx-mut); font-size: 13px; margin: 10px 0 2px; }
 #cue-status { display: none; margin: 8px 0 2px; padding: 8px 12px; border-radius: 10px;
@@ -578,6 +581,12 @@ button:focus { outline: none; }
 .publik-line.warn { color: #fcd3a5; }
 #cue-status button { margin-left: 10px; padding: 4px 10px; border-radius: 8px; border: 1px solid rgba(60,131,245,0.40); background: rgba(60,131,245,0.14); color: #cfe0ff; font: 600 11.5px var(--font); cursor: pointer; }
 #cue-status button:hover { background: rgba(60,131,245,0.24); }
+/* publik first in a toast: "Switch to publik" / "Sign in with publik" is the
+   blue button; a second button ("Fix my key") is quiet. */
+#cue-status button[data-kind="switch"], #cue-status button[data-kind="disclosure"] { border-color: transparent; background: var(--accent); color: #fff; }
+#cue-status button[data-kind="switch"]:hover, #cue-status button[data-kind="disclosure"]:hover { filter: brightness(1.08); background: var(--accent); }
+#cue-status button.secondary { margin-left: 6px; border-color: rgba(255,255,255,0.18); background: transparent; color: var(--tx-2); }
+#cue-status button.secondary:hover { background: rgba(255,255,255,0.08); }
 #onboard.dialog .ob-dots, #onboard.dialog .ob-actions { display: none; }
 #onboard.card .ob-actions { display: none; }
 /* First-run card (CONTRACT §12.1): balance line, justification, primary CTA */
@@ -587,6 +596,26 @@ button:focus { outline: none; }
 .ob-buttons button.ob-cta:hover { filter: brightness(1.08); background: var(--accent); }
 .publik-card .s-action.primary { border-color: transparent; background: var(--accent); color: #fff; }
 .publik-card .s-action.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); color: #fff; }
+/* publik first: the card leads the first tab, one big button */
+.publik-lede { color: #fff; font-size: 15px; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; }
+.publik-card .s-action.publik-primary { align-self: stretch; padding: 10px 14px; font-size: 14px; font-weight: 600; border-radius: 10px; }
+.publik-secondary { margin-top: 2px; }
+/* "Use your own API key instead": closed by default at the bottom */
+.byo-section { margin-top: 10px; border-top: 1px solid var(--bd-hair); padding-top: 10px; }
+.byo-section > summary { cursor: pointer; color: var(--tx-2); font-size: 13px; font-weight: 600; list-style: none; }
+.byo-section > summary::-webkit-details-marker { display: none; }
+.byo-section > summary::before { content: '▸ '; color: var(--tx-mut); }
+.byo-section[open] > summary::before { content: '▾ '; }
+.byo-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+/* First-run prompt in the overlay while nothing can answer */
+.setup-cta { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 10px; padding: 14px 16px; border-radius: 14px; border: 1px solid rgba(60,131,245,0.35); background: rgba(60,131,245,0.10); animation: fadeUp 200ms ease both; }
+.setup-title { color: #fff; font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+.setup-body { color: var(--tx-2); font-size: 13.5px; line-height: 1.4; }
+.setup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; }
+.setup-primary { border: none; background: var(--accent); color: #fff; font: 600 14px var(--font); padding: 9px 18px; border-radius: var(--r-pill); cursor: pointer; }
+.setup-primary:hover { filter: brightness(1.08); }
+.setup-secondary { border: none; background: transparent; color: var(--tx-mut); font: 500 12.5px var(--font); padding: 4px 2px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.setup-secondary:hover { color: var(--tx-2); }
 .publik-why { margin: 0; }
 .publik-why summary { cursor: pointer; color: #9dc0ff; font-size: 12px; font-weight: 600; list-style: none; }
 .publik-why summary::-webkit-details-marker { display: none; }
@@ -616,13 +645,21 @@ button:focus { outline: none; }
 /* ============================ Onboarding / tutorial ============================ */
 #onboard-scrim { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(0,0,0,0.45); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 #onboard-scrim.hidden { display: none; }
-#onboard { width: min(470px, 93vw); padding: 26px 28px 18px; text-align: center; animation: overlayIn 240ms cubic-bezier(0.22,1,0.36,1); }
+#onboard { width: min(470px, 93vw); padding: 22px 28px 16px; text-align: center; animation: overlayIn 240ms cubic-bezier(0.22,1,0.36,1);
+  /* The window is 600 px tall: the dialog never grows past it; the text scrolls instead of the buttons being cut off. */
+  max-height: calc(100vh - 16px); box-sizing: border-box; display: flex; flex-direction: column; }
+#onboard > * { flex-shrink: 0; }
+#onboard > .ob-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+#onboard > .ob-after { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .ob-dots { display: flex; gap: 6px; justify-content: center; margin-bottom: 20px; }
 .ob-dots span { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.20); transition: all 220ms ease; }
 .ob-dots span.on { background: var(--accent); width: 20px; border-radius: 4px; }
-.ob-icon { display: flex; justify-content: center; margin-bottom: 14px; font-size: 34px; line-height: 1; }
+.ob-icon { display: flex; justify-content: center; margin-bottom: 12px; font-size: 34px; line-height: 1; }
 .ob-title { font-size: 20px; font-weight: 700; color: var(--tx-1); margin-bottom: 10px; letter-spacing: -0.01em; }
-.ob-body { font-size: 14px; line-height: 1.6; color: var(--tx-2); text-align: left; -webkit-user-select: text; user-select: text; }
+.ob-body { font-size: 14px; line-height: 1.5; color: var(--tx-2); text-align: left; -webkit-user-select: text; user-select: text; }
+.ob-error.hidden { display: none; }
+.ob-error { text-align: left; margin-top: 10px; padding: 8px 10px; border-radius: 10px; background: rgba(245,158,11,0.10); border: 1px solid rgba(245,158,11,0.35); color: #fcd3a5; font-size: 12.5px; line-height: 1.45; }
+.ob-error strong { color: #fde0b8; }
 .ob-body strong { color: #fff; font-weight: 600; }
 .ob-body .kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 6px; background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.16); font-size: 12px; font-weight: 600; color: #fff; }
 .ob-body ul { padding-left: 18px; margin: 8px 0; }
@@ -630,12 +667,25 @@ button:focus { outline: none; }
 .ob-body .hl { color: #9dc0ff; font-weight: 600; }
 .ob-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .ob-buttons:empty { display: none; }
+/* publik first (step 1): one line that says how cue runs, then the blue
+   "Sign in with publik" with a small "Use my own key instead" link under
+   it, then the cost and data-path fine print. */
+.ob-body .ob-lede { font-size: 16px; font-weight: 600; color: #fff; text-align: center; line-height: 1.4; }
+.ob-body .ob-sub { margin-top: 8px; text-align: center; color: var(--tx-2); font-size: 13px; }
+.ob-buttons button.ob-link { flex: 0 0 100%; min-width: 0; padding: 2px 6px; border: none; background: transparent; color: var(--tx-2); font-size: 12px; font-weight: 500; text-decoration: underline; }
+.ob-buttons button.ob-link:hover { background: transparent; color: #fff; }
+.ob-after { margin-top: 10px; text-align: left; color: var(--tx-mut); font-size: 11.5px; line-height: 1.45; -webkit-user-select: text; user-select: text; }
+.ob-after.hidden { display: none; }
+.ob-after p { margin: 0 0 6px; }
+.ob-after strong { color: var(--tx-2); font-weight: 600; }
+.ob-after a { color: #9dc0ff; text-decoration: underline; cursor: pointer; }
 .ob-buttons button { flex: 1; min-width: 150px; padding: 10px; border-radius: 10px; border: 1px solid rgba(60,131,245,0.40); background: rgba(60,131,245,0.14); color: #cfe0ff; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 140ms ease; }
 .ob-buttons button:hover { background: rgba(60,131,245,0.24); }
 .ob-actions { display: flex; align-items: center; margin-top: 22px; }
 .ob-ghost { border: none; background: transparent; color: var(--tx-mut); font-size: 13px; font-weight: 500; cursor: pointer; padding: 8px 10px; border-radius: 8px; }
 .ob-ghost:hover { color: #fff; background: rgba(255,255,255,0.06); }
 .ob-primary { border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; padding: 9px 22px; border-radius: 999px; cursor: pointer; transition: filter 140ms ease; }
+.ob-primary.quiet { background: transparent; color: var(--tx-2); border: 1px solid var(--bd-strong); }
 .ob-primary:hover { filter: brightness(1.08); }
 
 /* ============================ Two-column panel layout ============================ */
@@ -837,7 +887,7 @@ button:focus { outline: none; }
 /* ============================ STT status ============================ */
 #stt-status {
   position: absolute; top: 14px; left: 14px; z-index: 4;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  font-size: 9px; line-height: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
   white-space: nowrap; pointer-events: none;
 }
 .stt-disconnected { color: rgba(255,255,255,0.25); }

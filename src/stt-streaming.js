@@ -5,7 +5,7 @@
 // This module manages a persistent WebSocket connection for real-time transcription
 // with sub-200ms latency, interim results, and automatic reconnection.
 
-const { looksLikeHallucination, transcribeGemini, buildVocabPrompt } = require('./stt');
+const { looksLikeHallucination, transcribeGemini, buildVocabPrompt, publikOwnsAutoAudio } = require('./stt');
 const { pcmToWav } = require('./wav');
 const { GEMINI_TRANSCRIBE_LIVE_MODEL } = require('./llm');
 
@@ -615,6 +615,12 @@ function createStreamingSTT(settings, channel, callbacks) {
 
   if (selectedProvider === 'local') {
     return { type: 'batch', provider: selectedProvider, instance: null };
+  }
+  // publik as the provider with Auto audio: the batch path transcribes
+  // through publik API; an own streaming key is used only when picked on
+  // the Audio tab (src/stt.js publikOwnsAutoAudio).
+  if (publikOwnsAutoAudio(settings)) {
+    return { type: 'batch', provider: 'publik', instance: null };
   }
 
   // Priority 1: Deepgram (purpose-built for streaming STT, lowest latency)
