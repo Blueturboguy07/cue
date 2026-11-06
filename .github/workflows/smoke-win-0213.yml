@@ -1,12 +1,12 @@
-name: smoke-win-0212
+name: smoke-win-0213
 
-# Test-only branch. Smoke test of the RELEASED cue 0.2.12 Windows build with real
+# Test-only branch. Smoke test of the RELEASED cue 0.2.13 Windows build with real
 # sound (VB-CABLE). No publik key is passed in: cue signs in through its own claim
 # code, which leaves the runner only RSA-encrypted (the private key stays on the
 # tester's Mac). The tester revokes the install afterwards.
 on:
   push:
-    branches: ['smoke/cue-0.2.12-win']
+    branches: ['smoke/cue-0.2.13-win']
   workflow_dispatch: {}
 
 permissions:
@@ -25,7 +25,7 @@ jobs:
         uses: LABSN/sound-ci-helpers@v1.0.4
       - name: Prepare (default output, test speech, install the released exe)
         shell: powershell
-        run: .\scripts\bugfix-lab\smoke-0212\win-prep.ps1 -Url 'https://github.com/Blueturboguy07/cue/releases/download/v0.2.12/cue-win-x64.exe' -Sha256 '5152b6c2e09068352acb1f694a37ae20c9ddd3ab0482539eb831cdf4e6e2f69d'
+        run: .\scripts\bugfix-lab\smoke-0212\win-prep.ps1 -Url 'https://github.com/Blueturboguy07/cue/releases/download/v0.2.13/cue-win-x64.exe' -Sha256 '84446fb34541524ee2137499b0149eef5facb9a7c99ff490778a2871bb813dff'
       - name: Phase A (launch, Sign in with publik, encrypted claim URL)
         shell: powershell
         run: node scripts/bugfix-lab/smoke-0212/win-smoke.mjs a
@@ -35,7 +35,7 @@ jobs:
           name: claim
           path: out/claim/claim.enc
           retention-days: 1
-      - name: Phase B (wait for the link, real sound, Stop right after the last words, questions)
+      - name: Phase B (wait for the link, real sound, Stop right after the last words, questions, Disconnect)
         shell: powershell
         run: node scripts/bugfix-lab/smoke-0212/win-smoke.mjs b
       - name: cue log lines
@@ -53,7 +53,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: win-smoke-0212
+          name: win-smoke-0213
           path: |
             out/*.json
             out/*.png

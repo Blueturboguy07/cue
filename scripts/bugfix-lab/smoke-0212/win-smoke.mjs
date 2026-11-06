@@ -1,11 +1,11 @@
-// Windows runner driver for the RELEASED cue 0.2.12 (cue-win-x64.exe).
+// Windows runner driver for the RELEASED cue 0.2.13 (cue-win-x64.exe). (Folder name smoke-0212 kept.)
 //   node win-smoke.mjs a   launch cue (hooks), Sign in with publik, write the claim URL
 //                          ENCRYPTED to OUT/claim/claim.enc (RSA-OAEP, the private key
 //                          never leaves the Mac). The URL is never printed.
 //   node win-smoke.mjs b   wait for the link, real-sound meeting audio (VB-CABLE, speech-A),
 //                          End session right after the last word (stop flush + notes),
 //                          What should I say?, one typed question, one screenshot
-//                          question (fixed test image), quit.
+//                          question (fixed test image), Settings > Disconnect publik, quit.
 // No publik key is passed in: cue mints its own install key on the runner, the way a
 // user's copy does. Nothing here prints a key, a token or the claim URL.
 import { spawn } from 'node:child_process';
@@ -134,6 +134,21 @@ if (mode === 'a') {
   step('end session', await K.click(PORT, opts, '#stop-btn', 'End session'));
   await K.sleep(3000);
   res.llm = await llmRecords();
+  // Wire view: field names of every chat request body (no text, no key).
+  res.wire = await K.mainEval(IPORT, 'global.__smoke.wire.slice()');
+  step('wire bodies', res.wire.map((w) => w.model + ' ' + w.max_tokens + ' ' + w.keys.join(',') + ' reasoning_effort=' + w.reasoning_effort));
+  // Disconnect publik from Settings: the app revokes its own install.
+  step('open settings', await K.click(PORT, opts, '#tb-settings-btn'));
+  await K.sleep(700);
+  step('publik tab', await K.click(PORT, opts, '#s-tab-main'));
+  await K.sleep(500);
+  step('disconnect', await K.click(PORT, opts, '#publik-disconnect', 'Disconnect publik'));
+  await K.sleep(2500);
+  res.afterDisconnect = { publik: await K.pageEval(PORT, opts, PSTATE), text: await K.pageEval(PORT, opts, "((document.getElementById('publik-settings') || {}).innerText || '').slice(0, 300)") };
+  step('after disconnect', res.afterDisconnect);
+  await K.pageShot(PORT, opts, join(OUT, 'win-disconnected.png'));
+  await K.click(PORT, opts, '#s-close', 'Done');
+  await K.sleep(500);
   res.answers = await K.pageEval(PORT, opts, K.ANSWERS);
   res.events = await K.pageEval(PORT, opts, "(window.__ev||[]).filter((e) => e.ch !== 'llm:token')");
   res.safety = await K.mainEval(IPORT, K.MAIN_SAFETY);

@@ -132,7 +132,12 @@ function wrapTranscriptions(client, Real) {
       togglesAtStart: S.toggles.length };
     S.stt.push(rec);
     const rule = S.sttFaults.find((r) => r.times > 0 && (!r.afterToggles || S.toggles.length >= r.afterToggles) && (!r.afterCalls || rec.n > r.afterCalls));
-    if (rule) {
+    if (rule && rule.delayMs) {
+      // A slow answer, not a failure: wait, then send the real request.
+      rule.times--; rec.injected = { delayMs: rule.delayMs, label: rule.label || null };
+      note('stt call #' + rec.n + ' delayed ' + rule.delayMs + ' ms by injection');
+      await new Promise((r) => setTimeout(r, rule.delayMs));
+    } else if (rule) {
       rule.times--;
       const headers = rule.retryAfterS ? { 'retry-after': String(rule.retryAfterS) } : {};
       const err = Real.APIError.generate(rule.status || 429, { error: { message: 'smoke-injected ' + (rule.label || 'fault') } }, undefined, headers);
@@ -152,11 +157,41 @@ function wrapTranscriptions(client, Real) {
     } finally { rec.endMs = Date.now() - rec.t; }
   };
 }
+
+// 4c. Wire view (0.2.13): when cue gives the SDK its own fetch (publik chat
+// clients do), wrap it to record the JSON body's field names and caps of each
+// chat request as it leaves (no message text, no headers, no key).
+S.wire = []; S.chatFaults = [];
+function smokeWireOpts(opts) {
+  if (!opts || typeof opts.fetch !== 'function') return opts;
+  const inner = opts.fetch;
+  return { ...opts, fetch: async (input, init) => {
+    try {
+      const url = String((input && input.url) || input);
+      if (/chat\/completions/.test(url) && init && typeof init.body === 'string') {
+        const b = JSON.parse(init.body);
+        S.wire.push({ at: new Date().toISOString(), host: new URL(url).host, path: new URL(url).pathname, keys: Object.keys(b).sort(), model: b.model, max_tokens: b.max_tokens, stream: b.stream,
+          reasoning_effort: 'reasoning_effort' in b ? b.reasoning_effort : '(absent)', reasoning: 'reasoning' in b ? JSON.stringify(b.reasoning) : '(absent)', messages: Array.isArray(b.messages) ? b.messages.length : null });
+      }
+    } catch (_) {}
+    return inner(input, init);
+  } };
+}
+// Chat fault injection (content-filter simulation): S.chatFaults is a queue of
+// { times, model?, chunks: [text...], finish } rules. A matching call sends NO
+// request: cue gets a fake stream with those chunks and that finish reason.
+function fakeChatPromise(rule) {
+  const chunks = (rule.chunks || []).map((c) => ({ choices: [{ index: 0, delta: { content: c }, finish_reason: null }] }));
+  chunks.push({ choices: [{ index: 0, delta: {}, finish_reason: rule.finish || 'content_filter' }] });
+  const stream = { async *[Symbol.asyncIterator]() { for (const ch of chunks) { await new Promise((r) => setTimeout(r, 60)); yield ch; } } };
+  const data = Promise.resolve(stream);
+  return { withResponse: async () => ({ data: stream, response: new Response(null, { status: 200 }) }), then: (a, b) => data.then(a, b), catch: (b) => data.catch(b) };
+}
 function wrapOpenAI(Real) {
   if (wrappedOpenAI) return wrappedOpenAI;
   class SmokeOpenAI extends Real {
     constructor(opts) {
-      super(opts);
+      super(smokeWireOpts(opts));
       wrapTranscriptions(this, Real);
       const comp = this.chat && this.chat.completions;
       if (!comp || comp.__smoke) return;
@@ -173,6 +208,13 @@ function wrapOpenAI(Real) {
           finish: null, contentChars: 0, reasoningChars: 0, chunks: 0, usage: null, error: null, endMs: null,
         };
         S.llm.push(rec);
+        const rule = S.chatFaults.find((r) => r.times > 0 && (!r.model || r.model === rec.model));
+        if (rule) {
+          rule.times--; rec.injected = { finish: rule.finish || 'content_filter', chunks: (rule.chunks || []).length, label: rule.label || null };
+          rec.finish = rule.finish || 'content_filter'; rec.contentChars = (rule.chunks || []).join('').length; rec.endMs = 0;
+          note('llm request model=' + rec.model + ' max_tokens=' + rec.max_tokens + ' answered by the harness (simulated ' + rec.finish + ', no request sent)');
+          return fakeChatPromise(rule);
+        }
         note('llm request model=' + rec.model + ' max_tokens=' + rec.max_tokens + ' image=' + rec.image);
         const p = orig(body, reqOpts);
         if (p && typeof p.withResponse === 'function') {

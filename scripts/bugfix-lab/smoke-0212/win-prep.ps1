@@ -1,4 +1,4 @@
-# Prepare a windows-latest runner for the cue 0.2.12 smoke test:
+# Prepare a windows-latest runner for the cue 0.2.13 smoke test:
 #   1. confirm the virtual output (VB-CABLE, from LABSN/sound-ci-helpers) is the default playback device,
 #   2. use the committed test speech (speech-A.wav, the same file as the Mac test; 53.7 s, pauses, quiet short answers, a 15 s run-on),
 #   3. download the RELEASED cue-win-x64.exe, check its sha256, install it per-user (NSIS /S),
@@ -54,7 +54,7 @@ $pkg = Get-Content (Join-Path $appDir 'package.json') -Raw | ConvertFrom-Json
 Write-Host "installed: $($exe.FullName) version $($pkg.version)"
 Select-String -Path (Join-Path $appDir 'main.js') -Pattern "audio: 'loopback'" | Select-Object -First 1 | ForEach-Object { Write-Host "main.js $($_.LineNumber): $($_.Line.Trim())" }
 Select-String -Path (Join-Path $appDir 'src\llm.js') -Pattern "PUBLIK_THINKING_HEADROOM = " | ForEach-Object { Write-Host "llm.js $($_.LineNumber): $($_.Line.Trim())" }
-Select-String -Path (Join-Path $appDir 'src\publik-stt-batcher.js') -Pattern "maxMs: 14000|softMs: 8000" | ForEach-Object { Write-Host "publik-stt-batcher.js $($_.LineNumber): $($_.Line.Trim())" }
+Select-String -Path (Join-Path $appDir 'src\publik-stt-batcher.js') -Pattern "maxMs: 14000|softMs: 8000|shortReplyMs: 700|catchUpMs: 3000" | ForEach-Object { Write-Host "publik-stt-batcher.js $($_.LineNumber): $($_.Line.Trim())" }
 Get-Process -Name cue -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 "version=$($pkg.version)`nsha256=$hash" | Out-File -Encoding utf8 (Join-Path $out 'installed.txt')
 
