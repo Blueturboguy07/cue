@@ -1,0 +1,350 @@
+name: publik build
+
+# Builds the files of a cue release and keeps them as workflow artifacts.
+# It never creates, changes or publishes a GitHub release.
+#
+#   macOS    the two apps (x64, arm64), UNSIGNED. No certificate lives in CI:
+#            the apps are signed with the Developer ID, notarized and stapled
+#            on the release Mac, then zipped.
+#   Windows  the normal NSIS installer, unsigned (there is no Windows
+#            certificate), then a launch test of the installed app.
+#   Linux    the two AppImages, then a launch test of the x64 app.
+#
+# The launch test starts cue against a listener on the runner and checks the
+# publik usage telemetry: one app_opened arrives, and none with DO_NOT_TRACK=1.
+
+on:
+  push:
+    branches:
+      - 'telemetry/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publik-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The launch test. Input: CUE_EXE (the app's executable), CUE_ARGS (optional).
+  # It talks only to 127.0.0.1: the telemetry URL and the publik API base URL
+  # both point at the listener, so nothing reaches publikhq.com.
+  TELEMETRY_CHECK_JS: |
+    const http = require('node:http');
+    const { spawn, spawnSync } = require('node:child_process');
+    const fs = require('node:fs');
+    const exe = process.env.CUE_EXE;
+    const args = (process.env.CUE_ARGS || '').split(' ').filter(Boolean);
+    const version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+    const osName = { win32: 'windows', linux: 'linux', darwin: 'macos' }[process.platform];
+    const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const ALLOWED = ['v', 'app', 'install_id', 'event', 'app_version', 'os', 'arch'];
+    const seen = [];
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const server = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        seen.push({
+          method: req.method, url: req.url, origin: req.headers.origin || null,
+          contentType: req.headers['content-type'] || null,
+          authorization: req.headers.authorization ? 'present' : 'absent',
+          body: Buffer.concat(chunks).toString('utf8'),
+        });
+        res.writeHead(req.url === '/api/v1/telemetry' ? 204 : 404).end();
+      });
+    });
+    const isTelemetry = (r) => r.method === 'POST' && r.url === '/api/v1/telemetry';
+    function stop(child) {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F']);
+      else { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
+    }
+    async function launch(port, extraEnv, seconds, stopOnEvent) {
+      const env = { ...process.env, ...extraEnv,
+        PUBLIK_TELEMETRY_URL: `http://127.0.0.1:${port}/api/v1/telemetry`,
+        PUBLIK_API_BASE_URL: `http://127.0.0.1:${port}/api/v1`,
+        PUBLIK_TELEMETRY_DEBUG: '1' };
+      const from = seen.length;
+      let exited = null;
+      let stderr = '';
+      const child = spawn(exe, args, { env, stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
+      child.stderr.on('data', (d) => { stderr += d; });
+      child.on('exit', (code, signal) => { exited = { code, signal }; });
+      child.on('error', (err) => { exited = { error: err.message }; });
+      const deadline = Date.now() + seconds * 1000;
+      while (Date.now() < deadline && !exited) {
+        if (stopOnEvent && seen.slice(from).some(isTelemetry)) { await sleep(3000); break; }
+        await sleep(250);
+      }
+      const alive = !exited;
+      stop(child);
+      await sleep(1500);
+      return { alive, exited, requests: seen.slice(from),
+        debug: stderr.split(/\r?\n/).filter((line) => line.startsWith('publik-telemetry:')) };
+    }
+    server.listen(0, '127.0.0.1', async () => {
+      const port = server.address().port;
+      const problems = [];
+      const on = await launch(port, { DO_NOT_TRACK: '', PUBLIK_TELEMETRY: '' }, 20, true);
+      const events = on.requests.filter(isTelemetry);
+      if (!on.alive) problems.push(`cue stopped by itself: ${JSON.stringify(on.exited)}`);
+      if (events.length !== 1) problems.push(`expected 1 telemetry request, got ${events.length}`);
+      for (const r of events) {
+        let b = {};
+        try { b = JSON.parse(r.body); } catch { problems.push('body is not JSON'); }
+        if (r.origin) problems.push('the request has a web Origin header');
+        if (!/^application\/json/.test(r.contentType || '')) problems.push(`content type ${r.contentType}`);
+        const extra = Object.keys(b).filter((k) => !ALLOWED.includes(k));
+        if (extra.length) problems.push(`extra fields: ${extra}`);
+        if (b.v !== 1) problems.push(`v is ${b.v}`);
+        if (b.app !== 'cue') problems.push(`app is ${b.app}`);
+        if (b.event !== 'app_opened') problems.push(`event is ${b.event}`);
+        if (b.app_version !== version) problems.push(`app_version is ${b.app_version}, want ${version}`);
+        if (b.os !== osName) problems.push(`os is ${b.os}`);
+        if (!['arm64', 'x64'].includes(b.arch)) problems.push(`arch is ${b.arch}`);
+        if (!UUID4.test(b.install_id || '')) problems.push('install_id is not a lowercase UUID v4');
+      }
+      const off = await launch(port, { DO_NOT_TRACK: '1' }, 10, false);
+      if (!off.alive) problems.push(`with DO_NOT_TRACK=1 cue stopped by itself: ${JSON.stringify(off.exited)}`);
+      if (off.requests.some(isTelemetry)) problems.push('a telemetry request arrived with DO_NOT_TRACK=1');
+      const result = { pass: problems.length === 0, problems, version, os: osName, on, off };
+      fs.writeFileSync('telemetry-check.json', JSON.stringify(result, null, 2) + '\n');
+      console.log(JSON.stringify(result, null, 2));
+      server.close();
+      process.exit(result.pass ? 0 : 1);
+    });
+
+jobs:
+  macos:
+    name: macOS apps (x64 and arm64, unsigned)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Embed publik app token
+        # The same step as release.yml. The token is a publishable identifier.
+        shell: bash
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PUBLIK_APP_TOKEN" || { echo "PUBLIK_APP_TOKEN secret is not set"; exit 1; }
+          node -e '
+            const fs = require("fs"); const p = "src/publik-build.json";
+            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+            cfg.appToken = process.env.PUBLIK_APP_TOKEN;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+          '
+          node -e 'const c = require("./src/publik-build.json"); if (!c.appToken) process.exit(1); console.log("publik app token embedded for", c.appSlug)'
+
+      - name: Build the two apps (no signing)
+        # electron-builder.cjs signs only with MAC_SIGN=1. It is not set here.
+        run: npx electron-builder --mac dir --x64 --arm64
+
+      - name: Check and pack the apps
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          pack() { # <dist folder> <arch name>
+            local app="dist/$1/cue.app"
+            test -d "$app"
+            test -f "$app/Contents/Resources/app/src/publik-telemetry.cjs"
+            node -e 'const c = require(process.argv[1]); if (!c.appToken) { console.error("no app token in the packed app"); process.exit(1); }' "$PWD/$app/Contents/Resources/app/src/publik-build.json"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
+            lipo -archs "$app/Contents/MacOS/cue"
+            ditto -c -k --keepParent "$app" "cue-$version-mac-$2-unsigned-app.zip"
+          }
+          pack mac x64
+          pack mac-arm64 arm64
+          ls -l ./*.zip
+
+      - name: Upload the x64 app
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-x64-unsigned-app
+          path: cue-*-mac-x64-unsigned-app.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload the arm64 app
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-arm64-unsigned-app
+          path: cue-*-mac-arm64-unsigned-app.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  windows:
+    name: Windows installer (x64, unsigned)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Embed publik app token
+        shell: bash
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PUBLIK_APP_TOKEN" || { echo "PUBLIK_APP_TOKEN secret is not set"; exit 1; }
+          node -e '
+            const fs = require("fs"); const p = "src/publik-build.json";
+            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+            cfg.appToken = process.env.PUBLIK_APP_TOKEN;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+          '
+          node -e 'const c = require("./src/publik-build.json"); if (!c.appToken) process.exit(1); console.log("publik app token embedded for", c.appSlug)'
+
+      - name: Build Windows
+        run: npm run dist:win
+
+      - name: Check the packed app
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/cue-win-x64.exe
+          test -f dist/win-unpacked/resources/app/src/publik-telemetry.cjs
+          node -e 'const c = require(process.argv[1]); if (!c.appToken) { console.error("no app token in the packed app"); process.exit(1); }' "$PWD/dist/win-unpacked/resources/app/src/publik-build.json"
+
+      - name: Launch test (silent install, then telemetry against a local listener)
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $installer = Start-Process -FilePath (Resolve-Path dist\cue-win-x64.exe) -ArgumentList '/S' -Wait -PassThru
+          Write-Host "installer exit code: $($installer.ExitCode)"
+          if ($installer.ExitCode -ne 0) { exit 1 }
+          $exe = Get-ChildItem -Path "$env:LOCALAPPDATA\Programs" -Recurse -Filter cue.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { Write-Host 'installed cue.exe not found'; exit 1 }
+          Write-Host "installed: $($exe.FullName)"
+          $env:CUE_EXE = $exe.FullName
+          node -e "eval(process.env.TELEMETRY_CHECK_JS)"
+          exit $LASTEXITCODE
+
+      - name: Upload the launch test result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-telemetry-check
+          path: telemetry-check.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/cue-win-x64.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  linux:
+    name: Linux AppImages (x64 and arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check and unit tests
+        # Before the token step: one test checks that the committed token is empty.
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in main.js preload.js electron-builder.cjs renderer/*.js src/*.js src/*.cjs scripts/*.js test/*.js; do
+            node --check "$file"
+          done
+          npm test
+
+      - name: Embed publik app token
+        shell: bash
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PUBLIK_APP_TOKEN" || { echo "PUBLIK_APP_TOKEN secret is not set"; exit 1; }
+          node -e '
+            const fs = require("fs"); const p = "src/publik-build.json";
+            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+            cfg.appToken = process.env.PUBLIK_APP_TOKEN;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+          '
+          node -e 'const c = require("./src/publik-build.json"); if (!c.appToken) process.exit(1); console.log("publik app token embedded for", c.appSlug)'
+
+      - name: Build Linux x64 and arm64
+        run: npm run dist:linux && npm run dist:linux:arm64
+
+      - name: Check the packed apps
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l dist/*.AppImage
+          for dir in linux-unpacked linux-arm64-unpacked; do
+            test -f "dist/$dir/resources/app/src/publik-telemetry.cjs"
+            node -e 'const c = require(process.argv[1]); if (!c.appToken) { console.error("no app token in the packed app"); process.exit(1); }' "$PWD/dist/$dir/resources/app/src/publik-build.json"
+          done
+
+      - name: Launch test (x64 app under Xvfb, telemetry against a local listener)
+        # Does not stop the build: a runner with no display libraries is not a
+        # fault of the app. The result is in the log and in the artifact.
+        continue-on-error: true
+        timeout-minutes: 6
+        shell: bash
+        env:
+          CUE_EXE: ${{ github.workspace }}/dist/linux-unpacked/cue
+          CUE_ARGS: --no-sandbox
+        run: xvfb-run -a node -e 'eval(process.env.TELEMETRY_CHECK_JS)'
+
+      - name: Upload the launch test result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-telemetry-check
+          path: telemetry-check.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload the AppImages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimages
+          path: dist/*.AppImage
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

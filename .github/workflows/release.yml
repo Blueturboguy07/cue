@@ -9,7 +9,41 @@ permissions:
   contents: write
 
 jobs:
+  guard:
+    # A release whose files were built by publik-build.yml, then signed,
+    # notarized and checked on the release Mac, waits as a DRAFT that already
+    # holds every file. Publishing that draft creates the tag, and the tag
+    # starts this workflow. It must not build again and put unchecked files
+    # over the checked ones. So: when a release (draft or public) for this tag
+    # already holds files, nothing below runs. The normal path (push the tag
+    # first, no release yet) builds as before. If the check itself fails, the
+    # build does not run.
+    name: Skip when the release already has files
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Count the files of the release for this tag
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          counts=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == env.GITHUB_REF_NAME) | .assets | length')
+          files=$(printf '%s\n' "$counts" | awk '{ total += $1 } END { print total + 0 }')
+          if [ "$files" -gt 0 ]; then
+            echo "Release $GITHUB_REF_NAME already holds $files file(s). Not building: its files stay as they are."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No release files for $GITHUB_REF_NAME yet. Building."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: guard
+    if: needs.guard.outputs.build == 'true'
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
