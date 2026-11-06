@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
+
 jobs:
   test:
     name: Test (Node ${{ matrix.node-version }})

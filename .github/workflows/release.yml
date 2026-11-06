@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
+
 jobs:
   guard:
     # A release whose files were built by publik-build.yml, then signed,

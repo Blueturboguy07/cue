@@ -38,6 +38,10 @@ concurrency:
   group: publik-patch-${{ github.event.client_payload.break_id || inputs.break_id }}
   cancel-in-progress: false
 
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
+
 jobs:
   patch:
     runs-on: ubuntu-latest

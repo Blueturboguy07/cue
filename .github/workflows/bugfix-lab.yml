@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
+
 jobs:
   observe:
     name: cue-windows-meeting-audio-not-started

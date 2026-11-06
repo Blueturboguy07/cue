@@ -53,6 +53,10 @@ concurrency:
 # No default permissions.  Every job asks for exactly what it needs.
 permissions: {}
 
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
+
 jobs:
   # ------------------------------------------------------------------------------------------------
   # gate: decides whether this PR is a loop PR that may proceed, and turns the base-branch policy
