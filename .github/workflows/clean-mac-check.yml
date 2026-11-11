@@ -1,0 +1,102 @@
+name: clean Mac check of a release file
+
+# The Gatekeeper and launch check of a signed macOS file of THIS repo on a
+# clean GitHub macOS runner, with the tools of Blueturboguy07/publik-clean-mac-check
+# (public, no secrets, no app code). That repo downloads public files with plain
+# curl; a DRAFT release's file is readable only with this repo's token, so the
+# file is fetched here with the token and served to check.sh on localhost.
+# publikhq.com is blocked on the runner: nothing reaches production.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (draft or public), for example v0.2.15"
+        required: true
+      version:
+        description: "Expected app version, for example 0.2.15"
+        required: true
+
+permissions:
+  contents: write # a draft release and its files are readable only with push access
+
+env:
+  DO_NOT_TRACK: "1"
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, arch: arm64 }
+          - { os: macos-15-intel, arch: x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out the clean-check tools
+        uses: actions/checkout@v4
+        with:
+          repository: Blueturboguy07/publik-clean-mac-check
+          ref: main
+
+      - name: Block publikhq.com, so a test can not touch production
+        run: |
+          echo "127.0.0.1 publikhq.com www.publikhq.com" | sudo tee -a /etc/hosts
+          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+
+      - name: Gatekeeper is on (negative control)
+        run: bash control.sh
+
+      - name: Fetch the release file with the repo token and serve it on localhost
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          FILE="cue-${{ inputs.version }}-mac-${{ matrix.arch }}.zip"
+          mkdir -p serve
+          gh release download "${{ inputs.tag }}" -R "$GITHUB_REPOSITORY" --pattern "$FILE" --dir serve
+          ls -l serve
+          shasum -a 256 "serve/$FILE"
+          (cd serve && nohup python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &)
+          for i in $(seq 1 30); do curl -sf -o /dev/null -r 0-0 "http://127.0.0.1:8765/$FILE" && break; sleep 1; done
+          printf '[{"slug":"cue","file":"%s","url":"http://127.0.0.1:8765/%s","tag":"%s","runner":"%s"}]\n' "$FILE" "$FILE" "${{ inputs.tag }}" "${{ matrix.arch }}" > draft-apps.json
+          cat draft-apps.json
+
+      - name: Download (quarantine flag on), install to /Applications and open the app
+        run: bash check.sh draft-apps.json ${{ matrix.arch }} cue
+
+      - name: Judge the result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "--- results.jsonl"; cat results/results.jsonl
+          echo "--- log"; cat results/cue-*.log | sed -E 's/pat_[A-Za-z0-9_-]+/pat_REDACTED/g' | tail -60
+          python3 - "${{ inputs.version }}" <<'PY'
+          import json, sys
+          want = sys.argv[1]
+          rows = [json.loads(l) for l in open("results/results.jsonl") if l.strip()]
+          bad = []
+          for r in rows:
+              checks = {
+                  "downloaded": r["downloaded"], "installed": r["installed"],
+                  "staple_app": r["staple_app"], "gatekeeper_app": r["gatekeeper_app"],
+                  "notarized developer id": "Notarized Developer ID" in r["gatekeeper_source"],
+                  "still_up (the app runs after launch)": r["still_up"],
+                  "no damaged message": not r["damaged_message"],
+                  "version %s" % want: r["version"] == want,
+              }
+              for k, v in checks.items():
+                  print(("PASS  " if v else "FAIL  ") + k)
+                  if not v: bad.append(k)
+              print("INFO  opened (first usage event) = %s; the sign-in gate waits for publikhq.com, which this runner blocks" % r["opened"])
+          print("RESULT: " + ("PASS" if rows and not bad else "FAIL"))
+          sys.exit(0 if rows and not bad else 1)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.arch }}
+          path: results
