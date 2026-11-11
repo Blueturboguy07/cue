@@ -106,7 +106,10 @@ async function main() {
   if (exited === null) { await sleep(1000); stopApp(child); await sleep(1000); }
   server.close();
 
-  const lines = stdout.split(/\r?\n/).filter((l) => l.startsWith("publik self-test:"));
+  // The line is matched inside the whole output, not on split lines: an AppImage built with the
+  // type2 runtime (electron-builder 26) prints every extracted path on stdout, block-buffered, so
+  // the app's line can sit glued to a half-flushed path.
+  const lines = stdout.match(/publik self-test:[^\r\n]*/g) ?? [];
   const problems = [];
   if (lines.length !== 1) problems.push(`expected one self-test line, got ${lines.length}: ${JSON.stringify(lines)}`);
   if (lines[0] !== WANT_LINE) problems.push(`the line is ${JSON.stringify(lines[0] ?? null)}, want ${JSON.stringify(WANT_LINE)}`);
@@ -126,7 +129,8 @@ async function main() {
   if (exited && typeof exited === "object" && exited.code !== 0 && exited.code !== null) problems.push(`the app exited with code ${exited.code}`);
   if ((stdout + stderr).includes(KEY)) problems.push("the key was printed");
 
-  const result = { pass: problems.length === 0, problems, want: WANT_LINE, lines, requests: urls, exited, stderrTail: stderr.split(/\r?\n/).slice(-20) };
+  const tail = (s) => s.split(/\r?\n/).slice(-20).map((l) => l.slice(-300));
+  const result = { pass: problems.length === 0, problems, want: WANT_LINE, lines, requests: urls, exited, stdoutTail: tail(stdout), stderrTail: tail(stderr) };
   if (out) fs.writeFileSync(out, JSON.stringify(result, null, 2) + "\n");
   console.log(JSON.stringify(result, null, 2));
   console.log(result.pass ? `PASS  ${WANT_LINE}` : "RESULT: FAIL");
