@@ -1953,5 +1953,9 @@ app.on('will-quit', () => {
 app.on('window-all-closed', (e) => {
   // Don't quit while the permissions window is open — the user may be in System Settings
   if (permWin) { e.preventDefault(); return; }
+  // The publik gate window closes before the first app window exists (the
+  // permission checks run in between); that gap is not a quit. Closing the
+  // gate by hand quits through the gate itself (src/publik-gate.js).
+  if (!appLaunched) return;
   app.quit();
 });
