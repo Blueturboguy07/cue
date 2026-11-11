@@ -9,7 +9,7 @@
 //   4. starts usage counting: app_opened now, active_session every 30 minutes (POST /api/v1/telemetry).
 const { randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
-const { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");
+const { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } = require("node:fs");
 const { arch, homedir, hostname, platform } = require("node:os");
 const { dirname, join } = require("node:path");
 const { createInterface } = require("node:readline/promises");
@@ -158,7 +158,14 @@ async function ask(ui, screen, key, until) {
 
 /** The gate (see the top of the file). Resolves once the person is signed in; `choice` is null when USES_AI is false. */
 async function ensureSignedIn(ui = terminalUI()) {
-  if (process.env.PUBLIK_SELF_TEST) { console.log(await selfTest()); process.exit(0); }
+  if (process.env.PUBLIK_SELF_TEST) {
+    // The line goes to fd 1 at once (a pipe is written later on Windows, and in an Electron main
+    // process console.log can be dropped by the exit), and nothing runs after the exit: in Electron
+    // process.exit() comes back before the process ends.
+    writeSync(1, `${await selfTest()}\n`);
+    process.exit(0);
+    await new Promise(() => {});
+  }
   let signNote = null, signPoll = true, planNote = null, planPoll = false;
   for (;;) {
     let c, r;
