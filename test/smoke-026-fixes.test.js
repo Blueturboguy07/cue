@@ -31,7 +31,7 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
 
 const { createLLM } = require('../src/llm');
 const { createSTT, publikTranscription, PUBLIK_STT_MODEL } = require('../src/stt');
-const publik = require('../src/publik');
+const publik = require('../src/publik-ui');
 
 test.after(() => { Module._load = originalModuleLoad; });
 test.beforeEach(() => { clients = []; audioError = null; });
@@ -161,12 +161,12 @@ test('a 401 from the gateway tells main.js the key on disk is dead (action.revok
 const root = path.join(__dirname, '..');
 const mainSrc = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
 
-test('main.js: a reconnect action with revoked marks the key, and publik:reconnect runs reconnectInstall', () => {
+test('main.js: a reconnect action with revoked marks the key, and publik:reconnect runs publikReconnect', () => {
   const start = mainSrc.indexOf('function publikHandleErrorAction(action)');
   const body = mainSrc.slice(start, mainSrc.indexOf('\n}\n', start));
   assert.match(body, /action\.kind === 'reconnect' && action\.revoked/);
   assert.match(body, /publikHandleRevoked\(\{ type: action\.revoked === 'key_revoked' \? 'key_revoked' : 'invalid_api_key', reprovision: false \}\)/);
-  assert.match(mainSrc, /ipcMain\.handle\('publik:reconnect', \(\) => publik\.reconnectInstall\(\{/);
+  assert.match(mainSrc, /ipcMain\.handle\('publik:reconnect', \(\) => publikReconnect\(\)\);/);
 });
 
 // ---- test 12: closing Settings keeps publik selected ----

@@ -1,23 +1,19 @@
 // CONTRACT §12 (founder, 2026-09-19): the plan CTA inside the app, right
 // after publik API is set up. The card, the settings button and the
-// low-starter banner are pure views in src/publik.js; these tests drive them
-// through the same provisionInstall() flow main.js runs, with the fake store
-// the provisioning tests use, so what is asserted is what the renderer paints.
+// low-starter banner are pure views in src/publik-ui.js; these tests seed a
+// fake store the way main.js publikConnect() does after the gate, so what is
+// asserted is what the renderer paints.
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const publik = require('../src/publik');
+const publik = require('../src/publik-ui');
 
-const TOKEN = 'pat_cue_' + 'a'.repeat(32);
 const KEY = 'pk_live_' + 'k'.repeat(12) + '_' + 'x'.repeat(32);
 const CLAIM_URL = 'https://publikhq.com/claim/HK7F-2QWD';
 const WHY = 'A provider charges for every request the app makes; publik pays that bill and passes it on at half the provider\'s list price. Nothing is charged behind your back — usage only draws from a plan or pack you choose to buy.';
 
-function build() {
-  return { appToken: TOKEN, appSlug: 'cue', baseUrl: 'https://publikhq.com/api/v1', disclosureVersion: 1, available: true };
-}
 function fakeStore(initial = {}) {
   const data = {
     provider: 'publik',
@@ -50,8 +46,21 @@ function mintResponse(overrides = {}) {
     ...overrides
   };
 }
-function fetchReturning(status, body) {
-  return async () => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => body });
+// What main.js stores once this computer's key and its wallet are known
+// (publikConnect after the gate, or a Reconnect): only apiKeys.publik and
+// publik.* change; no user-entered key is touched.
+function connect(store, r = mintResponse()) {
+  const wallet = r.wallet ? publik.normalizeWallet(r.wallet) : null;
+  store.setPublik({
+    apiKey: r.key, installId: r.install_id, keyId: r.key_id, baseUrl: r.base_url,
+    claimUrl: publik.isSafePublikLink(r.claim_url) ? r.claim_url : (wallet && wallet.claimUrl) || '', claimCode: r.claim_code,
+    claimState: r.claim_state || (wallet && wallet.claimState) || 'anonymous',
+    starterMicros: r.starter_micros || 0, balanceMicros: r.balance_micros || 0, balanceAt: Date.now(), wallet,
+    revoked: false, disconnected: false, lastError: '',
+    // A new starter grant must be shown on the card before it is spent (§12.4).
+    ...(r.starter_micros > 0 ? { cardShown: false } : {})
+  });
+  store.setSettings({ models: { publik: publik.pickModels(r.models) } });
 }
 // What main.js publikState() derives from the store — the redacted view the
 // renderer gets. Mirrors main.js field for field, minus the key.
@@ -75,9 +84,7 @@ function viewOf(store) {
 
 test('the first-run card renders, in order, the balance from the mint response, the justification and the CTA with the response\'s claim_url', async () => {
   const store = fakeStore();
-  const r = await publik.provisionInstall({ build: build(), store, fetchImpl: fetchReturning(201, mintResponse()) });
-  assert.equal(r.ok, true);
-  assert.equal(r.minted, true);
+  connect(store);
   // A fresh starter grant must be shown before it is spent (§12.4).
   assert.equal(store.data.publik.cardShown, false);
 
@@ -93,10 +100,10 @@ test('the first-run card renders, in order, the balance from the mint response, 
   // The amount is the server's, not a constant: an install minted already
   // bound to a signed-in account carries the once-per-account starter instead.
   const other = fakeStore();
-  await publik.provisionInstall({ build: build(), store: other, fetchImpl: fetchReturning(201, mintResponse({
+  connect(other, mintResponse({
     starter_micros: 50000, balance_micros: 50000, starting_credit_micros: 50000,
     wallet: { claim_state: 'claimed', balance_micros: 50000, starter: { remaining_micros: 50000 }, week: { used_micros: 0, budget_micros: null } }
-  })) });
+  }));
   assert.equal(viewOf(other).card.balance, '$0.05 of free starter usage');
   // No card before provisioning, and none for a build without a key.
   assert.equal(publik.ctaView({ connected: false }), null);
@@ -105,7 +112,7 @@ test('the first-run card renders, in order, the balance from the mint response, 
 
 test('a claim_url off publikhq.com is dropped: the card has no button and publik:open hands nothing to the browser', async () => {
   const store = fakeStore();
-  await publik.provisionInstall({ build: build(), store, fetchImpl: fetchReturning(201, mintResponse({ claim_url: 'https://evil.example/claim/HK7F-2QWD', wallet: null })) });
+  connect(store, mintResponse({ claim_url: 'https://evil.example/claim/HK7F-2QWD', wallet: null }));
   const v = viewOf(store);
   assert.equal(v.claimUrl, '');
   assert.ok(v.card, 'the card still shows the balance and the justification');
@@ -130,7 +137,7 @@ test('a claim_url off publikhq.com is dropped: the card has no button and publik
 
 test('"Later" marks the card seen and leaves the key, the provider and the balance in place', async () => {
   const store = fakeStore();
-  await publik.provisionInstall({ build: build(), store, fetchImpl: fetchReturning(201, mintResponse()) });
+  connect(store);
   const before = JSON.parse(JSON.stringify(store.data));
   assert.equal(before.apiKeys.publik, KEY);
 
