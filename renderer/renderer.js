@@ -22,6 +22,7 @@
   document.querySelector('.act[data-mode="recap"] .ic').innerHTML = icon('refresh-cw', { size: 16 });
   document.querySelector('.act[data-mode="feedback"] .ic').innerHTML = icon('message-square-text', { size: 16 });
   $('#smart-toggle .ic').innerHTML = icon('zap', { size: 14 });
+  $('#context-toggle .ic').innerHTML = icon('paperclip', { size: 14 });
   $('#more-btn').innerHTML = icon('more-horizontal', { size: 18 });
   $('#send-btn').innerHTML = icon('play', { size: 15 });
   const clearIC = document.querySelector('#clear-transcript-btn .ic');
@@ -92,6 +93,13 @@
   }
 
   function startAi(small) {
+    if (context && context.length) {
+      const pill = document.createElement('div');
+      pill.className = 'category-pill context-pill';
+      pill.textContent = '\ud83d\udcce ' + (context.length === 1 ? context[0] : context.length + ' files');
+      pill.title = context.join(', ');
+      group.appendChild(pill);
+    }
     aiEl = document.createElement('div');
     aiEl.className = 'ai-text' + (small ? ' small' : '');
     aiEl.dataset.raw = '';
@@ -582,6 +590,52 @@
     await cue.settingsSet({ smart: settings.smart });
   });
 
+  // Context mode: files for this meeting live in main's memory; this is the on/off pill
+  // and the file list in Settings > Context.
+  let contextFiles = [];
+  const contextBtn = $('#context-toggle');
+  function renderContext() {
+    contextBtn.classList.toggle('on', !!(settings && settings.contextMode));
+    $('#context-label').textContent = contextFiles.length ? 'Context \u00b7 ' + contextFiles.length : 'Context';
+    const host = $('#context-files');
+    host.textContent = '';
+    if (!contextFiles.length) {
+      const empty = document.createElement('div');
+      empty.className = 's-caller-empty';
+      empty.textContent = 'No files yet.';
+      host.append(empty);
+      return;
+    }
+    for (const file of contextFiles) {
+      const row = document.createElement('div');
+      row.className = 's-caller';
+      const label = document.createElement('span');
+      label.textContent = file.name + (file.truncated ? ' \u2014 only the first part is used (very long file)' : '');
+      label.title = file.name;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', async () => { contextFiles = await cue.contextRemove(file.id); renderContext(); });
+      row.append(label, remove);
+      host.append(row);
+    }
+  }
+  contextBtn.addEventListener('click', async () => {
+    settings.contextMode = !settings.contextMode;
+    renderContext();
+    await cue.settingsSet({ contextMode: settings.contextMode });
+    // Nothing to answer from yet: go straight to adding files.
+    if (settings.contextMode && !contextFiles.length) { openSettings(); showSettingsTab('context'); }
+  });
+  $('#context-add').addEventListener('click', async () => {
+    const status = $('#context-status');
+    status.textContent = 'Reading\u2026';
+    const res = await cue.contextPick();
+    contextFiles = res.files;
+    renderContext();
+    status.textContent = res.errors.map((e) => (e.name ? e.name + ': ' : '') + e.message).join(' \u00b7 ');
+  });
+
   // Hide / collapse
   let reopenSidebarOnExpand = false;
   function toggleHide() {
@@ -690,6 +744,7 @@
   if (clearTranscriptBtn) {
     clearTranscriptBtn.addEventListener('click', async () => {
       await cue.clearTranscript();
+      contextFiles = []; renderContext(); // main drops the meeting's context files with the history
       // Also clear the floating interim bar
       if (interimEl) { interimEl.textContent = ''; interimEl.classList.remove('show'); }
       transcriptInterimEl = null;
@@ -1216,7 +1271,7 @@
     const title = last && last.caption ? last.caption.split('\n')[0].slice(0, 80) : 'Slide ' + count;
     showToast(`Slide ${count} captured · ${title}`, 3000);
   });
-  cue.on('llm:start', ({ userBubble, small, category }) => {
+  cue.on('llm:start', ({ userBubble, small, category, context }) => {
     responseCount++;
     if (responseCount > MAX_RESPONSES) {
       const oldest = messages.querySelector('.response-group');
@@ -2493,6 +2548,8 @@
     }
 
     smartBtn.classList.toggle('on', !!settings.smart);
+    contextFiles = await cue.contextList();
+    renderContext();
     // Nothing can answer yet → the "Sign in with publik" prompt instead of the
     // example conversation.
     if (!renderSetupCta()) showExample();

@@ -246,4 +246,4 @@ const MODES = {
   }
 };
 
-module.exports = { MODES, formatTranscript, currentThread, questionThread };
+module.exports = { MODES, formatTranscript, currentThread, questionThread, threadUtterances };

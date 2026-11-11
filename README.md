@@ -184,6 +184,10 @@ Ending a session stops input capture, invalidates pending media/model starts, an
 
 In **Settings**, paste your résumé or professional background into **Résumé / professional background**. cue uses it as the factual reference for career-related answers and says when the résumé does not provide a detail. You can clear it anytime.
 
+### Optional — Context mode (files for one meeting)
+
+In **Settings → Context**, add files for the current meeting (PDF, DOCX, TXT, Markdown, CSV, JSON; up to 5, each read up to about 24,000 characters), then switch on the **Context** button under the chat box. When the newest question is about those files, for example *"what did you do at NVIDIA?"* with a résumé loaded, cue answers from their specifics. Any other question, such as a quant problem, is answered exactly as it would be with Context off: the files are not added to that request. With Anthropic (direct, not a relay) or Gemini, cue can also search the web for facts the files do not contain. The files stay in memory only and are dropped when you **Clear History** or quit. Scanned PDFs (images) and old `.doc` files are not readable; save as DOCX or text-based PDF.
+
 ### Step 3 — Verify the received screen share
 
 Check Cue's persistent protection notice before showing sensitive content. Verify the actual feed on a separate receiving device for the sharing application and mode you use. Sender previews and Cue's own screenshots do not establish receiver exclusion.
@@ -286,6 +290,7 @@ Run `xattr -cr /Applications/cue.app` in Terminal once (see Install → Option A
 - Your API keys live in a local file (`cue-data.json`) and are sent only to the provider you chose.
 - When Custom is selected, its API key and LLM request data are sent to the Base URL you configured.
 - Your optional résumé text also lives in `cue-data.json` and is sent with each model request to your selected AI provider. It is stored as plain text; clear it in Settings to remove it.
+- Context mode files are never written to disk. When a question is about them, their text is sent with that request to your selected AI provider (and, where the provider supports it, may lead that provider to run a web search); other requests do not include them.
 - In Local transcription mode, microphone and meeting audio stay on your computer. In cloud transcription modes, audio is sent only to the selected speech provider.
 - Cue does not write captured audio to disk. Transcript turns and approved notes persist in `meetings.json`; clearing the live transcript does not delete that history. Downloaded local model files remain on disk until you delete them.
 - Screenshots are sent to your selected chat provider only when a feature needs the screen.

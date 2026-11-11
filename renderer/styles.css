@@ -882,6 +882,9 @@ button:focus { outline: none; }
   margin: 6px 0 4px; animation: fadeUp 180ms ease both;
 }
 
+/* Files a context-mode answer was grounded in */
+.category-pill.context-pill { text-transform: none; letter-spacing: 0; font-weight: 500; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ============================ STT status ============================ */
 #stt-status {
   position: absolute; top: 14px; left: 14px; z-index: 4;

@@ -425,7 +425,7 @@ async function streamAzure({ apiKey, model, system, turns, imageDataUrl, maxToke
   return settleAnswer(full, finish, onToken, lengthCut);
 }
 
-async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, effort, onToken, onActivity, signal }) {
+async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, effort, webSearch, onToken, onActivity, signal }) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic(baseURL ? { apiKey, baseURL } : { apiKey });
   const messages = turns.map((t, i) => {
@@ -441,7 +441,9 @@ async function streamAnthropic({ apiKey, baseURL, model, system, turns, imageDat
   });
   // Effort only takes hold with adaptive thinking, and thinking spends from max_tokens, so lift the cap.
   const strength = effort ? { thinking: { type: 'adaptive' }, output_config: { effort }, max_tokens: maxTokens + 16000 } : {};
-  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true, ...strength }, requestOptions(signal));
+  // Server-side web search: Anthropic runs it and the answer text still arrives as text_delta.
+  const tools = webSearch ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }] } : {};
+  const stream = await client.messages.create({ model, max_tokens: maxTokens, system, messages, stream: true, ...strength, ...tools }, requestOptions(signal));
   let full = '';
   let stopReason = null;
   for await (const ev of stream) {
@@ -477,7 +479,7 @@ function geminiGenerationConfig({ system, maxTokens, thinking }) {
   return config;
 }
 
-async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, thinking, onToken, signal }) {
+async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, thinking, webSearch, onToken, signal }) {
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
   const contents = turns.map((t, i) => {
@@ -490,6 +492,7 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
     return { role: t.role === 'assistant' ? 'model' : 'user', parts };
   });
   const config = geminiGenerationConfig({ system, maxTokens, thinking });
+  if (webSearch) config.tools = [{ googleSearch: {} }];
   if (signal) config.abortSignal = signal;
   let stream;
   try {
@@ -672,11 +675,16 @@ function createLLM(settings) {
   // text-only questions stay on the fast tier.
   const visionModel = provider === PUBLIK_PROVIDER ? publikVisionModel(settings, model) : model;
 
+  // Providers with a built-in web search tool. Anthropic only direct: a relay
+  // (TokenRouter) may not forward server tools. The others have no such tool here.
+  const webSearch = (provider === 'anthropic' && !String(settings.anthropicBaseUrl || '').trim()) || provider === 'gemini';
+
   return {
     provider, model, visionModel, apiKey, baseURL,
     ready,
     configurationError,
     missingKey,
+    webSearch,
     providerName: normalizeProviderName(provider),
     async stream(params) {
       const signal = params.signal;
@@ -684,15 +692,17 @@ function createLLM(settings) {
       if (!ready) throw new Error(configurationError || `Complete the ${provider} provider settings.`);
       const useModel = params && params.imageDataUrl ? visionModel : model;
       const args = { apiKey, baseURL, endpoint, model: useModel, maxTokens, thinking: !!settings.smart, ...params, turns: sanitizeTurns(params.turns) };
+      args.webSearch = webSearch && !!params.webSearch;
       // An explicit maxTokens: undefined (or any non-number) falls back to the
       // default cap; it must never reach the request as NaN.
       if (!(Number.isFinite(args.maxTokens) && args.maxTokens > 0)) args.maxTokens = maxTokens;
       if (provider === PUBLIK_PROVIDER) args.maxTokens = publikOutputCap(args.maxTokens, useModel);
       if (provider === CUSTOM_PROVIDER) args.maxTokens = args.maxTokens + OPENAI_THINKING_HEADROOM[settings.smart ? 'smart' : 'fast'];
+      let streamed = false;
       for (const hook of ['onToken', 'onActivity', 'onResponse']) {
-        if (typeof params[hook] === 'function') args[hook] = (...values) => { signal?.throwIfAborted(); return params[hook](...values); };
+        if (typeof params[hook] === 'function') args[hook] = (...values) => { signal?.throwIfAborted(); if (hook === 'onToken') streamed = true; return params[hook](...values); };
       }
-      const dispatch = async () => {
+      const dispatch = async (args) => {
         if (provider === 'openai') return await streamOpenAI(args);
         if (provider === CUSTOM_PROVIDER) return await streamOpenAI(args);
         if (provider === PUBLIK_PROVIDER) return await streamOpenAI(args);
@@ -711,7 +721,15 @@ function createLLM(settings) {
         throw new Error('unknown provider: ' + provider);
       };
       try {
-        return await abortable(dispatch(), signal);
+        try {
+          return await abortable(dispatch(args), signal);
+        } catch (error) {
+          signal?.throwIfAborted();
+          // Web search is a bonus, never a reason to lose the answer: a provider that
+          // refuses the tool (disabled for the account, not on this model) gets one retry without it.
+          if (!(args.webSearch && !streamed && [400, 403, 422].includes(errorSignals(error).status))) throw error;
+          return await abortable(dispatch({ ...args, webSearch: false }), signal);
+        }
       } catch (error) {
         signal?.throwIfAborted();
         // publik branches return an Error carrying `.action`; the string

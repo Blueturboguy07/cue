@@ -26,6 +26,7 @@ const publik = require('./src/publik');
 const publikBuild = publik.loadBuildConfig();
 const { createMeetingStore } = require('./src/meetings');
 const { createMeetingMemory } = require('./src/meeting-memory');
+const { createSessionContext } = require('./src/session-context');
 const { notesDestination } = require('./src/notes-policy');
 const {
   hashRGBA,
@@ -111,6 +112,7 @@ const publikSttBatchers = { you: new UtteranceBatcher(), them: new UtteranceBatc
 let publikSttNoticeAt = 0; // last "Transcription paused" notice for a passing publik error
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
+const sessionContext = createSessionContext(); // files loaded for this meeting; memory-only
 let meetingMemory = null; // persists the transcript per meeting + notes; see src/meeting-memory.js
 let restoredTurns = []; // turns of an interrupted meeting resumed at launch, replayed to the renderer once
 // -------- slides state (memory-only, never written to disk) --------
@@ -925,7 +927,9 @@ async function runFeature(mode, userText) {
       ? def.userBubble
       : (mode === 'ask' ? userText : mode === 'answerThis' ? `"${(userText || '').slice(0, 60)}${userText && userText.length > 60 ? '…' : ''}"` : null);
     const category = mode !== 'leetcode' ? detectCategory(transcript) : null;
-    send('llm:start', { userBubble, small: !!def.small, category });
+    // null unless context mode is on AND this question is about the loaded files.
+    const ctxDocs = settings.contextMode ? sessionContext.forQuestion({ mode, transcript, userText, webSearch: llm.webSearch }) : null;
+    send('llm:start', { userBubble, small: !!def.small, category, context: ctxDocs ? ctxDocs.files : null });
 
     if (!llm.ready) {
       const message = llm.configurationError || ('Complete the ' + settings.provider + ' provider settings. Model: ' + (llm.model || 'unset') + '.');
@@ -987,7 +991,7 @@ async function runFeature(mode, userText) {
     }
 
     const settingsForPrompt = store.getSettings();
-    const contextBlock = buildInterviewContext(settingsForPrompt, mode, transcript);
+    const contextBlock = [buildInterviewContext(settingsForPrompt, mode, transcript), ctxDocs && ctxDocs.block].filter(Boolean).join('\n\n') || null;
     const system = def.buildSystem ? def.buildSystem(contextBlock, settingsForPrompt.aiRules || '') : (def.system || '');
     const built = def.build({ transcript, userText: userText || '' });
 
@@ -1019,6 +1023,7 @@ async function runFeature(mode, userText) {
           system,
           turns: [{ role: 'user', text: built }],
           imageDataUrl,
+          webSearch: !!(ctxDocs && ctxDocs.webSearch),
           onToken: (t) => { if (streamSettled) return; answerStarted = true; rearm(); send('llm:token', { text: t }); },
           onActivity: noteActivity,
           signal: guard.signal,
@@ -1396,6 +1401,7 @@ ipcMain.handle('transcript:clear', () => {
     meetingMemory.end({ writeNotes: false }).catch(() => {});
   } // Clearing keeps local history without starting a provider request.
   transcript.splice(0, transcript.length);
+  sessionContext.clear(); // the loaded files belong to the meeting being cleared
   resetSlidesSession();
   send('slides:update', { count: 0, last: null });
   return { ok: true };
@@ -1470,6 +1476,37 @@ ipcMain.handle('profile:pickDocument', async () => {
   } catch (e) {
     return { canceled: false, error: (e && e.message) || String(e) };
   }
+});
+// -------- session context files (context mode) --------
+// Same rule as the résumé import: the dialog runs in MAIN, the renderer never supplies a path.
+const CONTEXT_FILE_FILTERS = [
+  { name: 'Documents', extensions: ['pdf', 'docx', 'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'yaml', 'yml'] },
+  { name: 'All files', extensions: ['*'] }
+];
+ipcMain.handle('context:list', () => sessionContext.list());
+ipcMain.handle('context:remove', (_e, id) => { sessionContext.remove(id); return sessionContext.list(); });
+ipcMain.handle('context:pick', async () => {
+  const errors = [];
+  try {
+    requireUnpaused();
+    const signal = privacyEpoch.signal;
+    const res = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: CONTEXT_FILE_FILTERS });
+    signal.throwIfAborted();
+    for (const filePath of res.canceled ? [] : res.filePaths) {
+      const name = path.basename(filePath);
+      try {
+        const text = await parseDocumentFile(filePath);
+        signal.throwIfAborted();
+        sessionContext.add(name, text);
+      } catch (e) {
+        if (signal.aborted) throw e;
+        errors.push({ name, message: (e && e.message) || String(e) });
+      }
+    }
+  } catch (e) {
+    errors.push({ name: '', message: (e && e.message) || String(e) });
+  }
+  return { files: sessionContext.list(), errors };
 });
 ipcMain.on('app:quit', () => app.quit());
 ipcMain.handle('applink:state', () => appLinkConsentState());

@@ -31,6 +31,9 @@ const DEFAULTS = {
   // on Windows/Linux loopback capture carries no such indicator, so it stays on.
   meetingAudio: process.platform !== 'darwin',
   automaticNotes: false,
+  // Context mode: ground answers in the files loaded for this meeting (src/session-context.js).
+  // Only the on/off choice is saved; the files live in memory and are never written to disk.
+  contextMode: false,
   privacyPaused: false,
   baseUrl: '',
   minimaxRegion: 'global_en',

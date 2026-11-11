@@ -38,7 +38,7 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
     return class FakeAnthropic {
       constructor(clientOptions) {
         capturedClientOptions = clientOptions;
-        this.messages = { create: async (req, options) => { capturedCompletionRequest = req; capturedRequestOptions = options; return fakeStreamParts || [{ type: 'ping' }, { type: 'content_block_delta', delta: { type: 'text_delta', text: 'ok' } }]; } };
+        this.messages = { create: async (req, options) => { capturedCompletionRequest = req; capturedRequestOptions = options; if (fakeCreateError) { const error = fakeCreateError; if (error.once) fakeCreateError = null; throw error; } return fakeStreamParts || [{ type: 'ping' }, { type: 'content_block_delta', delta: { type: 'text_delta', text: 'ok' } }]; } };
       }
     };
   }
@@ -747,4 +747,49 @@ test('Ollama passes cancellation to fetch and drops late tokens', async (t) => {
   await assert.rejects(llm.stream({ system: '', turns: [], signal: request.signal, onToken: (token) => tokens.push(token) }), { name: 'AbortError' });
   assert.equal(options.signal, request.signal);
   assert.deepEqual(tokens, ['first']);
+});
+
+// ---- web search (context mode) ---------------------------------------------
+const webAnthropicSettings = (extra = {}) => ({ provider: 'anthropic', smart: false, apiKeys: { anthropic: 'sk-ant-test' }, models: { anthropic: { fast: 'claude-haiku-4-5-20251001', smart: '' } }, ...extra });
+const webGeminiSettings = () => ({ provider: 'gemini', smart: false, apiKeys: { gemini: 'AIza-test' }, models: { gemini: { fast: 'gemini-3.8-flash', smart: '' } } });
+const webRun = (llm, extra = {}) => llm.stream({ system: 's', turns: [{ role: 'user', text: 'q' }], onToken: () => {}, ...extra });
+
+test('web search: Anthropic sends the search tool only when asked', async () => {
+  const llm = createLLM(webAnthropicSettings());
+  assert.equal(llm.webSearch, true);
+  await webRun(llm, { webSearch: true });
+  assert.deepEqual(capturedCompletionRequest.tools.map((t) => t.name), ['web_search']);
+  await webRun(llm);
+  assert.equal(capturedCompletionRequest.tools, undefined);
+});
+
+test('web search: Gemini turns on Google Search grounding', async () => {
+  const llm = createLLM(webGeminiSettings());
+  assert.equal(llm.webSearch, true);
+  await webRun(llm, { webSearch: true });
+  assert.deepEqual(capturedCompletionRequest.config.tools, [{ googleSearch: {} }]);
+});
+
+test('web search: providers without a search tool never send one', async () => {
+  const relay = createLLM(webAnthropicSettings({ anthropicBaseUrl: 'https://relay.example' }));
+  assert.equal(relay.webSearch, false);
+  await webRun(relay, { webSearch: true });
+  assert.equal(capturedCompletionRequest.tools, undefined);
+  const openai = createLLM({ provider: 'openai', smart: false, apiKeys: { openai: 'sk-test' }, models: { openai: { fast: 'gpt-4o-mini', smart: '' } } });
+  assert.equal(openai.webSearch, false);
+  await webRun(openai, { webSearch: true });
+  assert.equal(capturedCompletionRequest.tools, undefined);
+});
+
+test('web search: a provider that refuses the tool still answers, without it', async () => {
+  fakeCreateError = Object.assign(new Error('web_search is not enabled for this organization'), { status: 400, once: true });
+  const text = await webRun(createLLM(webAnthropicSettings()), { webSearch: true });
+  assert.equal(text, 'ok');
+  assert.equal(capturedCompletionRequest.tools, undefined);
+});
+
+test('web search: a bad key is not retried', async () => {
+  fakeCreateError = Object.assign(new Error('invalid x-api-key'), { status: 401 });
+  await assert.rejects(webRun(createLLM(webAnthropicSettings()), { webSearch: true }), /key did not work/);
+  assert.ok(capturedCompletionRequest.tools, 'the only request was the one with the tool');
 });

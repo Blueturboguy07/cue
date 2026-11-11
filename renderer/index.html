@@ -85,6 +85,7 @@
               </div>
               <div id="composer-bottom">
                 <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
+                <button id="context-toggle" class="smart-pill" title="Context mode: answer from the files you loaded for this meeting"><span class="ic"></span><span id="context-label">Context</span></button>
                 <button id="history-btn" class="history-btn" title="Show everything said this session"><span class="ic"></span><span>Transcription history</span></button>
                 <button id="more-btn" class="more-btn" title="Settings"></button>
                 <div class="spacer"></div>
@@ -124,6 +125,7 @@
       <div class="s-tabs">
         <button class="s-tab on" data-tab="keys" id="s-tab-main">🪙 publik</button>
         <button class="s-tab" data-tab="transcription">🔉 Audio</button>
+        <button class="s-tab" data-tab="context">📎 Context</button>
         <button class="s-tab" data-tab="style">✨ Style</button>
         <button class="s-tab" data-tab="appearance">🌗 Appearance</button>
       </div>
@@ -285,6 +287,17 @@
         <div class="s-field"><span>Track slides</span><input id="slides-enabled" type="checkbox" style="width:auto;" /></div>
         <div class="s-field"><span>Check every (ms)</span><input id="slides-interval" type="number" min="1500" max="15000" step="500" value="3000" /></div>
         <div class="s-note">Captures a tiny hash every few seconds, captions only on stable change with your chat model. No images stored; clear with transcript.</div>
+      </div>
+
+      <!-- Tab: Context -->
+      <div class="s-body s-tab-pane hidden" data-pane="context">
+        <label class="s-label">Context files <span class="s-hint">this meeting only · kept in memory, never saved</span></label>
+        <div class="s-callers" id="context-files"></div>
+        <div class="whisper-actions"><button id="context-add" class="s-action" type="button">Add files…</button></div>
+        <div class="s-status" id="context-status"></div>
+        <div class="s-hint-block">
+          Add a résumé, a brief or notes (PDF, DOCX, TXT, Markdown, CSV, JSON), then switch on <strong>Context</strong> under the chat box. When a question is about those files, such as <em>&ldquo;what did you do at NVIDIA?&rdquo;</em>, cue answers from their specifics. Every other question is answered exactly as before. With Anthropic or Gemini, cue can also search the web for facts the files lack. The files are sent to your chat provider along with such a question, and are cleared when you clear the history or quit.
+        </div>
       </div>
 
       <!-- Tab: Style -->
