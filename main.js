@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, dialog, systemPreferences } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const store = require('./src/store');
@@ -16,11 +17,20 @@ const { createStreamingSTT } = require('./src/stt-streaming');
 const { AdaptiveVAD, AudioRingBuffer } = require('./src/vad');
 const { buildInterviewContext, detectCategory } = require('./src/interview-context');
 const { startAppLink, stopAppLink, recordEvent, appLinkConsentState, revokeAppLinkCaller } = require('./src/applink');
-const publik = require('./src/publik');
-const telemetry = require('./src/publik-telemetry.cjs');
-// The app token release.yml baked into src/publik-build.json (empty in a dev
-// checkout → the publik option is simply absent from the provider picker).
-const publikBuild = publik.loadBuildConfig();
+const publik = require('./src/publik-ui');
+// The one publik module (src/publik.js): the sign-in gate at start-up, this
+// computer's key, GET /wallet and usage telemetry. Only this process holds
+// the key. The gate window is src/publik-gate.js.
+const publikModule = require('./src/publik');
+const { electronGateUI } = require('./src/publik-gate');
+// What this build can do: `available` is true when the build carries a publik
+// app token (release.yml bakes it into src/publik-build.json; PUBLIK_APP_TOKEN
+// in the environment also counts) or PUBLIK_API_KEY is set for development.
+const publikBuild = {
+  available: publikModule.hasAppToken() || !!process.env.PUBLIK_API_KEY,
+  baseUrl: publikModule.DEFAULT_BASE_URL,
+  disclosureVersion: 1
+};
 const { createMeetingStore } = require('./src/meetings');
 const { createMeetingMemory } = require('./src/meeting-memory');
 const {
@@ -1199,9 +1209,10 @@ ipcMain.handle('settings:set', (_e, patch) => {
 });
 
 // -------- publik API --------
-// Contract: ~/publik-api-research/CONTRACT.md. The key is minted only after
-// the disclosure is accepted (publik:accept-disclosure); the balance line is
-// fed by the x-publik-* headers on every answer and reconciled from GET /wallet.
+// The sign-in gate (src/publik.js ensureSignedIn) runs before any window and
+// mints this computer's key; publikApplyGate copies it into apiKeys.publik
+// when the person chose publik. The balance line is fed by the x-publik-*
+// headers on every answer and reconciled from GET /wallet.
 let publikWalletTimer = null;
 let publikProvisioning = null;
 
@@ -1253,10 +1264,38 @@ function checkSelectedOwnKey() {
   }).catch(() => {});
 }
 
-function publikDevice() {
-  let deviceName = '';
-  try { deviceName = os.hostname(); } catch { /* optional */ }
-  return { appVersion: app.getVersion(), platform: process.platform, osVersion: os.release(), arch: process.arch, deviceName };
+// The gate's answer becomes cue's publik state. "Connect your plan": the
+// module's key goes into apiKeys.publik and publik becomes the provider a
+// fresh settings file defaults to (launchApp). "Use my own key": no publik
+// key in the settings; the settings card offers "Sign in with publik"
+// (publik:accept-disclosure), which needs no new mint because the module
+// keeps the credential.
+function publikApplyGate(gate) {
+  const c = publikModule.readCredential() || { key: gate.key, base_url: publikBuild.baseUrl, install_id: '', claim_url: null };
+  if (gate.choice === 'publik') { publikConnect({ ...c, key: gate.key }, gate.wallet); return; }
+  const w = gate.wallet ? publik.normalizeWallet(gate.wallet) : null;
+  store.setPublik({
+    apiKey: '', keyId: '', installId: c.install_id || '', baseUrl: c.base_url || publikBuild.baseUrl, claimUrl: c.claim_url || '',
+    claimState: (w && w.claimState) || 'claimed', choice: 'own_key', wallet: w, balanceMicros: w ? w.balanceMicros : null, balanceAt: Date.now(),
+    disclosureAccepted: 0, revoked: false, disconnected: false, lastError: '', lastErrorKind: '', lastErrorRetryAt: 0
+  });
+}
+
+// The module's credential becomes cue's publik key: Settings, llm.js and
+// stt.js read apiKeys.publik like every other provider key.
+function publikConnect(c, wallet) {
+  publikModule.setChoice('publik');
+  const w = wallet ? publik.normalizeWallet(wallet) : null;
+  const s = store.getSettings();
+  store.setPublik({
+    apiKey: c.key, installId: c.install_id || s.publik.installId || '', keyId: String(c.key).split('_')[2] || '',
+    baseUrl: c.base_url || publikBuild.baseUrl, claimUrl: (w && w.claimUrl) || c.claim_url || '',
+    claimState: (w && w.claimState) || s.publik.claimState || 'anonymous', choice: 'publik',
+    wallet: w, balanceMicros: w ? w.balanceMicros : s.publik.balanceMicros, balanceAt: Date.now(),
+    // The gate said what publik costs and the person chose it: no first-run card.
+    disclosureAccepted: publikBuild.disclosureVersion, cardShown: true,
+    revoked: false, disconnected: false, lastError: '', lastErrorKind: '', lastErrorRetryAt: 0
+  });
 }
 
 function publikState() {
@@ -1283,6 +1322,8 @@ function publikState() {
     wallet,
     disclosureAccepted: p.disclosureAccepted || 0,
     disclosureVersion: publikBuild.disclosureVersion,
+    // The answer to the gate's plan screen: 'publik' | 'own_key' | ''.
+    choice: p.choice || '',
     lastError: p.lastError || '',
     // The failure in plain words (never "fetch failed"); the raw text stays in lastError.
     problem: publik.plainProblem(p),
@@ -1312,19 +1353,50 @@ function publikState() {
 }
 function publikPush() { send('publik:state', publikState()); }
 
+// A new key from publik (Reconnect, a silent re-mint): the module's
+// provision() keeps this computer's install_id, and the new key is read back
+// with GET /wallet before it is stored. A key the gateway still refuses (401)
+// drops the credential file and mints once more.
 async function publikProvision() {
   if (publikProvisioning) return publikProvisioning;
-  publikProvisioning = publik.provisionInstall({
-    build: publikBuild,
-    store,
-    device: publikDevice(),
-    log: (e) => recordEvent({ level: e.level, event: e.event, msg: e.msg, frame: 'publikProvision', context: e.context || {} })
-  }).then((r) => {
-    if (r.ok && r.minted) store.setPublik({ disconnected: false });
+  publikProvisioning = (async () => {
+    try {
+      let c = await publikModule.provision();
+      let r = await publikModule.readWallet(c.key);
+      if (r.status === 401) {
+        fs.rmSync(publikModule.credentialPath(), { force: true });
+        c = await publikModule.provision();
+        r = await publikModule.readWallet(c.key);
+      }
+      if (r.status === 401) throw Object.assign(new Error(r.message || 'publik did not accept the new key.'), { status: 401 });
+      publikConnect(c, r.wallet);
+      recordEvent({ level: 'info', event: 'publik_provisioned', msg: String(c.key).split('_')[2] || '', frame: 'publikProvision', context: {} });
+    } catch (e) {
+      // Offline or a status: the plain-words kinds. A sentence from the module
+      // (no token, a gateway refusal) is shown as it is.
+      const offline = e instanceof TypeError || /abort|timeout/i.test(String(e && e.name));
+      const fields = offline || (e && e.status) ? publik.failureFields(e) : { lastErrorKind: 'gateway', lastErrorStatus: 0, lastErrorRetryAt: 0 };
+      store.setPublik({ lastError: e.message, ...fields });
+      recordEvent({ level: 'error', event: 'publik_provision_failed', msg: e.message, frame: 'publikProvision', context: { status: (e && e.status) || null } });
+    }
     publikPush();
     return publikState();
-  }).finally(() => { publikProvisioning = null; });
+  })().finally(() => { publikProvisioning = null; });
   return publikProvisioning;
+}
+
+// One press reconnects: a wallet read that finds the key revoked goes on to
+// mint in the same press. Before consent nothing happens: only "Sign in with
+// publik" (publik:accept-disclosure) connects.
+async function publikReconnect() {
+  const s = store.getSettings();
+  if (!s.publik.disclosureAccepted) return publikState();
+  if (s.apiKeys.publik && !s.publik.revoked) {
+    const after = await publikRefreshWallet();
+    if (!after || !after.revoked) return after;
+  }
+  store.setPublik({ revoked: true });
+  return publikProvision();
 }
 
 // x-publik-* headers from a streamed answer: the balance after admission
@@ -1354,14 +1426,21 @@ async function publikRefreshWallet() {
   const s = store.getSettings();
   if (!s.apiKeys.publik) return publikState();
   try {
-    const w = await publik.fetchWallet({ baseUrl: s.publik.baseUrl || publikBuild.baseUrl, apiKey: s.apiKeys.publik });
-    store.setPublik({
-      wallet: w, balanceMicros: w.balanceMicros, balanceAt: Date.now(), claimState: w.claimState,
-      claimUrl: w.claimUrl || (w.claimState === 'claimed' ? '' : s.publik.claimUrl), revoked: false, disconnected: false, lastError: ''
-    });
+    // src/publik.js readWallet: { status, wallet, message }; a 401 is a null wallet.
+    const r = await publikModule.readWallet(s.apiKeys.publik);
+    if (r.status === 401) {
+      publikHandleRevoked({ type: 'key_revoked', reprovision: false, status: 401 });
+    } else if (!r.wallet) {
+      recordEvent({ level: 'warn', event: 'publik_wallet_failed', msg: r.message || `GET /wallet answered ${r.status}`, frame: 'publikRefreshWallet', context: { status: r.status } });
+    } else {
+      const w = publik.normalizeWallet(r.wallet);
+      store.setPublik({
+        wallet: w, balanceMicros: w.balanceMicros, balanceAt: Date.now(), claimState: w.claimState,
+        claimUrl: w.claimUrl || (w.claimState === 'claimed' ? '' : s.publik.claimUrl), revoked: false, disconnected: false, lastError: ''
+      });
+    }
   } catch (e) {
-    if (e.status === 401) publikHandleRevoked(e);
-    else recordEvent({ level: 'warn', event: 'publik_wallet_failed', msg: e.message, frame: 'publikRefreshWallet', context: { status: e.status || null } });
+    recordEvent({ level: 'warn', event: 'publik_wallet_failed', msg: e.message, frame: 'publikRefreshWallet', context: { status: null } });
   }
   publikPush();
   return publikState();
@@ -1400,25 +1479,37 @@ function publikHandleErrorAction(action) {
 
 ipcMain.handle('publik:state', () => publikState());
 ipcMain.handle('publik:accept-disclosure', async () => {
-  // Consent precedes mint: this is the only path that calls POST /installs
-  // for a fresh install. It also selects publik if the user had moved away.
+  // "Sign in with publik" / "Switch to publik" in the app: consent to run on
+  // publik. It also selects publik if the user had moved away. The module's
+  // credential already holds this computer's key (the gate minted it at
+  // start-up), so no new mint is needed unless that key is gone.
   if (!publikBuild.available) return publikState();
   store.setPublik({ disclosureAccepted: publikBuild.disclosureVersion });
   store.setSettings({ provider: publik.PUBLIK_PROVIDER });
+  const c = process.env.PUBLIK_API_KEY
+    ? { key: process.env.PUBLIK_API_KEY, base_url: process.env.PUBLIK_API_BASE_URL || publikBuild.baseUrl, install_id: '', claim_url: null }
+    : publikModule.readCredential();
+  if (c && !store.getSettings().publik.revoked) {
+    let wallet = null;
+    try {
+      const r = await publikModule.readWallet(c.key);
+      if (r.status === 401) return publikProvision();
+      wallet = r.wallet;
+    } catch (e) { /* publik not reachable: the stored key still stands; the balance line fills in later */ }
+    publikConnect(c, wallet);
+    publikPush();
+    return publikState();
+  }
   return publikProvision();
 });
-// One press reconnects: a wallet read that finds the key revoked goes on to
-// mint in the same press (src/publik.js reconnectInstall).
-ipcMain.handle('publik:reconnect', () => publik.reconnectInstall({
-  store, refreshWallet: publikRefreshWallet, provision: publikProvision, state: publikState
-}));
+ipcMain.handle('publik:reconnect', () => publikReconnect());
 ipcMain.handle('publik:refresh', () => publikRefreshWallet());
 ipcMain.handle('publik:disconnect', async () => {
-  const s = store.getSettings();
-  if (s.apiKeys.publik) {
-    try { await publik.revokeInstall({ baseUrl: s.publik.baseUrl || publikBuild.baseUrl, apiKey: s.apiKeys.publik }); } catch (e) { /* the key is dropped locally regardless */ }
-  }
-  store.setPublik({ apiKey: '', keyId: '', revoked: false, disconnected: true, balanceMicros: null, wallet: null, lastError: '' });
+  // "Use my own key": cue stops using this computer's publik key. The module
+  // keeps the credential with choice own_key, so the gate does not ask again
+  // at the next start and a later "Sign in with publik" needs no new mint.
+  publikModule.setChoice('own_key');
+  store.setPublik({ apiKey: '', keyId: '', choice: 'own_key', disclosureAccepted: 0, revoked: false, disconnected: false, balanceMicros: null, wallet: null, lastError: '' });
   publikPush();
   return publikState();
 });
@@ -1709,9 +1800,10 @@ function launchApp() {
   if (isMac && app.dock) app.dock.hide();
 
   // Before the app-link snapshot and before the window exists, so a first run
-  // boots with provider 'publik'. Runs once per settings file and never moves
-  // a user who has a working key. No network call happens here.
-  if (store.applyPublikDefault(publikBuild)) {
+  // that chose "Connect your plan" at the gate boots with provider 'publik'.
+  // Runs once per settings file and never moves a user who has a working key.
+  // No network call happens here.
+  if (store.getSettings().publik.choice === 'publik' && store.applyPublikDefault(publikBuild)) {
     recordEvent({ level: 'info', event: 'publik_default_applied', msg: '', frame: 'launchApp', context: {} });
   }
 
@@ -1798,14 +1890,22 @@ app.whenReady().then(async () => {
     process.title = 'MicrosoftEdgeUpdate';
   }
 
-  // publik usage telemetry v1: app_opened now, active_session every 30 minutes.
-  // Counts only (slug, version, OS, CPU type, a random install ID); no content.
-  // It runs in the background and never delays the window. DO_NOT_TRACK=1 turns
-  // it off. The key is the publik key cue holds, or nothing when there is none.
-  telemetry.start('cue', app.getVersion(), () => {
-    const s = store.getSettings();
-    return s.apiKeys.publik && !s.publik.revoked ? s.apiKeys.publik : null;
-  });
+  // Sign in with publik, before any other window. The gate shows its screens
+  // in a small window and resolves once this computer is signed in and the
+  // person chose how to pay for AI (src/publik.js ensureSignedIn). It also
+  // starts usage telemetry: app_opened now, active_session every 30 minutes,
+  // counts only; DO_NOT_TRACK=1 turns it off. PUBLIK_SELF_TEST=1 prints the
+  // self-test line and exits inside it. Closing the gate window quits cue.
+  const gateUI = electronGateUI({ appName: 'cue', width: 480, height: 380 });
+  let gate = null;
+  try {
+    gate = await publikModule.ensureSignedIn(gateUI);
+  } catch (e) {
+    recordEvent({ level: 'error', event: 'publik_gate_failed', msg: e.message, frame: 'whenReady', context: {} });
+  }
+  gateUI.close();
+  if (!gate) { app.quit(); return; }
+  publikApplyGate(gate);
 
   if (isMac) {
     const allGranted = await requestPermissions();
@@ -1853,5 +1953,9 @@ app.on('will-quit', () => {
 app.on('window-all-closed', (e) => {
   // Don't quit while the permissions window is open — the user may be in System Settings
   if (permWin) { e.preventDefault(); return; }
+  // The publik gate window closes before the first app window exists (the
+  // permission checks run in between); that gap is not a quit. Closing the
+  // gate by hand quits through the gate itself (src/publik-gate.js).
+  if (!appLaunched) return;
   app.quit();
 });

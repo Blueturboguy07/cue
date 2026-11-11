@@ -207,6 +207,15 @@
         // Plain words only (p.problem); the raw gateway text stays in logs.
         return { title: 'Setup did not finish', body: p.problem || 'Press Reconnect to try again.', primary: { kind: 'reconnect', label: COPY.reconnect }, secondary: { kind: 'byo', label: 'Use my own API key' } };
       }
+      // "Use my own key" at the sign-in gate: the key is still to come.
+      if (p.choice === 'own_key') {
+        return {
+          title: 'Add your API key',
+          body: 'You chose your own key at sign-in. Add it in Settings, or switch to publik.',
+          primary: { kind: 'settings', label: 'Open Settings' },
+          secondary: { kind: settings.provider === PUBLIK ? 'signin' : 'switch', label: COPY.switchTo }
+        };
+      }
       return {
         title: 'Sign in to start',
         body: COPY.lede,

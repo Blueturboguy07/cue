@@ -307,7 +307,7 @@ test('every "add a key" message points at publik first', () => {
   assert.doesNotMatch(main, /No transcription key set/);
   assert.match(main, /Transcription is off\. Switch to publik in Settings to transcribe with no API key\./);
   assert.match(main, /Pick Local in Settings › Audio to transcribe on this computer with no key/);
-  const pub = require('../src/publik');
+  const pub = require('../src/publik-ui');
   assert.equal(pub.COPY.disclosure.accept, 'Sign in with publik');
   assert.match(fnSrc('publikActionButton'), /'disclosure'\) \{\n\s+btn\.textContent = 'Sign in with publik';/);
   assert.match(fnSrc('publikActionButton'), /'switch'\) \{\n\s+btn\.textContent = 'Switch to publik';/);
@@ -321,7 +321,7 @@ test('index.html loads publik-card.js before renderer.js (same file on Windows a
 
 // ---- round 2 (blind verifier on 93fd2ee) ----------------------------------
 
-const pub = require('../src/publik');
+const pub = require('../src/publik-ui');
 
 test('D1: linked with a healthy balance: no blue button, "Add a plan or pack" back as a secondary', () => {
   const v = card.cardView({ ...LINKED, addCreditUrl: 'https://publikhq.com/dashboard/api?add=1' }, 'publik');
@@ -399,15 +399,16 @@ test('D5: common failures read in plain words, with the real wait from Retry-Aft
   assert.match(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), /problem: publik\.plainProblem\(p\),/);
 });
 
-test('D5: provisionInstall records the kind and the Retry-After wait of a refused mint', async () => {
-  const data = { apiKeys: { publik: '' }, publik: { installId: '', disclosureAccepted: 1, revoked: false, lastError: '' } };
-  const store = { getSettings: () => data, setPublik: (patch) => { Object.assign(data.publik, patch); }, setSettings: () => {} };
-  const fetchImpl = async () => ({ ok: false, status: 429, headers: { get: (h) => (h.toLowerCase() === 'retry-after' ? '2460' : null) }, json: async () => ({ error: { type: 'rate_limited', message: 'Too many provisioning requests from this network.' } }) });
-  const r = await pub.provisionInstall({ build: { available: true, appToken: 't', appSlug: 'cue', baseUrl: 'https://publikhq.com/api/v1', disclosureVersion: 1 }, store, fetchImpl });
-  assert.equal(r.ok, false);
-  assert.equal(data.publik.lastErrorKind, 'rate');
-  assert.ok(data.publik.lastErrorRetryAt > Date.now() + 2400000);
-  assert.match(pub.plainProblem(data.publik), /Try again in 41 minutes\./);
+test('D5: a refused mint records the kind and the Retry-After wait (main.js publikProvision stores failureFields)', () => {
+  const e = Object.assign(new Error('Too many provisioning requests from this network.'), { status: 429, type: 'rate_limited', retryAfter: 2460 });
+  const p = { lastError: e.message, ...pub.failureFields(e) };
+  assert.equal(p.lastErrorKind, 'rate');
+  assert.ok(p.lastErrorRetryAt > Date.now() + 2400000);
+  assert.match(pub.plainProblem(p), /Try again in 41 minutes\./);
+  // A sentence from the module (no app token, a gateway refusal) is shown as it is.
+  assert.equal(pub.plainProblem({ lastError: 'This app token is not valid.', lastErrorKind: 'gateway' }), 'This app token is not valid.');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  assert.match(main, /lastErrorKind: 'gateway'/);
 });
 
 test('D7: the example conversation never sits under the sign-in prompt', () => {
@@ -459,7 +460,7 @@ test('D9: the onboarding dialog never grows past the 600 px window', () => {
 // showReconnectResult) reads p.status.text, so the status line must be plain
 // words too, never the raw "fetch failed".
 test('D5 + 0.2.7: statusLine says a failed Reconnect in plain words, gateway sentences pass through', () => {
-  const pub = require('../src/publik');
+  const pub = require('../src/publik-ui');
   const failed = pub.statusLine({ connected: true, revoked: true, disclosureAccepted: true, lastError: 'fetch failed', lastErrorKind: 'network' });
   assert.equal(failed.warn, true);
   assert.match(failed.text, /^cue could not reach publik\./);
@@ -471,10 +472,10 @@ test('D5 + 0.2.7: statusLine says a failed Reconnect in plain words, gateway sen
 });
 
 // Live check after the 0.2.7 rebase: a Reconnect press that cannot reach
-// publik sets `revoked` (0.2.7 reconnectInstall) and then fails the mint.
+// publik sets `revoked` (main.js publikReconnect) and then fails the mint.
 // The overlay, the ask message and the toast must still name the failure.
 test('0.2.7 Reconnect that fails: every place says the failure in plain words, not "disconnected"', () => {
-  const pub = require('../src/publik');
+  const pub = require('../src/publik-ui');
   const card = require('../renderer/publik-card');
   const problem = 'cue could not reach publik. Check your internet connection, then try again.';
   const view = { available: true, connected: false, revoked: true, disclosureAccepted: 1, lastError: 'fetch failed', problem, setupFailed: true };

@@ -35,7 +35,7 @@ const rendererSrc = read('renderer', 'renderer.js');
 const mainSrc = read('main.js');
 const css = read('renderer', 'styles.css');
 const html = read('renderer', 'index.html');
-const pub = require('../src/publik');
+const pub = require('../src/publik-ui');
 const card = require('../renderer/publik-card');
 const { createLLM, formatProviderErrorMessage, isAuthError } = require('../src/llm');
 const { createSTT } = require('../src/stt');
@@ -313,13 +313,15 @@ test('5: startup reads the wallet once (GET /wallet, free) when a publik key is 
   assert.equal(startupHarness({ provider: 'openai', apiKeys: { openai: 'sk' }, publik: {} }).ownKey, 1);
 });
 
-test('5: a wallet 401 key_revoked marks the key revoked, and the overlay and card show Reconnect at once', async () => {
+test('5: a wallet 401 marks the key revoked, and the overlay and card show Reconnect at once', async () => {
   const stored = { provider: 'publik', apiKeys: { publik: 'pk' }, publik: { revoked: false, disconnected: false } };
   let pushed = 0;
   const ctx = vm.createContext({
     store: { getSettings: () => stored, setPublik: (patch) => Object.assign(stored.publik, patch) },
     publikBuild: { baseUrl: 'https://publikhq.com/api/v1' },
-    publik: { fetchWallet: async () => { throw Object.assign(new Error('This computer was removed from your publik account.'), { status: 401, type: 'key_revoked', reprovision: false }); } },
+    // src/publik.js readWallet answers a 401 as a null wallet, never a throw.
+    publikModule: { readWallet: async () => ({ status: 401, wallet: null, message: 'This computer was removed from your publik account.' }) },
+    publik: { normalizeWallet: (w) => w },
     publikPush: () => { pushed++; }, publikState: () => ({}), publikProvision: async () => {}, recordEvent: () => {}, Date
   });
   vm.runInContext(`${fnFrom(mainSrc, 'async function publikRefreshWallet() {')}\n${fnFrom(mainSrc, 'function publikHandleRevoked(e) {')}\nthis.run = publikRefreshWallet;`, ctx);

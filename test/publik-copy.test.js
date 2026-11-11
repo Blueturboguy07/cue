@@ -28,7 +28,7 @@ for (const rel of FILES) {
 }
 
 test('the provider is labelled "publik API", never "Custom" or a vendor name', () => {
-  const publik = require('../src/publik');
+  const publik = require('../src/publik-ui');
   assert.equal(publik.PROVIDER_LABEL, 'publik API');
   const html = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.html'), 'utf8');
   // Settings opens on a tab named for publik; the brand is lowercase.

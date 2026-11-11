@@ -111,27 +111,31 @@ cue can't help until your OS lets it see and hear. When you first use a feature 
 
 **On Windows — one grant.** Only the microphone needs permission: Settings → **Privacy & security** → **Microphone** → turn on **Microphone access** *and* **Let desktop apps access your microphone**. Screenshots and meeting audio need no permission at all — they work immediately, using Windows loopback capture.
 
-### Step 2 — Pick how cue answers: publik API (default) or your own key
+### Step 2 — Sign in with publik, then pick how cue answers
 
-The packaged builds from the Releases page run on **publik API** by default.
-You need no account and no key to open cue. The first-run guide shows a short
-disclosure. It states the price: every request costs 50% of the model's
-published list price. It also states the average cost: most people spend
-under $2 a month. It also states where your data goes: your prompts and
-screenshots go through publik's servers to a shared model account, and
-publik never trains on them. Nothing is set up until you press **Continue
-with publik API**. A new computer starts at $0.00. Settings → Keys shows
-the balance line and a **Link this computer & pick a plan** button. Linking
-this computer to your publik account gives $0.05 of free use, once. Then
-add a plan or a pack to keep going. **Use my own key instead** switches
-to any of the providers below at any time. cue never replaces a key you have
-already entered.
+The packaged builds from the Releases page open with one small window:
+**Sign in with publik**. Click the button and sign in in your browser. The
+window continues by itself. Then it asks how to pay for AI. **Get a plan** or
+**Connect your plan** runs cue on **publik API** with no key of your own.
+**Use my own key** keeps cue on any of the providers below; add the key in
+Settings. You can change the answer at any time: Settings → Keys has
+**Sign in with publik** and **Use my own key**. cue never replaces a key you
+have already entered. Every request on publik API costs 50% of the model's
+published list price, from your publik plan or balance. Your prompts and
+screenshots go through publik's servers to a shared model account, and publik
+never trains on them.
 
-A build from source has no publik app token unless you export
-`PUBLIK_APP_TOKEN`; without one the publik option does not appear and cue works
-exactly as before. The release workflow embeds the token from the
-`PUBLIK_APP_TOKEN` repository secret (it is a publishable identifier that lets
-the gateway attribute installs to cue — it holds no balance and is not a key).
+The sign-in is the one way into cue: closing the window quits cue. A build
+from source needs a publik app token: export `PUBLIK_APP_TOKEN`. The release
+workflow embeds the token from the `PUBLIK_APP_TOKEN` repository secret into
+`src/publik-build.json` (it is a publishable identifier that lets publik
+attribute installs to cue — it holds no balance and is not a key). For
+development, `PUBLIK_API_KEY` in the environment uses that key and skips the
+mint. This computer's publik key lives in
+`~/Library/Application Support/publik/apps/cue.json` (macOS),
+`%LOCALAPPDATA%\publik\apps\cue.json` (Windows) or
+`~/.config/publik/apps/cue.json` (Linux), shared with other publik apps on
+the computer. The renderer never sees it.
 
 ### Step 2 (alternative) — Add your AI key (bring your own)
 
@@ -291,8 +295,8 @@ Run `xattr -cr /Applications/cue.app` in Terminal once (see Install → Option A
 
 ### Usage counts
 
-Packaged builds send two small events to publik: `app_opened` at each launch and `active_session` every 30 minutes while cue runs.
-Each event holds the app name (`cue`), the app version, the operating system, the CPU type and a random install ID. If cue holds a publik key, the key goes with the event so publik can count the install once.
+After the sign-in, cue sends two small events to publik: `app_opened` at each launch and `active_session` every 30 minutes while cue runs.
+Each event holds the app name (`cue`), the app version, the operating system, the CPU type and a random install ID. This computer's publik key goes with the event so publik can count the install once.
 No audio, transcript, screenshot, prompt, file name or own provider key is ever sent.
 To turn it off, set `DO_NOT_TRACK=1` in the environment before you start cue. Details: <https://publikhq.com/skills/telemetry.md>
 
