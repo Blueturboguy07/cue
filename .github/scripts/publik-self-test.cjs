@@ -69,21 +69,29 @@ async function main() {
   const origin = `http://127.0.0.1:${port}`;
   console.log(`fake publik on ${origin}; app: ${exe}; want: "${WANT_LINE}"`);
 
-  // A home folder of its own: the credential and the telemetry ID of this run never touch the runner's.
+  // A home folder of its own: the credential and the telemetry ID of this run never touch the
+  // runner's. On Windows the profile itself stays: the shell resolves AppData from
+  // "%USERPROFILE%\AppData\...", and an Electron app whose profile has no AppData folders ends
+  // at once with STATUS_BREAKPOINT (0x80000003), before any line is printed. Only LOCALAPPDATA,
+  // where the publik module keeps its files, points at the folder of this run.
   const home = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "publik-self-test-"));
+  const localAppData = path.join(home, "AppData", "Local");
+  const xdgConfig = path.join(home, ".config");
+  for (const d of [localAppData, xdgConfig, path.join(home, "Library", "Application Support")]) fs.mkdirSync(d, { recursive: true });
   const env = {
     ...process.env,
     PUBLIK_SELF_TEST: "1",
     PUBLIK_ORIGIN: origin,
-    HOME: home, USERPROFILE: home,
-    LOCALAPPDATA: path.join(home, "AppData", "Local"),
-    XDG_CONFIG_HOME: path.join(home, ".config"),
+    LOCALAPPDATA: localAppData,
+    XDG_CONFIG_HOME: xdgConfig,
     DO_NOT_TRACK: "1",
+    ...(process.platform === "win32" ? {} : { HOME: home }),
   };
   delete env.PUBLIK_API_KEY;
   delete env.PUBLIK_APP_TOKEN; // the built app must carry its own token
 
-  const child = spawn(exe, appArgs, { env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+  // Chromium's own log goes to stderr too, so a start-up failure names itself in stderrTail.
+  const child = spawn(exe, ["--enable-logging=stderr", ...appArgs], { env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
   let stdout = "", stderr = "", exited = null;
   child.stdout.on("data", (d) => { stdout += d; });
   child.stderr.on("data", (d) => { stderr += d; });
