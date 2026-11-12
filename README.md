@@ -58,6 +58,7 @@ Go to the [**Releases**](../../releases) page, then choose your platform:
 - **Windows 10/11 (x64):** download **`cue-win-x64.exe`**, run it, and launch cue from the Start menu. The installer is unsigned, so Windows SmartScreen may show an **Unknown publisher** warning.
 - **macOS (Apple Silicon):** download **`cue-…-mac-arm64.zip`**, unzip it, drag **`cue.app`** into **Applications**, and open it.
 - **macOS (Intel):** download **`cue-…-mac-x64.zip`**, unzip it, drag **`cue.app`** into **Applications**, and open it.
+- **Linux (x64):** download **`cue-…-linux-x64.AppImage`**, make it executable (`chmod +x`), and run it.
 
 ### Option B — Run from source (macOS or Windows)
 
