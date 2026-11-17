@@ -1521,11 +1521,17 @@ ipcMain.handle('applink:revoke', (_e, callerId) => {
 // -------- permissions IPC --------
 ipcMain.handle('permissions:check', () => getPermissionStatus());
 ipcMain.handle('permissions:request', () => requestPermissions());
+ipcMain.on('app:relaunch', (event) => {
+  requireOwnedWindow(event);
+  app.relaunch();
+  app.quit();
+});
 ipcMain.on('permissions:continue', async () => {
   const status = await getPermissionStatus();
   if (status.mic === 'granted' && status.screen === 'granted') {
-    if (permWin) { permWin.close(); permWin = null; }
+    // Keep a window alive: closing the gate first fires window-all-closed and quits.
     launchApp();
+    if (permWin) { permWin.close(); permWin = null; }
   }
 });
 

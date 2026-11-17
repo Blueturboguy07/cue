@@ -214,7 +214,7 @@
         <span class="perm-badge" id="badge-screen"></span>
       </div>
 
-      <div class="perm-note">
+      <div class="perm-note" id="permission-note">
         <strong>Tip:</strong> After toggling a permission in System Settings, click <strong>Check Again</strong> below.
         If Screen Recording was just enabled, you may need to restart cue for it to take effect.
       </div>
@@ -231,6 +231,11 @@
   <script>
     (function () {
       const cue = window.cue;
+      const isMac = cue.platform === 'darwin';
+      if (isMac) {
+        document.getElementById('permission-note').textContent =
+          'After enabling Microphone and Screen Recording in System Settings, restart cue to apply the changes. This window can show the old status until cue restarts.';
+      }
 
       const statusMic = document.getElementById('status-mic');
       const statusScreen = document.getElementById('status-screen');
@@ -278,7 +283,7 @@
           cue.log('permissions check error: ' + e);
         } finally {
           checkBtn.classList.remove('checking');
-          checkBtn.textContent = 'Check Again';
+          checkBtn.textContent = isMac ? 'Restart cue' : 'Check Again';
         }
       }
 
@@ -299,8 +304,13 @@
           : 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
       });
 
-      // Check again
-      checkBtn.addEventListener('click', checkPermissions);
+      // macOS can cache denied permissions until the process exits.
+      checkBtn.addEventListener('click', () => {
+        if (!isMac) return checkPermissions();
+        checkBtn.disabled = true;
+        checkBtn.textContent = 'Restarting…';
+        cue.relaunch();
+      });
 
       // Continue — close permission window and launch the real app
       continueBtn.addEventListener('click', () => {

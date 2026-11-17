@@ -256,7 +256,9 @@ Open **Settings → Audio**, select the model, and choose **Download**. A cancel
 Try `base.en`, `tiny.en`, or a quantized `q5`/`q8` model. Model size in Settings is the download size, not a guarantee of runtime RAM use; larger models require substantially more memory and CPU/GPU time.
 
 **"It says give access, but I already gave access."**
-You probably granted an older build. Because the app is ad-hoc signed, a rebuild changes its identity and macOS stops honoring the old grant (the checkmark can linger). Toggle cue **off and on** in System Settings → Screen Recording, or remove and re-add it.
+On macOS, enable Microphone and Screen Recording for the copy of **cue.app in Applications**, then click **Restart cue** in Cue's permission window. macOS can keep reporting the old permission status until the process exits; checking again in the same process does not apply that change. Open the app from Applications, rather than keeping different copies running from Downloads and Applications.
+
+Ad-hoc signed previews also change their signing identity between builds, so a checkmark from an older version may not authorize the new one. If a full restart still leaves access denied, remove the stale Screen Recording entry and add the current `/Applications/cue.app`, then restart. Downloadable updates need a consistent Developer ID signing identity to preserve grants across builds; notarization makes installation straightforward. The local signing script is for development on this Mac and does not provide Developer ID signing for releases.
 
 **"What should I say?" or "Recap" never hear the other person (macOS).**
 Expected — meeting audio is Windows-only (see [Platform support](#platform-support)). Your own mic still transcribes, so those features see the *You* side of the conversation but never the *Them* side.

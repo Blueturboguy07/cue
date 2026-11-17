@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('cue', {
   contextPick: () => ipcRenderer.invoke('context:pick'),
   contextRemove: (id) => ipcRenderer.invoke('context:remove', id),
   quit: () => ipcRenderer.send('app:quit'),
+  relaunch: () => ipcRenderer.send('app:relaunch'),
   permissionsCheck: () => ipcRenderer.invoke('permissions:check'),
   permissionsRequest: () => ipcRenderer.invoke('permissions:request'),
   permissionsContinue: () => ipcRenderer.send('permissions:continue'),
