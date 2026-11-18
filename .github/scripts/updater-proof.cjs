@@ -179,8 +179,12 @@ function appProcesses(o) {
     const r = spawnSync('tasklist', ['/FO', 'CSV', '/NH', '/FI', 'IMAGENAME eq cue.exe'], { encoding: 'utf8' }).stdout;
     return r.split(/\r?\n/).filter((l) => /^"cue\.exe"/i.test(l));
   }
+  // Processes whose executable is inside the bundle (not this script, whose arguments name the bundle).
   const r = spawnSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }).stdout;
-  return r.split('\n').filter((l) => l.includes(`${o.bundle}/Contents/`) && !l.includes('ShipIt'));
+  return r.split('\n').map((l) => l.trim()).filter((l) => {
+    const [pid, ...cmd] = l.split(' ');
+    return Number(pid) !== process.pid && cmd.join(' ').startsWith(`${o.bundle}/Contents/`) && !l.includes('ShipIt');
+  });
 }
 
 /** The version the installed copy carries on disk (macOS: Info.plist; Windows: the uninstall entry). */
@@ -278,12 +282,12 @@ async function run(o) {
     const a = summary.identityBefore;
     const b = summary.identityAfter;
     check('mac: same bundle ID after the update', a.bundleId === b.bundleId && b.bundleId === 'com.cue.overlay', b.bundleId);
-    check('mac: same designated requirement (what TCC keys the camera grant on)', a.designatedRequirement && a.designatedRequirement === b.designatedRequirement, b.designatedRequirement);
+    check('mac: same designated requirement (what TCC keys the microphone and screen-recording grants on)', a.designatedRequirement && a.designatedRequirement === b.designatedRequirement, b.designatedRequirement);
     check('mac: same signing authority', JSON.stringify(a.authority) === JSON.stringify(b.authority) && a.authority.length > 0, b.authority);
     check('mac: the updated bundle passes codesign --verify --deep --strict', b.codesignVerify === 'valid', b.codesignVerify);
     if (o.arch) {
       const archs = spawnSync('lipo', ['-archs', path.join(o.bundle, 'Contents', 'MacOS', 'cue')], { encoding: 'utf8' }).stdout.trim();
-      check(`mac: the updated app is the ${o.arch} build`, archs === o.arch, archs);
+      check(`mac: the updated app is the ${o.arch} build`, archs === ({ x64: 'x86_64' }[o.arch] || o.arch), archs);
     }
   }
 
@@ -309,15 +313,32 @@ function tcc(o) {
   const msgId = (l) => (l.match(/msgID=([0-9.]+)/) || [])[1];
   const ids = new Set(lines.filter(app).map(msgId).filter(Boolean));
   const services = new Set();
+  const checks = new Map(); // msgID -> { service, sender, preflight }
   for (const l of lines) {
     if (!app(l) && !ids.has(msgId(l))) continue;
     for (const m of l.matchAll(/kTCCService\w+/g)) services.add(m[0]);
+    const id = msgId(l);
+    if (!id) continue;
+    const c = checks.get(id) || {};
+    const send = l.match(/(\S+)\[\d+:[0-9a-f]+\] \[com\.apple\.TCC[^\]]*\] SEND: .*service=(kTCCService\w+)/);
+    if (send) { c.sender = send[1]; c.service = send[2]; }
+    const ctx = l.match(/AUTHREQ_CTX: .*service=(kTCCService\w+), preflight=(\w+)/);
+    if (ctx) { c.service = ctx[1]; c.preflight = ctx[2]; }
+    checks.set(id, c);
   }
   const bad = FORBIDDEN.filter((x) => services.has(x));
+  const tally = new Map();
+  for (const c of checks.values()) {
+    if (!c.service) continue;
+    const k = `${c.service} (sent by ${c.sender || '?'}, preflight=${c.preflight || '?'})`;
+    tally.set(k, (tally.get(k) || 0) + 1);
+  }
+  const notPreflight = [...checks.values()].filter((c) => c.preflight === 'no').length;
   const report = [
     `TCC log lines in the proof window: ${lines.length}`,
     `lines about ${o['bundle-id']} (or a path inside cue.app): ${lines.filter(app).length}`,
-    `TCC services the app asked for: ${[...services].join(', ') || 'none'}`,
+    `TCC checks that involve the app: ${[...tally].map(([k, v]) => `${v}x ${k}`).join('; ') || 'none'}`,
+    `of them not a preflight (a request that could prompt): ${notPreflight}`,
     bad.length ? `FAIL: the app asked for ${bad.join(', ')}` : `PASS: no ${FORBIDDEN.join(' / ')} request from the app`,
   ].join('\n');
   console.log(report);
