@@ -1,0 +1,59 @@
+# Update feed: for one GitHub release of cue, makes the files the self-updater reads
+# (publik-updater.cjs, docs/updates.md):
+#   latest.yml       + latest.yml.sig       Windows: the NSIS installer on the release (cue-win-x64.exe)
+#   latest-mac.yml   + latest-mac.yml.sig   macOS: the x64 zip and the arm64 zip (Squirrel.Mac installs from one)
+# The feed files carry ABSOLUTE asset URLs (https://github.com/<repo>/releases/download/<tag>/<file>) and
+# the sha512 of each file. The .sig files are minisign signatures made with the publik update key
+# (repo secrets PUBLIK_UPDATE_KEY and PUBLIK_UPDATE_KEY_PASSWORD); each one is verified against the public
+# key in publik-update-verify.cjs before upload. publik serves these four files at
+# https://publikhq.com/api/updates/cue/ from the scan-approved release.
+#
+# Run it once the release (a draft is fine) holds the installer files. It adds only the feed files that
+# are missing; "force" remakes them (after a file on the release was replaced). It never touches an installer.
+name: Update feed
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v0.2.16
+        required: true
+        type: string
+      force:
+        description: Remake feed files that already exist
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      force:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-feed-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  feed:
+    name: Feed for ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Make, sign, verify and upload the missing feed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: node scripts/publik-update-feed.cjs release --tag "$TAG" --app cue --repo "$GITHUB_REPOSITORY" $FORCE

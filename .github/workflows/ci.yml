@@ -6,6 +6,8 @@ on:
       - main
       - "codex/**"
   pull_request:
+  # The updater proof (updater-proof.yml) runs this whole workflow on its own commit.
+  workflow_call:
 
 permissions:
   contents: read

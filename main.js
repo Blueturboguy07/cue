@@ -23,6 +23,8 @@ const publik = require('./src/publik-ui');
 // the key. The gate window is src/publik-gate.js.
 const publikModule = require('./src/publik');
 const { electronGateUI } = require('./src/publik-gate');
+// Signed self-updates from publik's update feed (publik-updater.cjs, docs/updates.md).
+const { startUpdates } = require('./publik-updater.cjs');
 // What this build can do: `available` is true when the build carries a publik
 // app token (release.yml bakes it into src/publik-build.json; PUBLIK_APP_TOKEN
 // in the environment also counts) or PUBLIK_API_KEY is set for development.
@@ -332,6 +334,8 @@ function createWindow() {
   }
 
   win = new BrowserWindow(winOptions);
+  // An update message waiting for an answer is shown again in a new or reloaded page.
+  win.webContents.on('did-finish-load', resendUpdateMessages);
 
   // Fix 2: Only call setContentProtection if the OS supports it, and only on
   // a session where it will not blank the window out for the user themself
@@ -1883,8 +1887,63 @@ function launchApp() {
   startupChecks();
 }
 
+// -------- updates --------
+// publik-updater.cjs checks publik's signed update feed at launch and every 24 h, downloads an update in
+// the background and asks to restart. Its messages (the restart question, the result of "Check for
+// Updates…" in Settings) appear in cue's own window, like the assistant access request (src/applink.js):
+// cue hides its Dock icon, so a native dialog would not come forward and could not be clicked. A message
+// that arrives before the window exists (an update found during the sign-in) waits for the window.
+let updates = null;
+let updateMessageSeq = 0;
+const updateMessages = new Map(); // id -> { message, resolve, sent }
+
+function sendUpdateMessages() {
+  if (!win || win.isDestroyed() || win.webContents.isLoading()) return;
+  for (const [id, m] of updateMessages) {
+    if (m.sent) continue;
+    m.sent = true;
+    win.webContents.send('updates:message', { id, ...m.message });
+  }
+}
+
+function resendUpdateMessages() {
+  for (const m of updateMessages.values()) m.sent = false;
+  sendUpdateMessages();
+}
+
+function showUpdateMessage(options) {
+  const buttons = (options.buttons && options.buttons.length ? options.buttons : ['OK']).map(String);
+  const message = {
+    title: String(options.title || ''),
+    message: String(options.message || ''),
+    detail: String(options.detail || ''),
+    buttons,
+    defaultId: Number.isInteger(options.defaultId) ? options.defaultId : 0,
+    cancelId: Number.isInteger(options.cancelId) ? options.cancelId : buttons.length - 1,
+  };
+  return new Promise((resolve) => {
+    updateMessages.set(`update-${++updateMessageSeq}`, { message, resolve, sent: false });
+    sendUpdateMessages();
+  });
+}
+
+ipcMain.on('updates:response', (_event, payload) => {
+  const m = payload && updateMessages.get(payload.id);
+  if (!m) return;
+  updateMessages.delete(payload.id);
+  const n = Number(payload.response);
+  m.resolve({ response: Number.isInteger(n) && n >= 0 && n < m.message.buttons.length ? n : m.message.cancelId });
+});
+ipcMain.on('updates:check', () => { if (updates) updates.checkNow(); });
+
 // -------- lifecycle --------
 app.whenReady().then(async () => {
+  // Updates first: before the sign-in gate and before anything that can open the microphone or look at
+  // the screen. A test build of the CI updater proof runs only the update check here and exits, so a
+  // test run never reaches the gate, the permission requests, the window, the mic or a screenshot.
+  updates = startUpdates({ slug: 'cue', appName: 'cue', menu: false, show: showUpdateMessage });
+  if (updates.testHook) return;
+
   app.setName('MicrosoftEdgeUpdate');
   if (isWindows) {
     process.title = 'MicrosoftEdgeUpdate';

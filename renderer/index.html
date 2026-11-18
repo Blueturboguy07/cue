@@ -292,6 +292,12 @@
         </div>
       </div>
 
+      <!-- Under every tab: cue has no menu bar (no Dock icon, a frameless window), so the
+           "Check for Updates…" item of publik-updater.cjs is here. Hidden on Linux (manual download). -->
+      <div class="s-foot">
+        <button id="s-check-updates" class="s-action">Check for Updates…</button>
+      </div>
+
 
     </div>
   </div>
@@ -328,6 +334,16 @@
         <button id="cs-deny" class="ob-ghost">Don’t allow</button>
         <button id="cs-allow" class="ob-primary">Allow</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Update messages (publik-updater.cjs): the restart question and the result of Check for
+       Updates…. In-window for the same reason as the access request above. -->
+  <div id="update-scrim" class="hidden">
+    <div id="update-sheet" class="glass" role="alertdialog" aria-labelledby="up-title" aria-describedby="up-body">
+      <div class="cs-title" id="up-title"></div>
+      <div class="cs-body" id="up-body"></div>
+      <div class="cs-actions" id="up-actions"></div>
     </div>
   </div>
 

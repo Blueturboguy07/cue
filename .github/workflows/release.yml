@@ -1,16 +1,21 @@
 name: Build and Release
 
+# Then the update feed (update-feed.yml): latest.yml / latest-mac.yml with their signatures, made from
+# the files on the release and signed with the publik update key (docs/updates.md).
+
 on:
   push:
     tags:
       - 'v*' # Automatically trigger when you push a new version tag (e.g., v0.2.0)
+      - '!v*-updtest*' # v0.0.0-updtest.* tags belong to updater-proof.yml test runs
 
 permissions:
   contents: write
 
-# publik telemetry is off on build machines: a test run is not a user.
+# publik telemetry is off on build machines: a test run is not a user. No update checks either.
 env:
   DO_NOT_TRACK: "1"
+  PUBLIK_UPDATES: "0"
 
 jobs:
   guard:
@@ -134,3 +139,16 @@ jobs:
             dist/*.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The signed update feed for this tag, when this workflow built the files. It adds only the feed files
+  # that are missing: latest.yml as soon as the Windows installer is on the release, latest-mac.yml once
+  # the mac zips are there. The signed mac zips come from the release Mac (see docs/updates.md): upload
+  # them, then run "Update feed" by hand for this tag. It never replaces an installer.
+  feed:
+    name: Update feed
+    needs: [guard, release]
+    if: ${{ !cancelled() && needs.guard.outputs.build == 'true' && needs.release.result != 'failure' }}
+    uses: ./.github/workflows/update-feed.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

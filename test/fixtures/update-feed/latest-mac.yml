@@ -1,0 +1,12 @@
+version: '9.9.9-fixture.1'
+publikApp: 'surfcam'
+files:
+  - url: 'https://github.com/Blueturboguy07/surfcam/releases/download/v9.9.9-fixture.1/SurfCam-9.9.9-fixture.1-mac-universal.zip'
+    sha512: 'Djdwq8qin/r44D8/XNqg2QJodj8gL55zR21hCt/g16iVUozWbtI91pM3/d9fIYiW2A8QRqwxtxHgEk5iCjRdZQ=='
+    size: 16
+  - url: 'https://github.com/Blueturboguy07/surfcam/releases/download/v9.9.9-fixture.1/SurfCam-9.9.9-fixture.1-mac-universal.dmg'
+    sha512: '72OskmkyJQpUmp1FsXDqj/9a4BG4nCKfIHvXGc9IhbCcwPZRw2Kzwcz85dRcZ7BPnrupO18j1ibPijBt+lA09g=='
+    size: 16
+path: 'https://github.com/Blueturboguy07/surfcam/releases/download/v9.9.9-fixture.1/SurfCam-9.9.9-fixture.1-mac-universal.zip'
+sha512: 'Djdwq8qin/r44D8/XNqg2QJodj8gL55zR21hCt/g16iVUozWbtI91pM3/d9fIYiW2A8QRqwxtxHgEk5iCjRdZQ=='
+releaseDate: '2026-11-18T00:00:00.000Z'

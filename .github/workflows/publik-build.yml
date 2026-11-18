@@ -24,6 +24,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PUBLIK_UPDATES: '0' # the self-tests do not check for updates (publik-updater.cjs)
+
 concurrency:
   group: publik-build-${{ github.ref }}
   cancel-in-progress: true
@@ -77,6 +80,9 @@ jobs:
             test -f "$app/Contents/Resources/app/src/publik.js"
             test -f "$app/Contents/Resources/app/src/publik-gate.js"
             test -f "$app/Contents/Resources/app/src/publik-gate-preload.cjs"
+            test -f "$app/Contents/Resources/app/publik-updater.cjs"
+            test -f "$app/Contents/Resources/app/publik-update-verify.cjs"
+            test -f "$app/Contents/Resources/app/node_modules/electron-updater/package.json"
             node -e 'const c = require(process.argv[1]); if (!c.appToken) { console.error("no app token in the packed app"); process.exit(1); }' "$PWD/$app/Contents/Resources/app/src/publik-build.json"
             test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
             lipo -archs "$app/Contents/MacOS/cue"
@@ -161,6 +167,9 @@ jobs:
           test -f dist/win-unpacked/resources/app/src/publik.js
           test -f dist/win-unpacked/resources/app/src/publik-gate.js
           test -f dist/win-unpacked/resources/app/src/publik-gate-preload.cjs
+          test -f dist/win-unpacked/resources/app/publik-updater.cjs
+          test -f dist/win-unpacked/resources/app/publik-update-verify.cjs
+          test -f dist/win-unpacked/resources/app/node_modules/electron-updater/package.json
           node -e 'const c = require(process.argv[1]); if (!c.appToken) { console.error("no app token in the packed app"); process.exit(1); }' "$PWD/dist/win-unpacked/resources/app/src/publik-build.json"
 
       - name: publik self-test (silent install, then the installed app against a fake publik)

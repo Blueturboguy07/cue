@@ -300,6 +300,13 @@ Each event holds the app name (`cue`), the app version, the operating system, th
 No audio, transcript, screenshot, prompt, file name or own provider key is ever sent.
 To turn it off, set `DO_NOT_TRACK=1` in the environment before you start cue. Details: <https://publikhq.com/skills/telemetry.md>
 
+### Updates
+
+On macOS and Windows, cue checks publik's signed update feed (`https://publikhq.com/api/updates/cue/`) at launch, every 24 hours and from **Check for Updates…** at the bottom of Settings.
+It downloads an update in the background, verifies its signature and checksum, and asks you to restart. The check only downloads the feed file, in a session of its own: it sends no account, key, cookie or install ID.
+Set `PUBLIK_UPDATES=0` to turn off the automatic checks. Linux: download new versions from the Releases page.
+Details, the feed contract, releases, roll back and key rotation: [docs/updates.md](docs/updates.md).
+
 ## Contributing
 
 Issues and PRs welcome. cue is intentionally small and readable — `main.js` (app + capture + AI), `renderer/` (the UI), `src/` (providers). No build step for the source (plain HTML/CSS/JS).

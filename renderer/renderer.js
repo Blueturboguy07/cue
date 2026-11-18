@@ -2157,7 +2157,7 @@
     // The window trails the cursor while dragging; going click-through then would drop the release.
     if (draggingWindow) return;
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #transcript-sidebar, #settings-scrim, #onboard-scrim, #consent-scrim, #update-scrim'));
     setIgnore(!overUI);
   });
   setIgnore(true); // start fully click-through; hovering the panel re-enables it
@@ -2217,6 +2217,53 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && pendingConsentId) { e.preventDefault(); answerConsent(false); }
   });
+
+  // ---- updates (publik-updater.cjs) --------------------------------------
+  // "Check for Updates…" in Settings, and the updater's messages ("cue X is
+  // ready to install." Restart Now / Later). In this window for the same
+  // reason as the access request above; #update-scrim is in the click-through
+  // selector and in styles.css for the same reason too. One message at a time.
+  const updateScrim = $('#update-scrim');
+  const updateQueue = [];
+  let shownUpdate = null;
+
+  function answerUpdate(response) {
+    if (!shownUpdate) return;
+    cue.updatesRespond(shownUpdate.id, response);
+    shownUpdate = null;
+    updateScrim.classList.add('hidden');
+    showNextUpdate();
+  }
+
+  function showNextUpdate() {
+    if (shownUpdate || !updateQueue.length) return;
+    shownUpdate = updateQueue.shift();
+    $('#up-title').textContent = shownUpdate.message;
+    $('#up-body').textContent = shownUpdate.detail;
+    const actions = $('#up-actions');
+    actions.textContent = '';
+    shownUpdate.buttons.forEach((label, i) => {
+      const button = document.createElement('button');
+      button.className = i === shownUpdate.defaultId ? 'ob-primary' : 'ob-ghost';
+      button.textContent = label;
+      button.addEventListener('click', () => answerUpdate(i));
+      actions.appendChild(button);
+    });
+    updateScrim.classList.remove('hidden');
+    setIgnore(false);
+    const first = actions.children[shownUpdate.defaultId];
+    if (first) first.focus();
+  }
+
+  cue.on('updates:message', (message) => { updateQueue.push(message); showNextUpdate(); });
+  // Escape and clicking away answer with the cancel button ("Later" or "OK").
+  updateScrim.addEventListener('click', (e) => { if (e.target === updateScrim && shownUpdate) answerUpdate(shownUpdate.cancelId); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && shownUpdate) { e.preventDefault(); answerUpdate(shownUpdate.cancelId); }
+  });
+  const checkUpdatesButton = $('#s-check-updates');
+  if (!isMac && !isWindows) checkUpdatesButton.classList.add('hidden'); // Linux: manual download
+  checkUpdatesButton.addEventListener('click', () => cue.updatesCheck());
 
   // ---- onboarding / first-run tutorial -----------------------------------
   const obScrim = $('#onboard-scrim');

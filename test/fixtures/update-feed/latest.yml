@@ -1,0 +1,9 @@
+version: '9.9.9-fixture.1'
+publikApp: 'surfcam'
+files:
+  - url: 'https://github.com/Blueturboguy07/surfcam/releases/download/v9.9.9-fixture.1/SurfCam-Setup-9.9.9-fixture.1-win-x64.exe'
+    sha512: 'jdfJQ9544elTLSPrkrlYsfWqjY0IGG26N8VoLklKHoEsErLtGrqCQCq7M99HCop9VLEK6mSIcb96y3PEpgJXyg=='
+    size: 26
+path: 'https://github.com/Blueturboguy07/surfcam/releases/download/v9.9.9-fixture.1/SurfCam-Setup-9.9.9-fixture.1-win-x64.exe'
+sha512: 'jdfJQ9544elTLSPrkrlYsfWqjY0IGG26N8VoLklKHoEsErLtGrqCQCq7M99HCop9VLEK6mSIcb96y3PEpgJXyg=='
+releaseDate: '2026-11-18T00:00:00.000Z'
