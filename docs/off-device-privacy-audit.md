@@ -1,4 +1,4 @@
-# Cue: off-device exposure audit and patch plan
+st# Cue: off-device exposure audit and patch plan
 
 Audit date: 2026-10-28. Source baseline: `d62f5a7`, including the existing uncommitted macOS `type: 'panel'` change in `main.js`. Package version: 0.2.5; lockfile Electron version: 33.2.1.
 

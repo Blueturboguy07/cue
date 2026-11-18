@@ -683,11 +683,11 @@ async function captionSlide(imageDataUrl, transcriptSlice) {
         turns: [{ role: 'user', text: buildSlideUser(transcriptSlice) }],
         imageDataUrl,
         maxTokens: 300,
-        // A caption cut at the cap is trimmed and ends with "…", never with
-        // the chat answer's "(Cut off: …)" note.
+        // An incomplete caption keeps its text with an ellipsis.
         lengthCut: 'ellipsis',
         signal: guard.signal,
-        onToken: () => {}
+        onToken: () => {},
+        onRetry: (retry) => logFilterRetry('captionSlide', 'caption', retry)
       }),
       guard.expired
     ]);
@@ -1027,7 +1027,8 @@ async function runFeature(mode, userText) {
           onToken: (t) => { if (streamSettled) return; answerStarted = true; rearm(); send('llm:token', { text: t }); },
           onActivity: noteActivity,
           signal: guard.signal,
-          onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => { if (!guard.signal.aborted) publikNoteHeaders(res && res.headers); } : undefined
+          onResponse: settings.provider === publik.PUBLIK_PROVIDER ? (res) => { if (!guard.signal.aborted) publikNoteHeaders(res && res.headers); } : undefined,
+          onRetry: (retry) => logFilterRetry('runFeature', mode, retry)
         }),
         guard.expired
       ]);
@@ -1043,7 +1044,7 @@ async function runFeature(mode, userText) {
     if (settings.provider === publik.PUBLIK_PROVIDER) publikScheduleWalletRefresh();
   } catch (e) {
     if (featureRequest !== request) return;
-    recordEvent({ level: 'error', event: e && e.emptyAnswer ? 'llm_empty_answer' : 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider, finishReason: (e && e.finishReason) || null } });
+    recordEvent({ level: 'error', event: e && e.emptyAnswer ? 'llm_empty_answer' : 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider, finishReason: e?.finishReason || null, stopKind: e?.stopKind || null } });
     // A bad own key: plain words, "Switch to publik" first, "Fix my key"
     // second; never the provider's raw 401.
     if (e && e.ownKeyFailed) {
@@ -1058,6 +1059,10 @@ async function runFeature(mode, userText) {
     streamSettled = true;
     if (featureRequest === request) { featureRequest = null; state.busy = false; }
   }
+}
+
+function logFilterRetry(frame, mode, { from, to, finishReason }) {
+  recordEvent({ level: 'info', event: 'llm_filter_retry', msg: `${from} -> ${to}`, frame, context: { mode, from, to, finishReason } });
 }
 
 // -------- IPC --------
@@ -1685,7 +1690,8 @@ function launchApp() {
     store: createMeetingStore({ file: path.join(app.getPath('userData'), 'meetings.json'), debounceMs: 1500 }),
     llmFactory: () => createLLM(store.getSettings()),
     getNotesDestination: () => windowPrivacy.paused ? null : notesDestination(store.getSettings()),
-    log: (msg) => console.log('[meetings]', msg)
+    log: (msg) => console.log('[meetings]', msg),
+    onRetry: (retry) => logFilterRetry('meetingNotes', 'notes', retry)
   });
   restoredTurns = meetingMemory.resumeOpen();
   if (restoredTurns.length) transcript.push(...restoredTurns.slice(-MAX_TRANSCRIPT_TURNS));

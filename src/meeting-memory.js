@@ -24,7 +24,7 @@ const DEFAULTS = {
 };
 
 function createMeetingMemory(opts) {
-  const { store, llmFactory } = opts;
+  const { store, llmFactory, onRetry } = opts;
   const now = opts.now || Date.now;
   const log = opts.log || (() => {});
   const cfg = { ...DEFAULTS, ...opts };
@@ -62,10 +62,10 @@ function createMeetingMemory(opts) {
         system: NOTES_SYSTEM,
         turns: [{ role: 'user', text: buildNotesPrompt(turns) }],
         signal: request.signal,
-        // Stored notes never carry the chat answer's "(Cut off: …)" note: a
-        // cut is trimmed and ends with "…", as slide captions do.
+        // Incomplete notes use an ellipsis, like slide captions.
         lengthCut: 'ellipsis',
-        onToken: () => {}
+        onToken: () => {},
+        onRetry
       }), request.signal);
       if (request.signal.aborted || (hasDestinationPolicy && getNotesDestination() !== destination)) return null;
       const notes = parseNotes(text);

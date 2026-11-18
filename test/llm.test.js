@@ -38,7 +38,7 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
     return class FakeAnthropic {
       constructor(clientOptions) {
         capturedClientOptions = clientOptions;
-        this.messages = { create: async (req, options) => { capturedCompletionRequest = req; capturedRequestOptions = options; if (fakeCreateError) { const error = fakeCreateError; if (error.once) fakeCreateError = null; throw error; } return fakeStreamParts || [{ type: 'ping' }, { type: 'content_block_delta', delta: { type: 'text_delta', text: 'ok' } }]; } };
+      this.messages = { create: async (req, options) => { capturedCompletionRequest = req; capturedRequestOptions = options; if (fakeCreateError) { const error = fakeCreateError; if (error.once) fakeCreateError = null; throw error; } return fakeStreamParts || [{ type: 'content_block_delta', delta: { type: 'text_delta', text: 'ok' } }, { type: 'message_stop' }]; } };
       }
     };
   }
@@ -487,7 +487,8 @@ test('publik: routes through the publik base URL with the minted key, never the 
   assert.equal(llm.ready, true);
   assert.equal(llm.model, 'publik-fast');
   await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
-  assert.deepEqual(capturedClientOptions, { apiKey: PUBLIK_KEY, baseURL: 'https://publikhq.com/api/v1' });
+  assert.equal(capturedClientOptions.apiKey, PUBLIK_KEY);
+  assert.equal(capturedClientOptions.baseURL, 'https://publikhq.com/api/v1');
   assert.equal(capturedCompletionRequest.model, 'publik-fast');
 });
 
@@ -702,6 +703,30 @@ test('anthropic refusal is reported instead of a blank answer', async () => {
     createLLM({ provider: 'anthropic', smart: false, apiKeys: { anthropic: 'k' }, models: { anthropic: { fast: 'f' } } }).stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken() {} }),
     /safety filter/
   );
+});
+
+test('Anthropic through a relay keeps the partial reply and marks a refusal', async () => {
+  fakeStreamParts = [
+    { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Part of the answer.' } },
+    { type: 'message_delta', delta: { stop_reason: 'refusal' } },
+    { type: 'message_stop' }
+  ];
+  const tokens = [];
+  const llm = createLLM({ provider: 'anthropic', apiKeys: { anthropic: 'key' }, anthropicBaseUrl: 'https://relay.example/v1' });
+  const answer = await llm.stream({ system: 's', turns: [], onToken: (t) => tokens.push(t) });
+  assert.match(answer, /^Part of the answer\.\n\n\(Incomplete: .*safety filter/);
+  assert.equal(tokens.join(''), answer);
+  assert.equal(capturedClientOptions.baseURL, 'https://relay.example');
+});
+
+test('Gemini distinguishes a blocked prompt from an empty reply and marks recitation', async () => {
+  const llm = createLLM({ provider: 'gemini', apiKeys: { gemini: 'key' } });
+  const args = { system: 's', turns: [], onToken() {} };
+  fakeStreamParts = [{ promptFeedback: { blockReason: 'SAFETY' } }];
+  await assert.rejects(llm.stream(args), /safety filter/);
+  fakeStreamParts = [{ text: 'Partial quote.', candidates: [{ finishReason: 'RECITATION' }] }];
+  assert.match(await llm.stream(args), /^Partial quote\.\n\n\(Incomplete: .*repeated published text/);
+  assert.equal(await llm.stream({ ...args, lengthCut: 'ellipsis' }), 'Partial quote.…');
 });
 
 for (const provider of ['openai', 'custom', 'anthropic', 'azure', 'gemini']) {
