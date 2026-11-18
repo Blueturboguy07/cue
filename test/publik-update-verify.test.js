@@ -238,8 +238,10 @@ test('provider: the real publik key refuses a feed signed by a test key', async 
 });
 
 test('provider: a missing feed reports electron-updater\'s "channel file not found" code', async () => {
-  const { p } = provider({});
+  const { p, executor } = provider({});
   await assert.rejects(p.getLatestVersion(), (e) => e.code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND');
+  // No feed means "no update", never "refused": the signature is not asked for until the feed exists.
+  assert.ok(!executor.seen.some((u) => /\.sig(\?|$)/.test(u)), executor.seen.join(' '));
 });
 
 test('provider: the staging-ID header electron-updater adds is not sent', () => {

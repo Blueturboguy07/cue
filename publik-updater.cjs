@@ -96,7 +96,10 @@ class PublikSignedFeedProvider extends GenericProvider {
     const noCache = this.updater.isAddNoCacheQuery;
     const feedUrl = newUrlFromBase(feedName, this.baseUrl, noCache);
     const sigUrl = newUrlFromBase(`${feedName}.sig`, this.baseUrl, noCache);
-    const [feed, sig] = await Promise.all([this.fetchFeedFile(feedUrl, feedName), this.fetchFeedFile(sigUrl, `${feedName}.sig`)]);
+    // The feed first, then its signature: when no feed is published both answer 404, and the feed's 404
+    // ("no update") must win over the signature's ("refused"). In parallel, whichever failed first won.
+    const feed = await this.fetchFeedFile(feedUrl, feedName);
+    const sig = await this.fetchFeedFile(sigUrl, `${feedName}.sig`);
     let verified;
     try {
       verified = verifyMinisign(feed, sig, this.publicKeys, { file: feedName });
