@@ -21,13 +21,11 @@
 # test builds are signed with a code-signing identity made on the runner. That proves the Squirrel.Mac
 # path (same identity accepted, another refused), not Developer ID signing or notarization.
 #
-# workflow_dispatch needs this file on the default branch; until it is there, a push to feat/updater runs it.
+# Run it by hand (Actions › Updater proof, or `gh workflow run updater-proof.yml`).
 name: Updater proof
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['feat/updater']
 
 permissions:
   contents: write # creates, then deletes, the test prereleases
