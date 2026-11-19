@@ -301,6 +301,17 @@ function macPending() {
 function macStaged() {
   const base = path.join(os.homedir(), 'Library', 'Caches', `${BUNDLE_ID}.ShipIt`);
   if (!fs.existsSync(base)) return null;
+  // ShipIt's request names the staged bundle (updateBundleURL); the update.* folder scan is the fallback.
+  const stateFile = path.join(base, 'ShipItState.plist');
+  if (fs.existsSync(stateFile)) {
+    try {
+      const st = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', stateFile], { quiet: true }).stdout);
+      const app = st.updateBundleURL && decodeURIComponent(new URL(st.updateBundleURL).pathname).replace(/\/$/, '');
+      if (app && fs.existsSync(path.join(app, 'Contents', 'Info.plist'))) {
+        return { dir: path.dirname(app), version: macPlist(app, 'CFBundleShortVersionString'), state: true, target: st.targetBundleURL || null, relaunch: st.launchAfterInstallation };
+      }
+    } catch {}
+  }
   for (const d of fs.readdirSync(base)) {
     const app = path.join(base, d, 'cue.app');
     if (d.startsWith('update.') && fs.existsSync(path.join(app, 'Contents', 'Info.plist'))) {
