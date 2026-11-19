@@ -82,38 +82,89 @@ do not replace it with `-t`.
 
 ## Cut a release
 
-1. Set the new version in `package.json`. Commit.
-2. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`. `release.yml` builds the Windows installer
-   and the Linux AppImages, puts them on the release, then runs `update-feed.yml`, which adds `latest.yml`
-   and its `.sig`.
-3. Make the two signed macOS zips on the release Mac (the Developer ID is in its keychain):
-   `MAC_SIGN=1 npm run dist:mac` (with the `APPLE_*` notarization variables) makes the signed, notarized
-   `dist/cue-X.Y.Z-mac-x64.zip` and `dist/cue-X.Y.Z-mac-arm64.zip`. Or take the two unsigned apps of
-   **Actions › publik build** (`publik-build.yml`), sign, notarize and staple each one, then zip it:
-   `ditto -c -k --sequesterRsrc --keepParent cue.app cue-X.Y.Z-mac-<x64|arm64>.zip`.
-   Squirrel.Mac installs from these zips.
-4. Upload the mac zips: `gh release upload vX.Y.Z cue-X.Y.Z-mac-x64.zip cue-X.Y.Z-mac-arm64.zip`.
-5. Make the mac feed: run **Actions › Update feed** with the tag (or
-   `gh workflow run update-feed.yml -f tag=vX.Y.Z`). It adds `latest-mac.yml` and its `.sig`. It adds only
-   missing feed files. Use **force** after you replace an installer file.
-6. Check that the release holds the four feed files.
-
-For a publik release (a draft that publik scans): put all the installer files on the draft, then run
-**Update feed** for the draft's tag BEFORE the scan. The scan then sees the feed files too. When the draft
-is published, `release.yml` sees that the release already has files and does nothing (no feed job either).
-
-The update key is needed only in step 5 (and 2): `update-feed.yml` reads the repo secrets
-`PUBLIK_UPDATE_KEY` and `PUBLIK_UPDATE_KEY_PASSWORD`. `publik-build.yml` builds the installers and does
-not need the key. Without CI, run the same script on a Mac that has the key in its keychain:
+One command, on the release Mac (it has the Developer ID, the notary profile and the update key in its
+keychain), from a clean `main`:
 
 ```sh
-PUBLIK_UPDATE_KEY="$(security find-generic-password -s publik-update-key -a mann-private -w)" \
-PUBLIK_UPDATE_KEY_PASSWORD="$(security find-generic-password -s publik-update-key -a mann-password -w)" \
-node scripts/publik-update-feed.cjs release --tag vX.Y.Z --app cue --repo Blueturboguy07/cue
+scripts/publik-release.sh X.Y.Z [--notes-file notes.md] [--summary "one line for the bump commit"]
 ```
+
+It does every step, in this order, and stops before publishing when any check fails:
+
+1. Checks: the tree is clean, `main` is in step with origin, X.Y.Z is higher than the last release, the tag
+   `vX.Y.Z` is free. If `package.json` is not at X.Y.Z yet, it bumps `package.json` and `package-lock.json`
+   (the two files a bump touches), commits `release: cue vX.Y.Z` and pushes (`PUBLIK_RELEASE_TRAILER` adds a
+   trailer line). Then every bump file must say X.Y.Z.
+2. CI build: **publik build** (`publik-build.yml`) for that commit, or an earlier green run of the same commit.
+   It builds the Windows installer, the two Linux AppImages and the two macOS apps (unsigned), checks the
+   publik app token in the packed apps and runs the publik self-test.
+3. A DRAFT release `vX.Y.Z` for that commit.
+4. macOS, per architecture: signs the app with `Developer ID Application: Mann Bellani (R5R3ZS54LV)` (inner
+   code first, hardened runtime, `build-resources/entitlements.mac.plist`), notarizes it
+   (`xcrun notarytool submit --keychain-profile publik --wait`), staples it, checks it, and zips it
+   (`ditto -c -k --sequesterRsrc --keepParent`): `cue-X.Y.Z-mac-x64.zip`, `cue-X.Y.Z-mac-arm64.zip`.
+   cue ships zips only (Squirrel.Mac installs from the zip), no dmg, as every earlier release.
+5. Uploads `cue-win-x64.exe`, the two AppImages and `SHA256SUMS.txt` to the draft.
+6. The feed: `scripts/publik-update-feed.cjs release --force` with the update key from the keychain (service
+   `publik-update-key`, accounts `mann-private` and `mann-password`; the key goes to that process only and is
+   never printed): `latest.yml`, `latest-mac.yml` and their `.sig`, with absolute GitHub URLs.
+7. Verify, from the draft: both feed signatures with the app's public key (key ID F5E0515C77912BD0); feed
+   version, `publikApp` and URLs; sha512 and size of every feed file; `SHA256SUMS.txt`; the exe
+   ProductVersion and each mac app's Info.plist = X.Y.Z; codesign, the Developer ID, the hardened runtime,
+   the designated requirement (the same as every release, so the TCC grants keep), the stapled ticket,
+   Gatekeeper ("Notarized Developer ID"); the publik app token in each mac app (as a hash, the same as in the
+   last release); the asset list; the repo CI (`ci.yml`) green on that commit.
+8. Publish: public and "latest". Publishing creates the tag; `release.yml` then sees the files and builds
+   nothing (the script checks that). Every public asset URL must answer 200.
+
+It never starts the app and never prints a secret. After a failure, run the same command again: it resumes
+the draft (files already on it stay; the feed is made again). It needs about 1.5 GB of free disk
+(`PUBLIK_RELEASE_MIN_FREE_MB`) and works in `$TMPDIR/publik-release-cue-vX.Y.Z` (`PUBLIK_RELEASE_WORK`), which it
+deletes at the end. publik takes new releases in once a day at 10:00 UTC; until then the feed on publikhq.com
+serves the previous release.
+
+The pieces it calls also work alone: `update-feed.yml` makes the feed in CI from the repo secrets
+`PUBLIK_UPDATE_KEY` and `PUBLIK_UPDATE_KEY_PASSWORD` (`gh workflow run update-feed.yml -f tag=vX.Y.Z`), and
+`release.yml` still builds and uploads the Windows and Linux files when a bare `v*` tag is pushed without a
+release.
 
 A build made with the `dir` target (publik-build.yml) has no `resources/app-update.yml`; the app then
 writes the same small file in its own folder (`publik-app-update.yml` in the user data folder).
+
+## Live update proof
+
+`.github/workflows/live-update-proof.yml` (run by hand, inputs `from_tag` and `expect_version`) proves the
+update with the real thing, on GitHub's macOS (Apple silicon and Intel) and Windows runners. The steps are in
+`.github/scripts/live-update-proof.cjs`:
+
+1. It downloads the `from_tag` release file from its public GitHub URL (the file publik links), checks it
+   against `SHA256SUMS.txt` and the release's signed feed, and on macOS sets the quarantine flag and checks
+   Gatekeeper (`spctl`: "Notarized Developer ID") and the stapled ticket. It installs as a user does: Finder
+   moves `cue.app` to /Applications; Windows runs the installer with `/S`.
+2. macOS: it records the designated requirement and writes real TCC grants for `com.cue.overlay` (microphone and
+   camera in the user TCC.db, screen recording and accessibility in the system TCC.db, each with the `csreq`
+   blob of that requirement), in the schema of the runner's macOS.
+3. It starts the installed app the normal way (`open -a`; on Windows the installed `cue.exe`). No test build,
+   no test hook, no feed override: the app asks `https://publikhq.com/api/updates/cue/`. Two variables keep a
+   runner honest and do not touch the update path: `DO_NOT_TRACK=1`, and `PUBLIK_ORIGIN=http://127.0.0.1:9`
+   (the sign-in gate's account API), so the gate stays on "publik is not reachable" and the runner is never
+   registered as a publik install. One Chromium switch, `--log-net-log`, records the URLs the app requests.
+4. It waits for the updater: with `expect_version` = the `from_tag` version, the app must log "Update for
+   version X is not available" after a valid signature and download nothing. With a higher version, the app
+   must find it, download the file of its own platform from GitHub and (macOS) have Squirrel.Mac stage it.
+   The restart question shows in cue's main window, which exists only after the sign-in, so at the gate there
+   is no question: the proof checks the "Later" path (the app keeps running on the old version), closes the
+   gate window as a user does (the update installs at quit), checks the version on disk and that cue did not
+   start by itself, opens cue again and checks that the running app says it is up to date at the new version.
+5. macOS after the update: the same designated requirement, Gatekeeper still accepts the app, every TCC row is
+   still there and the updated app satisfies each stored `csreq` (`codesign --verify -R`). That is the check
+   tccd makes. A runner cannot show a consent prompt, so this is the proof that no new prompt is needed. The
+   TCC log must show no microphone, camera, screen or system-audio request from cue.
+
+cue never gets past the sign-in gate in the proof, and every microphone, camera and screen call of cue comes
+after that gate (`test/updater-wiring.test.js` checks the order), so the grants cannot make cue capture.
+"Check for Updates…" (the Settings button), the restart question and the 24-hour check are not reachable at
+the gate: `test/updater-schedule.test.js` covers them (the workflow's unit job runs it).
 
 ## Roll back
 

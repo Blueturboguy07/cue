@@ -1,0 +1,109 @@
+# Live update proof: a REAL cue release, downloaded from GitHub the way a user downloads it, installed the
+# way a user installs it, started the normal way (no test build, no test hook, no feed override), updated by
+# the LIVE feed https://publikhq.com/api/updates/cue/. The work is in .github/scripts/live-update-proof.cjs
+# (its header lists every check). docs/updates.md › "Live update proof".
+#
+#   from_tag = expect_version's tag  harness check: the app must say "no update" and stay on that version
+#   expect_version higher            the update: the app finds, downloads and stages it by itself; the proof
+#                                    quits and reopens cue as a user does and checks the new version
+#
+# macOS: Gatekeeper with the quarantine flag set, the designated requirement, real TCC grants (microphone,
+# camera, screen recording, accessibility) written for cue's bundle ID before the start, and after the update:
+# the same requirement, Gatekeeper still accepts the app, every stored grant's csreq is satisfied by the new app.
+#
+# cue never gets past its sign-in gate here (the proof never signs in and the gate's account API points at a
+# closed local port), and every microphone, camera and screen call of cue comes after that gate, so the grants
+# cannot make cue capture anything. The macOS job checks the TCC log for that.
+#
+# The menu item "Check for Updates…" and the restart question live in cue's main window, which opens only
+# after the sign-in. The "unit" job runs their tests (test/updater-schedule.test.js), and the 24-hour check.
+#
+# Run it by hand (Actions › Live update proof, or
+# `gh workflow run live-update-proof.yml -f from_tag=v0.2.16 -f expect_version=0.2.16`).
+name: Live update proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_tag:
+        description: Release to install first, e.g. v0.2.16
+        required: true
+        type: string
+      expect_version:
+        description: Version the app must report at the end (the from_tag version = harness check), e.g. 0.2.17
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-update-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+# No PUBLIK_UPDATES here: the app must check the live feed. The proof gives the app DO_NOT_TRACK=1 itself.
+jobs:
+  unit:
+    name: Updater unit tests (menu item, restart question, 24-hour check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Updater tests
+        env:
+          DO_NOT_TRACK: '1'
+        run: node --test test/updater-schedule.test.js test/updater-wiring.test.js test/publik-update-verify.test.js test/publik-update-feed.test.js
+
+  macos:
+    name: macOS ${{ matrix.arch }} — ${{ inputs.from_tag }} → ${{ inputs.expect_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, arch: arm64 }
+          - { os: macos-15-intel, arch: x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Live proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_TAG: ${{ inputs.from_tag }}
+          EXPECT: ${{ inputs.expect_version }}
+          ARCH: ${{ matrix.arch }}
+        run: node .github/scripts/live-update-proof.cjs mac --from-tag "$FROM_TAG" --expect "$EXPECT" --arch "$ARCH" --out proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-update-proof-macos-${{ matrix.arch }}
+          path: proof
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows:
+    name: Windows x64 — ${{ inputs.from_tag }} → ${{ inputs.expect_version }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Live proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM_TAG: ${{ inputs.from_tag }}
+          EXPECT: ${{ inputs.expect_version }}
+        run: node .github/scripts/live-update-proof.cjs win --from-tag "$env:FROM_TAG" --expect "$env:EXPECT" --out proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-update-proof-windows
+          path: proof
+          if-no-files-found: warn
+          retention-days: 30
