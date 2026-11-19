@@ -457,7 +457,7 @@ done
 case "$CI" in "completed success "*) ok "CI run ${CI##* } green on $SHA" ;; *) bad "CI on $SHA: ${CI:-no run}" ;; esac
 if [ "$FAILS" -gt 0 ]; then
   say ""
-  die "$FAILS check(s) failed: $TAG stays a DRAFT. Fix the cause and run the same command again."
+  die "$FAILS check(s) failed: $TAG stays a DRAFT. Fix the cause and run the same command again (to make a file again, delete it from the draft first: gh release delete-asset $TAG <file> -R $REPO)."
 fi
 ok "every check passed"
 

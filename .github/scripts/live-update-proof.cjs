@@ -505,6 +505,12 @@ async function mac(o) {
   facts.installMethod = method;
   check(`installed to ${MAC_APP} (${method})`, fs.existsSync(path.join(MAC_APP, 'Contents', 'Info.plist')));
   fs.rmSync(work, { recursive: true, force: true });
+  // App Translocation: macOS runs a quarantined app that the USER has not moved with Finder from a random
+  // read-only folder, where no update can install. A user's own Finder drag turns that off; a scripted
+  // Finder move does not (run 44509070799: both Macs ran cue translocated). Gatekeeper has accepted the
+  // quarantined copy above, so the proof now removes the flag from the installed copy, which has the same
+  // effect as the user's drag, and then checks that cue runs from /Applications.
+  run('xattr', ['-dr', 'com.apple.quarantine', MAC_APP]);
 
   // 2. The designated requirement, and real TCC grants for it.
   const before = macIdentity(MAC_APP);
@@ -521,15 +527,8 @@ async function mac(o) {
   // 3. Start the installed app the normal way.
   const tccStart = run('date', ['+%Y-%m-%d %H:%M:%S'], { quiet: true }).stdout.trim();
   macScreenshot('0-before-start');
-  let l1 = await macLaunch('1');
-  if (l1.translocated) {
-    // App Translocation (a quarantined app that Finder did not move): Squirrel.Mac cannot update a
-    // translocated copy. Record it, quit, and start again from /Applications without the flag.
-    check('the app runs from /Applications (not translocated)', false, l1.command);
-    await macQuit(l1);
-    run('xattr', ['-dr', 'com.apple.quarantine', MAC_APP]);
-    l1 = await macLaunch('1b');
-  }
+  const l1 = await macLaunch('1');
+  check('cue runs from /Applications, not from an App Translocation copy', !l1.translocated, l1.command);
   check('cue started (the normal way: open -a /Applications/cue.app)', !!l1.pid, `${l1.command || 'no process'}; first-open dialog: ${l1.dialog}`);
   check('the running cue is the installed copy in /Applications', l1.command && l1.command.startsWith(`${MAC_APP}/Contents/MacOS/cue`), l1.command);
   await sleep(5000);
@@ -620,7 +619,8 @@ function ps(command) {
 
 function winVersions() {
   const exe = WIN_EXE();
-  const product = fs.existsSync(exe) ? ps(`(Get-Item '${exe}').VersionInfo.ProductVersion`) : null;
+  // electron-builder writes the version resource with four parts (0.2.16.0); the app version is the first three.
+  const product = fs.existsSync(exe) ? ps(`(Get-Item '${exe}').VersionInfo.ProductVersion`).replace(/^(\d+\.\d+\.\d+)\.0$/, '$1') : null;
   const display = ps("Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'cue *' } | ForEach-Object { $_.DisplayVersion }");
   return { exe: product, uninstallEntry: display };
 }

@@ -140,7 +140,10 @@ update with the real thing, on GitHub's macOS (Apple silicon and Intel) and Wind
 1. It downloads the `from_tag` release file from its public GitHub URL (the file publik links), checks it
    against `SHA256SUMS.txt` and the release's signed feed, and on macOS sets the quarantine flag and checks
    Gatekeeper (`spctl`: "Notarized Developer ID") and the stapled ticket. It installs as a user does: Finder
-   moves `cue.app` to /Applications; Windows runs the installer with `/S`.
+   moves `cue.app` to /Applications; Windows runs the installer with `/S`. A user's own Finder drag turns off
+   App Translocation; a scripted Finder move does not (macOS then runs a read-only copy from a random folder,
+   where no update can install). So, after the Gatekeeper check, the proof removes the quarantine flag from
+   the installed copy and checks that cue runs from /Applications.
 2. macOS: it records the designated requirement and writes real TCC grants for `com.cue.overlay` (microphone and
    camera in the user TCC.db, screen recording and accessibility in the system TCC.db, each with the `csreq`
    blob of that requirement), in the schema of the runner's macOS.
