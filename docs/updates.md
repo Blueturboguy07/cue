@@ -118,7 +118,11 @@ It does every step, in this order, and stops before publishing when any check fa
    nothing (the script checks that). Every public asset URL must answer 200.
 
 It never starts the app and never prints a secret. After a failure, run the same command again: it resumes
-the draft (files already on it stay; the feed is made again). It needs about 1.5 GB of free disk
+the draft (files already on it stay; the feed is made again). The release stays on the commit of the draft;
+commits after it may change only the release tooling (this script, `docs/`, `.github/`), so a fix of the
+script can go on `main` between two runs. If the app changed after that commit, the script stops: delete the
+draft and release a new version. GitHub allows 5,000 API calls an hour per user; when the limit is reached,
+the script waits for the reset (it asks GitHub about CI runs once per 90 s, `PUBLIK_RELEASE_POLL_S`). It needs about 1.5 GB of free disk
 (`PUBLIK_RELEASE_MIN_FREE_MB`) and works in `$TMPDIR/publik-release-cue-vX.Y.Z` (`PUBLIK_RELEASE_WORK`), which it
 deletes at the end. publik takes new releases in once a day at 10:00 UTC; until then the feed on publikhq.com
 serves the previous release.

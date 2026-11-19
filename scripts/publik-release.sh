@@ -27,6 +27,7 @@
 #   PUBLIK_RELEASE_WORK         work folder (default: $TMPDIR/publik-release-cue-vX.Y.Z); deleted at the end
 #   PUBLIK_RELEASE_MIN_FREE_MB  free disk needed before each download (default 1500)
 #   PUBLIK_RELEASE_TRAILER      a trailer line for the version-bump commit
+#   PUBLIK_RELEASE_POLL_S       seconds between two questions to GitHub about a CI run (default 90)
 set -euo pipefail
 set +x
 umask 022
@@ -92,6 +93,37 @@ need_disk() {
 }
 plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null; }
 
+# Every gh call goes through this. GitHub allows 5,000 API calls an hour per user, and every other job of
+# the same user shares that budget (the release of v0.2.17 stopped on it once). On "rate limit exceeded",
+# wait until the limit resets and try again; on a server or network error, try again a few times; any other
+# error (for example "release not found") returns at once. A streamed download (-O -) is tried again only
+# on the rate limit, which comes before the first byte. The waits for CI runs ask GitHub once per POLL s.
+POLL="${PUBLIK_RELEASE_POLL_S:-90}"
+gh() {
+  local try=0 rc err wait reset streaming=0 a
+  for a in "$@"; do [ "$a" = "-" ] && streaming=1; done
+  err="$(mktemp "$WORK/tmp/gh-err.XXXXXX")"
+  while :; do
+    rc=0
+    command gh "$@" 2>"$err" || rc=$?
+    if [ "$rc" -eq 0 ]; then cat "$err" >&2; rm -f "$err"; return 0; fi
+    try=$((try + 1))
+    if grep -qi "rate limit" "$err" && [ "$try" -le 8 ]; then
+      reset="$(command gh api rate_limit --jq .resources.core.reset 2>/dev/null || echo 0)"
+      wait=$((reset - $(date +%s) + 10))
+      if grep -qi "secondary rate limit" "$err" || [ "$wait" -lt 90 ]; then wait=90; fi
+      [ "$wait" -gt 3700 ] && wait=3700
+      printf 'note: GitHub API rate limit (gh %s): waiting %s s, then trying again\n' "$1" "$wait" >&2
+      sleep "$wait"
+    elif [ "$streaming" = 0 ] && [ "$try" -le 4 ] && grep -qiE "HTTP 5[0-9][0-9]|connection reset|timeout|timed out|unexpected EOF|TLS handshake|no such host" "$err"; then
+      printf 'note: gh %s: server or network error; trying again in %s s\n' "$1" $((30 * try)) >&2
+      sleep $((30 * try))
+    else
+      cat "$err" >&2; rm -f "$err"; return "$rc"
+    fi
+  done
+}
+
 # ---------------------------------------------------------------- 0. tools
 step "0. tools"
 for t in gh git node npx codesign xcrun ditto security shasum openssl python3 lipo spctl curl file; do
@@ -118,7 +150,15 @@ ok "last release $LAST_TAG; new version $VERSION"
 if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
   die "the tag $TAG exists on origin: $TAG is taken (published already?)"
 fi
-REL_JSON="$(gh release view "$TAG" -R "$REPO" --json isDraft,targetCommitish,assets 2>/dev/null || true)"
+# The list of releases (drafts included) tells "no release for this tag" apart from a failed call. GitHub
+# lets several drafts carry one tag name; this script makes one and stops if it finds more.
+REL_LIST="$(gh api "repos/$REPO/releases?per_page=100" --jq "[.[] | select(.tag_name == \"$TAG\") | {isDraft: .draft, targetCommitish: .target_commitish}]")" \
+  || die "cannot read the releases of $REPO"
+case "$(node -p 'JSON.parse(process.argv[1]).length' "$REL_LIST")" in
+  0) REL_JSON="" ;;
+  1) REL_JSON="$(node -p 'JSON.stringify(JSON.parse(process.argv[1])[0])' "$REL_LIST")" ;;
+  *) die "more than one release carries the tag $TAG: keep one draft, delete the others" ;;
+esac
 if [ -n "$REL_JSON" ] && [ "$(node -p 'JSON.parse(process.argv[1]).isDraft' "$REL_JSON")" != true ]; then
   die "a published release $TAG exists"
 fi
@@ -151,9 +191,21 @@ if [ "$(node -p 'require("./package.json").version')" != "$VERSION" ]; then
   git fetch --quiet origin "$BRANCH"
 fi
 bump_files_ok || die "the version is not $VERSION in every bump file"
-SHA="$(git rev-parse HEAD)"
-[ "$SHA" = "$(git rev-parse "origin/$BRANCH")" ] || die "HEAD $SHA is not pushed to origin/$BRANCH"
-ok "version $VERSION in package.json and package-lock.json; commit $SHA is origin/$BRANCH"
+HEAD_SHA="$(git rev-parse HEAD)"
+[ "$HEAD_SHA" = "$(git rev-parse "origin/$BRANCH")" ] || die "HEAD $HEAD_SHA is not pushed to origin/$BRANCH"
+SHA="$HEAD_SHA"
+if [ -n "$REL_JSON" ]; then
+  # Resume: the release stays on the commit that its draft and its CI build were made from. Commits after it
+  # on the branch may change only the release tooling (a fix of this script, docs/, .github/), never the app.
+  SHA="$(node -p 'JSON.parse(process.argv[1]).targetCommitish' "$REL_JSON")"
+  git merge-base --is-ancestor "$SHA" "$HEAD_SHA" 2>/dev/null || die "the draft $TAG targets $SHA, which is not on $BRANCH"
+  [ "$(git show "$SHA:package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')" = "$VERSION" ] \
+    || die "the commit $SHA of the draft $TAG is not version $VERSION"
+  APP_CHANGES="$(git diff --name-only "$SHA" "$HEAD_SHA" -- . ':(exclude)scripts/publik-release.sh' ':(exclude)docs' ':(exclude).github')"
+  [ -z "$APP_CHANGES" ] || die "app files changed after $SHA, the commit of the draft $TAG ($(tr '\n' ' ' <<<"$APP_CHANGES")): delete the draft and release a new version"
+  [ "$SHA" = "$HEAD_SHA" ] || say "resume: the release stays on $SHA; the commits after it change only the release tooling"
+fi
+ok "version $VERSION in package.json and package-lock.json; release commit $SHA (origin/$BRANCH is $HEAD_SHA)"
 
 # ---------------------------------------------------------------- 2. CI build
 step "2. CI build (publik-build.yml) for $SHA"
@@ -166,8 +218,8 @@ if [ -z "$RUN_LINE" ] || { [ "$(cut -d' ' -f2 <<<"$RUN_LINE")" = completed ] && 
   gh workflow run publik-build.yml -R "$REPO" --ref "$BRANCH"
   say "started publik-build.yml; waiting for the run to appear"
   OLD="$(cut -d' ' -f1 <<<"$RUN_LINE")"
-  for _ in $(seq 1 60); do
-    sleep 10
+  for _ in $(seq 1 10); do
+    sleep "$POLL"
     RUN_LINE="$(find_run)"
     [ -n "$RUN_LINE" ] && [ "$(cut -d' ' -f1 <<<"$RUN_LINE")" != "$OLD" ] && break
   done
@@ -178,7 +230,7 @@ say "build run: https://github.com/$REPO/actions/runs/$RUN"
 while :; do
   read -r STATUS CONCLUSION < <(gh run view "$RUN" -R "$REPO" --json status,conclusion --jq '"\(.status) \(.conclusion)"')
   [ "$STATUS" = completed ] && break
-  sleep 30
+  sleep "$POLL"
 done
 [ "$CONCLUSION" = success ] || die "build run $RUN ended: $CONCLUSION"
 [ "$(gh run view "$RUN" -R "$REPO" --json headSha --jq .headSha)" = "$SHA" ] || die "build run $RUN is not for $SHA"
@@ -199,9 +251,16 @@ else
   [ "$TARGET" = "$SHA" ] || die "the draft $TAG targets $TARGET, not $SHA"
   ok "resuming the draft $TAG ($SHA)"
 fi
-assets() { gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name'; }
-has() { local a; a="$(assets)"; grep -qxF "$1" <<<"$a"; }
-upload() { gh release upload "$TAG" -R "$REPO" --clobber "$@" >/dev/null; }
+# The file list of the draft is read ONE time here (a failed read stops the script) and kept up to date by
+# upload(). has() never calls GitHub: a failed call must not look like a missing file.
+ASSETS="$(gh release view "$TAG" -R "$REPO" --json assets --jq '.assets[].name')" || die "cannot read the files of the draft $TAG"
+has() { grep -qxF "$1" <<<"$ASSETS"; }
+upload() {
+  gh release upload "$TAG" -R "$REPO" --clobber "$@" >/dev/null
+  local f
+  for f in "$@"; do ASSETS="$ASSETS"$'\n'"$(basename "$f")"; done
+}
+[ -z "$ASSETS" ] || say "on the draft already: $(tr '\n' ' ' <<<"$ASSETS")"
 mkdir -p "$WORK/sums"
 record_sums() { # sha256 for SHA256SUMS.txt, sha512 for the feed check, of a local file
   shasum -a 256 "$1" | cut -d' ' -f1 > "$WORK/sums/$(basename "$1").sha256"
@@ -449,10 +508,10 @@ for F in $INSTALLERS; do
 done
 say "repo CI (ci.yml) on $SHA:"
 CI=""
-for _ in $(seq 1 60); do
+for _ in $(seq 1 40); do
   CI="$(gh run list -R "$REPO" -w ci.yml -c "$SHA" -L 1 --json status,conclusion,databaseId --jq '.[0] | "\(.status) \(.conclusion) \(.databaseId)"' 2>/dev/null || true)"
   case "$CI" in completed*|"") break ;; esac
-  sleep 30
+  sleep "$POLL"
 done
 case "$CI" in "completed success "*) ok "CI run ${CI##* } green on $SHA" ;; *) bad "CI on $SHA: ${CI:-no run}" ;; esac
 if [ "$FAILS" -gt 0 ]; then
@@ -477,16 +536,16 @@ for F in latest-mac.yml latest.yml; do
 done
 # Publishing created the tag, and the tag starts release.yml: its guard must see the files and build nothing.
 RR=""
-for _ in $(seq 1 30); do
+for _ in $(seq 1 6); do
   RR="$(gh run list -R "$REPO" -w release.yml -L 10 --json databaseId,headBranch,status --jq "[.[] | select(.headBranch == \"$TAG\")][0] | select(. != null) | \"\(.databaseId) \(.status)\"" 2>/dev/null || true)"
   case "$RR" in *" completed") break ;; esac
-  sleep 10
+  sleep "$POLL"
 done
 if [ -n "$RR" ]; then
   JOBS="$(gh run view "${RR%% *}" -R "$REPO" --json jobs --jq '.jobs[] | "\(.name)=\(.conclusion)"' | tr '\n' ' ')"
   case "$JOBS" in *"Build on"*"=success"*) bad "release.yml run ${RR%% *} built over the release: $JOBS" ;; *) ok "release.yml run ${RR%% *}: the guard kept the files ($JOBS)" ;; esac
 else
-  say "note: no release.yml run for $TAG seen within 5 minutes"
+  say "note: no release.yml run for $TAG seen after 6 checks"
 fi
 [ "$FAILS" -eq 0 ] || die "$FAILS check(s) after publishing failed (above)"
 cd "$ROOT"
