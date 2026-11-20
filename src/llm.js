@@ -34,7 +34,7 @@ const DEFAULT_MODELS = {
   anthropic: CURRENT_ANTHROPIC_DEFAULT_FAST,
   gemini: CURRENT_GEMINI_DEFAULT,
   ollama: 'llama3.2',
-  groq: 'llama-3.1-8b-instant',
+  groq: 'openai/gpt-oss-20b',
   minimax: 'MiniMax-M2.7',
   // deepseek-chat/deepseek-reasoner were retired 2026-07-24 and now 404; the
   // replacement aliases are deepseek-flash (non-thinking) and deepseek-v4-pro
