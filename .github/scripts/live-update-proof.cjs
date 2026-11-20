@@ -552,7 +552,9 @@ async function mac(o) {
   facts.firstStart = s1;
   const sigOk = s1.sig.find((x2) => x2.feed === FEED);
   check(`the app verified the signature of publik's ${FEED} (key ${KEY_ID})`, sigOk && sigOk.keyId === KEY_ID && sigOk.version === o.expect, sigOk);
-  check('no updater error in the log', !s1.errors.length, s1.errors.join(' | '));
+  // On an Intel Mac, electron-updater asks sysctl for the Rosetta flag, which does not exist there. It logs that and goes on.
+  const macErrors = s1.errors.filter((e) => !/sysctl\.proc_translated/.test(e));
+  check('no updater error in the log', !macErrors.length, macErrors.join(' | '));
   if (!wantUpdate) {
     check(`the app says "no update": current ${from}, latest ${o.expect}`, s1.notAvailable.some((n) => n.current === from && n.latest === o.expect), s1.notAvailable);
     check('the app downloaded nothing', !s1.found.length && !s1.downloading.length && !s1.downloaded.length && !macPending().some((f) => /\.zip$/.test(f)) && !macStaged(), { found: s1.found, pending: macPending() });
