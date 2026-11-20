@@ -560,7 +560,9 @@ async function mac(o) {
     check(`the app found ${o.expect} in the feed`, s1.found.some((f) => f.version === o.expect), s1.found);
     const want = `https://github.com/${REPO}/releases/download/v${o.expect}/cue-${o.expect}-mac-${arch}.zip`;
     check(`the app downloaded the ${arch} zip of v${o.expect} from GitHub (the URL in the signed feed)`, s1.downloading.some((u) => u.includes(want)) && s1.downloaded.some((d) => d.version === o.expect && d.file.endsWith(`cue-${o.expect}-mac-${arch}.zip`)), { downloading: s1.downloading, downloaded: s1.downloaded });
-    const st = macStaged();
+    // Squirrel.Mac writes ShipItState.plist a moment after the update folder: look for 40 s.
+    let st = macStaged();
+    for (let i = 0; i < 20 && !(st && st.version === o.expect && st.state); i++) { require('child_process').execSync('sleep 2'); st = macStaged(); }
     facts.staged = st;
     check(`Squirrel.Mac accepted the code signature and staged ${o.expect} for ShipIt`, st && st.version === o.expect && st.state, st);
     // "Later": the app keeps running on the old version until it quits. No restart by itself.
