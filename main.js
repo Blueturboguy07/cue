@@ -1268,12 +1268,14 @@ function checkSelectedOwnKey() {
   }).catch(() => {});
 }
 
-// The gate's answer becomes cue's publik state. "Connect your plan": the
-// module's key goes into apiKeys.publik and publik becomes the provider a
-// fresh settings file defaults to (launchApp). "Use my own key": no publik
-// key in the settings; the settings card offers "Sign in with publik"
-// (publik:accept-disclosure), which needs no new mint because the module
-// keeps the credential.
+// The gate's answer becomes cue's publik state. The gate shows no pay screen:
+// with no stored choice it stores 'publik'. 'publik': the module's key goes
+// into apiKeys.publik and publik becomes the provider a fresh settings file
+// defaults to (launchApp); a 402 later offers a plan (describeGatewayError).
+// A stored 'own_key' (an earlier gate, or "Disconnect publik" in Settings):
+// no publik key in the settings; the settings card offers "Sign in with
+// publik" (publik:accept-disclosure), which needs no new mint because the
+// module keeps the credential.
 function publikApplyGate(gate) {
   const c = publikModule.readCredential() || { key: gate.key, base_url: publikBuild.baseUrl, install_id: '', claim_url: null };
   if (gate.choice === 'publik') { publikConnect({ ...c, key: gate.key }, gate.wallet); return; }
@@ -1296,7 +1298,7 @@ function publikConnect(c, wallet) {
     baseUrl: c.base_url || publikBuild.baseUrl, claimUrl: (w && w.claimUrl) || c.claim_url || '',
     claimState: (w && w.claimState) || s.publik.claimState || 'anonymous', choice: 'publik',
     wallet: w, balanceMicros: w ? w.balanceMicros : s.publik.balanceMicros, balanceAt: Date.now(),
-    // The gate said what publik costs and the person chose it: no first-run card.
+    // Signed in at the gate (or chose publik in the app): no first-run card.
     disclosureAccepted: publikBuild.disclosureVersion, cardShown: true,
     revoked: false, disconnected: false, lastError: '', lastErrorKind: '', lastErrorRetryAt: 0
   });
@@ -1804,7 +1806,7 @@ function launchApp() {
   if (isMac && app.dock) app.dock.hide();
 
   // Before the app-link snapshot and before the window exists, so a first run
-  // that chose "Connect your plan" at the gate boots with provider 'publik'.
+  // with the choice 'publik' from the gate boots with provider 'publik'.
   // Runs once per settings file and never moves a user who has a working key.
   // No network call happens here.
   if (store.getSettings().publik.choice === 'publik' && store.applyPublikDefault(publikBuild)) {
@@ -1950,8 +1952,8 @@ app.whenReady().then(async () => {
   }
 
   // Sign in with publik, before any other window. The gate shows its screens
-  // in a small window and resolves once this computer is signed in and the
-  // person chose how to pay for AI (src/publik.js ensureSignedIn). It also
+  // in a small window and resolves once this computer is signed in, with no
+  // pay screen (src/publik.js ensureSignedIn). It also
   // starts usage telemetry: app_opened now, active_session every 30 minutes,
   // counts only; DO_NOT_TRACK=1 turns it off. PUBLIK_SELF_TEST=1 prints the
   // self-test line and exits inside it. Closing the gate window quits cue.

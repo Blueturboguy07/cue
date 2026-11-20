@@ -115,10 +115,10 @@ cue can't help until your OS lets it see and hear. When you first use a feature 
 
 The packaged builds from the Releases page open with one small window:
 **Sign in with publik**. Click the button and sign in in your browser. The
-window continues by itself. Then it asks how to pay for AI. **Get a plan** or
-**Connect your plan** runs cue on **publik API** with no key of your own.
-**Use my own key** keeps cue on any of the providers below; add the key in
-Settings. You can change the answer at any time: Settings → Keys has
+window continues by itself, and cue opens at once on **publik API** with no
+key of your own. cue asks you to get a plan only when your publik usage is at
+zero. To use your own key instead, add it in Settings for any of the providers
+below. You can change this at any time: Settings → Keys has
 **Sign in with publik** and **Use my own key**. cue never replaces a key you
 have already entered. Every request on publik API costs 50% of the model's
 published list price, from your publik plan or balance. Your prompts and

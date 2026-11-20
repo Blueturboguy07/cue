@@ -116,20 +116,16 @@ function credentialFile() {
 }
 const credential = () => JSON.parse(fs.readFileSync(credentialFile(), 'utf8'));
 
-test('the gate: sign in, get a plan, connect it; telemetry starts after the sign-in with the install key', async () => {
+test('the gate: sign in, then straight in with publik (no pay screen); telemetry starts after the sign-in with the install key', async () => {
   fresh();
-  wallets = [anonymous, anonymous, claimedEmpty, claimedEmpty, claimedPlan];
+  wallets = [anonymous, anonymous, claimedEmpty];
   const { out, err } = await run({ STAY_MS: '1600' });
   const seen = screens(out);
   assert.deepEqual(seen.map((s) => [s.title, s.note]), [
     ['Sign in with publik', null],
-    ['Sign in with publik', 'Waiting for you to sign in in your browser.'],
-    ['Choose how to pay for AI', null],
-    ['Connect your plan', null]
+    ['Sign in with publik', 'Waiting for you to sign in in your browser.']
   ]);
-  assert.equal(seen[2].body, 'You are signed in as @mann. This app uses AI. Get a publik plan, or use your own key.');
-  assert.equal(seen[3].body, 'You are signed in as @mann. Your plan: Plus. Connect it to use AI in this app, or use your own key.');
-  assert.deepEqual(out.filter((l) => l.startsWith('OPEN ')), [`OPEN ${origin}/claim/abc`, `OPEN ${origin}/wallet?top_up=1`]);
+  assert.deepEqual(out.filter((l) => l.startsWith('OPEN ')), [`OPEN ${origin}/claim/abc`]);
   assert.ok(out.includes('GATE {"choice":"publik","handle":"mann"}'), out.join('\n'));
   assert.ok(out.includes('PROVIDER publik'));
   assert.equal(credential().key, KEY);
@@ -156,16 +152,44 @@ test('the gate: sign in, get a plan, connect it; telemetry starts after the sign
   assert.equal(installs.app_token, 'pat_gatetest');
 });
 
-test('"Use my own key" is stored; the next start skips the plan screen', async () => {
+test('a signed-in person with no plan and no balance sees no screen: the choice publik is stored', async () => {
   fresh();
   wallets = [claimedEmpty];
-  const first = await run({ PRESS: JSON.stringify({ 'Choose how to pay for AI': 'Use my own key' }) });
-  assert.deepEqual(screens(first.out).map((s) => s.title), ['Choose how to pay for AI']);
-  assert.ok(first.out.includes('PROVIDER needs_own_key'));
-  assert.equal(credential().choice, 'own_key');
+  const { out } = await run();
+  assert.equal(screens(out).length, 0, 'no pay screen');
+  assert.ok(!out.some((l) => l.startsWith('OPEN ')), 'no browser page opens');
+  assert.ok(out.includes('GATE {"choice":"publik","handle":"mann"}'), out.join('\n'));
+  assert.ok(out.includes('PROVIDER publik'));
+  assert.equal(credential().choice, 'publik');
+});
+
+test('a stored own_key choice is kept: no screen, the gate answers own_key', async () => {
+  fresh();
+  wallets = [claimedEmpty];
+  await run();
+  const c = credential();
+  fs.writeFileSync(credentialFile(), JSON.stringify({ ...c, choice: 'own_key' }, null, 2));
   const second = await run();
-  assert.equal(screens(second.out).length, 0, 'no screen at the second start');
-  assert.ok(second.out.some((l) => l.startsWith('GATE ') && l.includes('own_key')));
+  assert.equal(screens(second.out).length, 0, 'no screen');
+  assert.ok(second.out.includes('GATE {"choice":"own_key","handle":"mann"}'), second.out.join('\n'));
+  assert.ok(second.out.includes('PROVIDER needs_own_key'));
+  assert.equal(credential().choice, 'own_key', 'the stored choice stays own_key');
+  assert.equal(credential().key, KEY, 'the stored key stays');
+});
+
+test('the words of the plan screen stay in the module (for a setting or a 402), not on the start-up path', () => {
+  const m = require(MODULE);
+  const w = { ...claimedEmpty, top_up_url: 'https://publikhq.com/wallet?top_up=1' };
+  const choose = m.gateScreen('choose', w);
+  assert.equal(choose.title, 'Choose how to pay for AI');
+  assert.equal(choose.body, 'You are signed in as @mann. This app uses AI. Get a publik plan, or use your own key.');
+  assert.deepEqual(choose.buttons.map((b) => b.action), ['get_plan', 'own_key']);
+  const connect = m.gateScreen('choose', { ...claimedPlan });
+  assert.equal(connect.title, 'Connect your plan');
+  assert.equal(connect.body, 'You are signed in as @mann. Your plan: Plus. Connect it to use AI in this app, or use your own key.');
+  const src = fs.readFileSync(MODULE, 'utf8');
+  const gate = src.slice(src.indexOf('async function ensureSignedIn('), src.indexOf('async function selfTest('));
+  assert.doesNotMatch(gate, /gateScreen\("choose"/, 'ensureSignedIn never shows the plan screen');
 });
 
 test('no other way past the sign-in screen while anonymous, and no telemetry before the sign-in', async () => {
@@ -189,7 +213,7 @@ test('publik not reachable shows Retry and nothing else', async () => {
 test('a revoked key (401) provisions a new one at the next start', async () => {
   fresh();
   wallets = [claimedPlan];
-  const first = await run({ PRESS: JSON.stringify({ 'Connect your plan': 'Connect your plan' }) });
+  const first = await run();
   assert.ok(first.out.includes('PROVIDER publik'));
   walletStatus = 401; requests = [];
   await run({ PRESS: JSON.stringify({ 'Sign in with publik': 'exit' }) }, 15000);
@@ -214,7 +238,7 @@ test('PUBLIK_SELF_TEST prints the ok line only after a real GET /wallet, and nam
 test('DO_NOT_TRACK=1: no telemetry, the gate still runs', async () => {
   fresh();
   wallets = [claimedPlan];
-  const { out, err } = await run({ DO_NOT_TRACK: '1', PRESS: JSON.stringify({ 'Connect your plan': 'Connect your plan' }) });
+  const { out, err } = await run({ DO_NOT_TRACK: '1' });
   assert.ok(out.includes('PROVIDER publik'));
   assert.ok(!requests.some((r) => r.url === '/api/v1/telemetry'));
   assert.ok(err.includes('publik-telemetry: app_opened -> off (opt-out)'), err);

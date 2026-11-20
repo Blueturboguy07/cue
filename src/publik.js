@@ -5,7 +5,7 @@
 // At app start, before any screen of your own: `const gate = await ensureSignedIn(ui)`. It
 //   1. loads or provisions this computer's publik key (POST /api/v1/installs);
 //   2. shows Sign in with publik until GET /api/v1/wallet says "claimed" (no other way past it);
-//   3. when USES_AI: asks once how the app pays for AI and stores the answer (setChoice() changes it);
+//   3. when USES_AI: uses the publik account for AI, with no pay screen (setChoice() changes it);
 //   4. starts usage counting: app_opened now, active_session every 30 minutes (POST /api/v1/telemetry).
 const { randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
@@ -19,7 +19,7 @@ const MODULE_DIR = __dirname;
 const APP_SLUG = "cue";
 /** The version of the nearest package.json: the one the release tooling bumps. */
 const APP_VERSION = packageVersion();
-/** false: the app calls no model. It still signs in and counts users; it skips the plan screen. */
+/** false: the app calls no model. It still signs in and counts users; it stores no choice. */
 const USES_AI = true;
 const ORIGIN = process.env.PUBLIK_ORIGIN || "https://publikhq.com"; // PUBLIK_ORIGIN: tests only
 const DEFAULT_BASE_URL = `${ORIGIN}/api/v1`;
@@ -166,7 +166,7 @@ async function ensureSignedIn(ui = terminalUI()) {
     process.exit(0);
     await new Promise(() => {});
   }
-  let signNote = null, signPoll = true, planNote = null, planPoll = false;
+  let signNote = null, signPoll = true;
   for (;;) {
     let c, r;
     try {
@@ -187,16 +187,7 @@ async function ensureSignedIn(ui = terminalUI()) {
       continue;
     }
     let choice = USES_AI ? readCredential()?.choice ?? null : null;
-    if (USES_AI && !choice) {
-      if (w.plan.kind !== "none" || w.balance_micros > 0) { planNote = null; planPoll = false; } // the plan is there: Connect your plan
-      const a = await ask(ui, gateScreen("choose", w, planNote), c.key, planPoll ? (x) => x.plan.kind !== "none" || x.balance_micros > 0 : undefined);
-      planNote = null; planPoll = false;
-      if (a === "get_plan") { ui.openUrl(w.top_up_url); planNote = "Waiting for your plan. Finish in your browser."; planPoll = true; }
-      if (a === "timeout") planNote = "No plan after 10 minutes. Click Get a plan to try again.";
-      if (a !== "connect" && a !== "own_key") continue; // "done": the plan is there; the next screen is Connect your plan
-      choice = a === "connect" ? "publik" : "own_key";
-      setChoice(choice);
-    }
+    if (USES_AI && !choice) { choice = "publik"; setChoice(choice); } // no pay screen at start: publik is the choice; the app offers a plan when publik answers 402
     startTelemetry();
     return { key: c.key, wallet: w, choice };
   }
