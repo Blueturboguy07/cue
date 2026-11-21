@@ -123,7 +123,9 @@ test('3: an explicit maxTokens: undefined on publik sends the default cap, never
 
 test('3: an own key with maxTokens: undefined also gets the default cap', async () => {
   await ask(publikSettings({ provider: 'openai' }), { maxTokens: undefined });
-  assert.equal(created.max_tokens, 700);
+  // OpenAI takes the cap as max_completion_tokens (issue #63).
+  assert.equal(created.max_completion_tokens, 700);
+  assert.equal(created.max_tokens, undefined);
 });
 
 // ---- 4. giving up cancels the request ----------------------------------------

@@ -531,7 +531,23 @@ function doneWatcher() {
   return { seen, fetch: watchedFetch };
 }
 
-async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, onToken, onActivity, onResponse, lengthCut, signal, watchDone }) {
+// OpenAI's reasoning models (GPT-5 except the -chat variants, and the
+// o-series) reject max_tokens on Chat Completions ("Unsupported parameter:
+// 'max_tokens'", issue #63), and their hidden reasoning tokens count against
+// the output limit. OpenAI itself gets max_completion_tokens, which every
+// current OpenAI chat model accepts; reasoning models also get room to reason
+// on top of the answer budget (no reasoning_effort is sent, as everywhere
+// else). OpenAI-compatible servers (Custom, Groq, publik, MiniMax, DeepSeek,
+// Cerebras) keep max_tokens, which is what they support.
+const OPENAI_REASONING_RE = /^(o\d|gpt-5)(?!.*-chat)/i;
+const OPENAI_REASONING_HEADROOM = { fast: 2048, smart: 8192 };
+function openAITokenParams({ model, maxTokens, thinking, nativeOpenAI }) {
+  if (!nativeOpenAI) return { max_tokens: maxTokens };
+  if (!OPENAI_REASONING_RE.test(model || '')) return { max_completion_tokens: maxTokens };
+  return { max_completion_tokens: maxTokens + (thinking ? OPENAI_REASONING_HEADROOM.smart : OPENAI_REASONING_HEADROOM.fast) };
+}
+
+async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUrl, maxTokens, thinking, nativeOpenAI = false, onToken, onActivity, onResponse, lengthCut, signal, watchDone }) {
   const OpenAI = require('openai');
   const watcher = watchDone ? doneWatcher() : null;
   const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}), ...(watcher ? { fetch: watcher.fetch } : {}) });
@@ -551,7 +567,7 @@ async function streamOpenAI({ apiKey, baseURL, model, system, turns, imageDataUr
   });
   // signal: when cue stops waiting (watchdog, caption timer), the request is
   // cancelled too, so the provider stops generating and billing it.
-  const pending = client.chat.completions.create({ model, messages, stream: true, max_tokens: maxTokens }, requestOptions(signal));
+  const pending = client.chat.completions.create({ model, messages, stream: true, ...openAITokenParams({ model, maxTokens, thinking, nativeOpenAI }) }, requestOptions(signal));
   let stream;
   if (typeof onResponse === 'function' && pending && typeof pending.withResponse === 'function') {
     // The gateway stamps x-publik-* headers at admission; hand the raw
@@ -933,7 +949,7 @@ function createLLM(settings) {
 }
 
 function streamWith(provider, args, minimaxRegion) {
-  if (provider === 'openai') return streamOpenAI(args);
+  if (provider === 'openai') return streamOpenAI({ ...args, nativeOpenAI: true });
   if (provider === CUSTOM_PROVIDER) return streamOpenAI(args);
   if (provider === PUBLIK_PROVIDER) return streamOpenAI(args);
   if (provider === 'ollama') return streamOllama(args);
