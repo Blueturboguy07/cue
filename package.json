@@ -1,6 +1,6 @@
 {
   "name": "cue",
-  "version": "0.2.5",
+  "version": "0.2.18",
   "description": "Open-source cross-platform invisible AI overlay — three separate inputs (screen, mic, system audio) into an LLM. A Cluely-style copilot for meetings and coding problems.",
   "license": "GPL-3.0-or-later",
   "author": "cue",
@@ -42,6 +42,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@google/genai": "^2.12.0",
+    "blakejs": "^1.2.1",
+    "electron-updater": "^6.8.11",
     "lucide-static": "^0.468.0",
     "mammoth": "^1.8.0",
     "openai": "^4.73.0",

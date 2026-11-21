@@ -30,12 +30,16 @@ module.exports = {
   appId: "com.cue.overlay",
   productName: "cue",
   asar: false,
-  publish: null,
+  // The update feed (publik-updater.cjs, docs/updates.md). electron-builder writes it into the app
+  // (resources/app-update.yml) and never uploads anything to a "generic" provider, so a build with
+  // GH_TOKEN set still cannot publish over a release asset. The signed feed files themselves come from
+  // scripts/publik-update-feed.cjs (.github/workflows/update-feed.yml).
+  publish: { provider: "generic", url: "https://publikhq.com/api/updates/cue/" },
   artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
   // An allowlist, so anything new has to be added here or it simply is not in
   // the shipped app — and the only symptom is a require() that throws at
   // launch, in a build that ran fine from source.
-  files: ["main.js", "preload.js", "src/**/*", "renderer/**/*", "vendor/**/*"],
+  files: ["main.js", "preload.js", "publik-updater.cjs", "publik-update-verify.cjs", "src/**/*", "renderer/**/*", "vendor/**/*"],
   directories: { buildResources: "build-resources" },
   afterPack: "scripts/after-pack.js",
   mac: {

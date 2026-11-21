@@ -1,0 +1,514 @@
+// publik words, wallet shapes and card views for cue. No network: the sign-in
+// gate, the install key and the wallet read live in ./publik (the one publik
+// module). main.js copies the module's key into cue-data.json under
+// apiKeys.publik like every other provider key; the renderer never sees it.
+//
+// Everything Electron-specific is passed in by main.js so this file runs under
+// plain `node --test`.
+
+const PUBLIK_PROVIDER = 'publik';
+const PROVIDER_LABEL = 'publik API';
+const DEFAULT_BASE_URL = 'https://publikhq.com/api/v1';
+const ALLOWED_LINK_ORIGIN = 'https://publikhq.com';
+// Tier aliases. cue's "smart" toggle lands on the balanced tier because an
+// anonymous install cannot use publik-smart (402 model_requires_claim). The
+// provisioning response's `models` block overrides these.
+const DEFAULT_MODELS = { fast: 'publik-fast', smart: 'publik-balanced' };
+const TIER_NAMES = ['publik-fast', 'publik-balanced', 'publik-smart'];
+const LINKS = {
+  pricing: 'https://publikhq.com/developers#plans',
+  terms: 'https://publikhq.com/terms#api',
+  dashboard: 'https://publikhq.com/dashboard/api'
+};
+const KEY_RE = /^pk_(live|test)_[a-z0-9]{12}_[a-z0-9]{32}$/;
+const BYO = 'or use your own key in Settings.';
+
+// Final in-app copy (R21 §4). Rules: "publik API" everywhere; dollars, never
+// tokens; the rate and the monthly figure, never an hourly estimate; the
+// starter amount is rendered from the server's response, never hardcoded.
+const COPY = {
+  label: PROVIDER_LABEL,
+  cost: 'Every request is priced per use at 50% of the model\'s published list price. Most people spend under $2 a month.',
+  dataPath: 'Your prompts, screenshots and, while cue listens, your audio go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time.',
+  disclosure: {
+    title: 'cue uses publik API',
+    intro: 'cue needs an AI model to work. By default it runs on publik API, so you need no key of your own.',
+    cost: 'Every request is priced per use at 50% of the model\'s published list price, from your publik balance. A new computer starts at $0.00. Linking this computer to your publik account gives $0.05 of free use, once. Most people spend under $2 a month. You can see every charge in the app and at publikhq.com.',
+    dataPath: 'Your prompts, screenshots and, while cue listens, your audio go through publik\'s servers to a shared model account. publik never trains on them and does not store them. You can switch to your own key at any time in Settings.',
+    accept: 'Sign in with publik',
+    decline: 'Use my own key instead',
+    terms: 'By continuing you agree to the publik API terms.'
+  },
+  // CONTRACT §12 (founder, 2026-09-19): the one justification for charging,
+  // from publik's lib/publik-api/why-it-costs.ts. Same sentence under the
+  // first-run card, behind the settings toggle and nowhere else — never a
+  // new pricing claim.
+  whyItCosts: 'A provider charges for every request the app makes; publik pays that bill and passes it on at half the provider\'s list price. Nothing is charged behind your back — usage only draws from a plan or pack you choose to buy.',
+  whyItCostsToggle: 'Why it costs money',
+  cta: {
+    cardTitle: 'publik API is set up',
+    starterSuffix: 'of free starter usage',      // "$0.05 of free starter usage" — the amount comes from a linked-account mint response (an unlinked install's starter is $0.00)
+    link: 'Link this computer & pick a plan',     // anonymous → claim_url
+    pickPlan: 'Pick a plan',                      // claimed, no plan → dashboard
+    managePlan: 'Manage plan',                    // claimed with a plan → dashboard
+    addPlanOrPack: 'Add a plan or pack',          // claimed → add_credit_url (§12.2)
+    later: 'Later'
+  }
+};
+
+/** Only publikhq.com links may be opened from gateway-supplied URLs. */
+function isSafePublikLink(url) {
+  try { return typeof url === 'string' && new URL(url).origin === ALLOWED_LINK_ORIGIN; } catch { return false; }
+}
+function safeLink(url) { return isSafePublikLink(url) ? url : null; }
+
+function formatMicros(micros) {
+  const n = Number(micros);
+  if (!Number.isFinite(n)) return '';
+  return n !== 0 && Math.abs(n) < 10000 ? `$${(n / 1e6).toFixed(4)}` : `$${(n / 1e6).toFixed(2)}`;
+}
+
+function formatResetTime(iso, now = Date.now()) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return t - now < 6 * 24 * 3600 * 1000 ? `${day} ${hh}:${mm}` : d.toLocaleDateString();
+}
+
+function osName(platform) {
+  if (platform === 'darwin') return 'macos';
+  if (platform === 'win32') return 'windows';
+  return 'linux';
+}
+
+function micros(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+function firstMicros(...values) {
+  for (const v of values) { const m = micros(v); if (m !== null) return m; }
+  return 0;
+}
+
+// The response carries { fast, balanced, smart }; cue has two tiers.
+function pickModels(models) {
+  const m = models && typeof models === 'object' ? models : {};
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : '');
+  return {
+    fast: str(m.fast) || DEFAULT_MODELS.fast,
+    smart: str(m.balanced) || str(m.default) || str(m.smart) || DEFAULT_MODELS.smart
+  };
+}
+
+/** GET /wallet body (CONTRACT §3.2, R21 §2.3) → the fields the app shows. */
+function normalizeWallet(b) {
+  const w = b && typeof b === 'object' ? b : {};
+  const week = w.week && typeof w.week === 'object' ? w.week : {};
+  const starter = w.starter && typeof w.starter === 'object' ? w.starter : {};
+  const plan = w.plan && typeof w.plan === 'object' ? w.plan : {};
+  const pack = w.pack && typeof w.pack === 'object' ? w.pack : {};
+  const claimState = w.claim_state === 'claimed' ? 'claimed' : 'anonymous';
+  const claimUrl = safeLink(w.claim_url);
+  const addCreditUrl = safeLink(w.add_credit_url);
+  return {
+    claimState,
+    balanceMicros: firstMicros(w.balance_micros, w.available_micros),
+    starterRemainingMicros: micros(starter.remaining_micros),
+    starterExpiresAt: typeof starter.expires_at === 'string' ? starter.expires_at : '',
+    packRemainingMicros: micros(pack.remaining_micros),
+    planId: typeof plan.id === 'string' ? plan.id : 'none',
+    planLabel: typeof plan.label === 'string' ? plan.label : '',
+    weekUsedMicros: micros(week.used_micros),
+    weekBudgetMicros: micros(week.budget_micros),
+    weekResetsAt: typeof week.resets_at === 'string' ? week.resets_at : '',
+    dailyCapMicros: micros(w.daily_cap_micros),
+    spentTodayMicros: micros(w.spent_today_micros),
+    claimUrl,
+    addCreditUrl,
+    plansUrl: safeLink(w.plans_url),
+    topUpUrl: safeLink(w.top_up_url) || (claimState === 'anonymous' ? claimUrl : addCreditUrl)
+  };
+}
+
+/**
+ * x-publik-* headers stamped on every metered call (CONTRACT §1). On a stream
+ * they describe the state at admission (balance after the hold), so the app
+ * reconciles from GET /wallet after the answer; still, they make the balance
+ * line move immediately. Accepts a fetch Headers object or a plain object.
+ */
+function readGatewayHeaders(headers) {
+  if (!headers) return null;
+  const get = (name) => {
+    let v = typeof headers.get === 'function' ? headers.get(name) : headers[name];
+    if (v === undefined && typeof headers.get !== 'function') v = headers[name.toLowerCase()];
+    return v === null || v === undefined ? '' : String(v);
+  };
+  if (!get('x-publik-balance') && !get('x-publik-model') && !get('x-publik-request-id')) return null;
+  const budget = get('x-publik-week-budget');
+  return {
+    requestId: get('x-publik-request-id'),
+    model: get('x-publik-model'),
+    balanceMicros: micros(get('x-publik-balance')),
+    weekUsedMicros: micros(get('x-publik-week-used')),
+    weekBudgetMicros: budget && budget !== 'none' ? micros(budget) : null,
+    weekResetsAt: get('x-publik-week-resets-at'),
+    claimState: get('x-publik-claim-state') === 'claimed' ? 'claimed' : (get('x-publik-claim-state') ? 'anonymous' : ''),
+    starterRemainingMicros: get('x-publik-starter-remaining') ? micros(get('x-publik-starter-remaining')) : null,
+    reservedMicros: micros(get('x-publik-reserved-micros')),
+    chargeMicros: micros(get('x-publik-charge-micros'))
+  };
+}
+
+function formatRetryAfter(seconds) {
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s <= 0) return '';
+  if (s < 90) return `${Math.ceil(s)} seconds`;
+  if (s < 5400) return `${Math.round(s / 60)} minutes`;
+  return `${Math.round(s / 3600)} hours`;
+}
+
+/**
+ * Map a gateway failure to the sentence cue shows and the one button it may
+ * offer. Returns null for anything that is not publik-specific so the generic
+ * provider formatting can run. `body` is the parsed `error` object of the
+ * envelope ({type, message, top_up_url, ...}); `status` the HTTP status.
+ *
+ * 402 rule (CONTRACT §1): render the message plus exactly one link, top_up_url.
+ */
+function describeGatewayError({ status, body, model, retryAfter } = {}) {
+  const err = body && typeof body === 'object' ? body : {};
+  const type = String(err.type || '');
+  const link = (label, url) => (isSafePublikLink(url) ? { kind: 'link', label, url } : null);
+
+  if (status === 402) {
+    const topUp = err.top_up_url;
+    if (type === 'model_requires_claim') {
+      return {
+        message: `${PROVIDER_LABEL}: publik-smart needs a linked publik account. Link this computer to use it, pick a different model, ${BYO}`,
+        action: link('Link now', topUp)
+      };
+    }
+    // insufficient_credit (CONTRACT §12.3): the response's own message carries
+    // the justification and says what the link does; the app renders it plus
+    // exactly one link, top_up_url. Only when the body has no message does a
+    // local sentence stand in.
+    const claimed = err.claim_state === 'claimed';
+    const fallback = claimed
+      ? `${PROVIDER_LABEL} balance is used up (${formatMicros(err.available_micros || 0)} left). Add a plan or a pack at the link below, ${BYO}`
+      : `${PROVIDER_LABEL}: your balance is too low for this request. Link this computer to your publik account at the link below for $0.05 of free use, pick a plan there, ${BYO}`;
+    const message = typeof err.message === 'string' && err.message.trim() ? err.message.trim() : fallback;
+    return { message, action: link(claimed ? 'Add a plan or pack' : 'Link this computer & pick a plan', topUp), fromResponse: message !== fallback };
+  }
+  if (status === 401) {
+    if (type === 'key_revoked' && err.reprovision === true) {
+      return {
+        message: `This computer's ${PROVIDER_LABEL} key was retired after a long idle stretch. cue is reconnecting — ask again in a moment, ${BYO}`,
+        action: { kind: 'reprovision' }
+      };
+    }
+    // `revoked` tells main.js the key on disk is dead, so the state (and
+    // Settings) says so at once and the first Reconnect press mints a new
+    // key instead of only re-reading the wallet (smoke test 2026-11-02).
+    if (type === 'key_revoked') {
+      return {
+        message: `${PROVIDER_LABEL} is disconnected. This computer was removed from your publik account. Reconnect to set it up again, ${BYO}`,
+        action: { kind: 'reconnect', label: 'Reconnect', revoked: 'key_revoked' }
+      };
+    }
+    return {
+      message: `${PROVIDER_LABEL} did not accept this computer's key. Reconnect to set it up again, ${BYO}`,
+      action: { kind: 'reconnect', label: 'Reconnect', revoked: 'invalid_key' }
+    };
+  }
+  if (status === 429) {
+    const wait = formatRetryAfter(retryAfter);
+    if (type === 'daily_cap_reached') {
+      return {
+        message: `This computer reached its daily ${PROVIDER_LABEL} spending cap${wait ? ` — it resets in ${wait}` : ' — it resets at midnight UTC'}. Link it to your publik account for a higher cap, ${BYO}`,
+        action: err.claim_state !== 'claimed' ? link('Link now', err.claim_url) : null
+      };
+    }
+    if (type === 'week_budget_reached') {
+      return {
+        message: `Your publik plan's usage for this week is used up${wait ? ` — it resets in ${wait}` : ''}. Add credit to keep going, ${BYO}`,
+        action: link('Add credit', err.add_credit_url)
+      };
+    }
+    return { message: `${PROVIDER_LABEL} is busy right now. Wait ${wait || 'a moment'} and try again, ${BYO}`, action: null };
+  }
+  if ((status === 400 && type === 'unknown_model') || status === 404) {
+    return {
+      message: `${PROVIDER_LABEL} does not serve "${model || 'that model'}". Clear the Fast/Smart fields in Settings to use publik's defaults (${TIER_NAMES.join(', ')}), ${BYO}`,
+      action: null
+    };
+  }
+  if (status === 413) {
+    return { message: `That request was too large for ${PROVIDER_LABEL}. Try again with less on screen, ${BYO}`, action: null };
+  }
+  if (status === 503 || status === 502 || status === 504 || !status) {
+    return {
+      message: `${PROVIDER_LABEL} is unreachable right now. Nothing is being charged. Try again in a minute, ${BYO}`,
+      action: null
+    };
+  }
+  return null;
+}
+
+/**
+ * The settings-panel status line (R21 §4.1).
+ *   anonymous, unlinked (starter is always $0.00): "Ready · $0.18 left"
+ *   claimed:   "Linked to your publik account · $3.12 left · This week $1.20 of $4.62 · Resets Thu 12:04"
+ *   claimed, no plan: "... · $3.12 left · $0.68 used this week"
+ */
+function balanceLine(p, now = Date.now()) {
+  if (!p || !p.connected) return '';
+  const w = p.wallet || {};
+  const left = formatMicros(p.balanceMicros === null || p.balanceMicros === undefined ? w.balanceMicros : p.balanceMicros);
+  if (!left) return 'Ready';
+  if ((w.claimState || p.claimState) !== 'claimed') {
+    return p.starterMicros > 0 ? `Ready · ${left} left of ${formatMicros(p.starterMicros)} free starter usage` : `Ready · ${left} left`;
+  }
+  const parts = ['Linked to your publik account', `${left} left`];
+  if (w.weekBudgetMicros) {
+    parts.push(`This week ${formatMicros(w.weekUsedMicros || 0)} of ${formatMicros(w.weekBudgetMicros)}`);
+    const reset = formatResetTime(w.weekResetsAt, now);
+    if (reset) parts.push(`Resets ${reset}`);
+  } else if (w.weekUsedMicros !== null && w.weekUsedMicros !== undefined) {
+    parts.push(`${formatMicros(w.weekUsedMicros)} used this week`);
+  }
+  return parts.join(' · ');
+}
+
+// ---- CONTRACT §12: the in-app CTA ----------------------------------------
+// Pure views over the redacted publik state (main.js publikState()). The
+// renderer paints exactly what these return, so the copy and the link rules
+// are testable without a DOM.
+
+/** "$0.05 of free starter usage" — from a linked-account mint response, never hardcoded (an unlinked install's starter is $0.00). */
+function starterLine(p) {
+  const starter = Number(p && p.starterMicros) || 0;
+  const balance = p && p.balanceMicros !== null && p.balanceMicros !== undefined ? Number(p.balanceMicros) : null;
+  if (starter > 0) {
+    if (balance !== null && Number.isFinite(balance) && balance < starter) {
+      return `${formatMicros(balance)} left of ${formatMicros(starter)} ${COPY.cta.starterSuffix}`;
+    }
+    return `${formatMicros(starter)} ${COPY.cta.starterSuffix}`;
+  }
+  if (balance !== null && Number.isFinite(balance)) return `${formatMicros(balance)} of publik API usage available`;
+  return '';
+}
+
+/**
+ * The first-run card, shown once right after POST /installs succeeds (§12.1):
+ * (a) balance line, (b) the justification, (c) the primary button that opens
+ * claim_url — only a publikhq.com link ever becomes a button — and "Later",
+ * which keeps the key and the balance and changes nothing else.
+ */
+function ctaView(p) {
+  if (!p || !p.connected) return null;
+  const url = safeLink(p.claimUrl);
+  const claimed = (p.claimState || 'anonymous') === 'claimed';
+  return {
+    title: COPY.cta.cardTitle,
+    balance: starterLine(p),
+    why: COPY.whyItCosts,
+    primary: !claimed && url ? { label: COPY.cta.link, url } : null,
+    secondary: { label: COPY.cta.later }
+  };
+}
+
+/**
+ * The same button on the settings card: anonymous → "Link this computer &
+ * pick a plan" (claim_url); claimed with no plan → "Pick a plan"; claimed with
+ * a plan → "Manage plan" — both on the dashboard. Null when there is nothing
+ * safe to link to.
+ */
+function settingsCta(p) {
+  if (!p || !p.connected || p.revoked) return null;
+  const w = p.wallet || {};
+  const claimed = ((w.claimState || p.claimState) || 'anonymous') === 'claimed';
+  if (!claimed) {
+    const url = safeLink(p.claimUrl);
+    return url ? { label: COPY.cta.link, url } : null;
+  }
+  const hasPlan = !!(w.planId && w.planId !== 'none');
+  return { label: hasPlan ? COPY.cta.managePlan : COPY.cta.pickPlan, url: LINKS.dashboard };
+}
+
+const LOW_STARTER_FRACTION = 0.2;
+
+/**
+ * Below 20% of the starter left, while anonymous and on no plan: one
+ * non-blocking banner, one link (top_up_url). Null otherwise.
+ */
+function lowStarterNotice(p) {
+  if (!p || !p.connected || p.revoked) return null;
+  const w = p.wallet || {};
+  if (((w.claimState || p.claimState) || 'anonymous') === 'claimed') return null;
+  const starter = Number(p.starterMicros) || 0;
+  if (starter <= 0) return null;
+  const remaining = w.starterRemainingMicros !== null && w.starterRemainingMicros !== undefined
+    ? Number(w.starterRemainingMicros)
+    : (p.balanceMicros !== null && p.balanceMicros !== undefined ? Number(p.balanceMicros) : null);
+  if (remaining === null || !Number.isFinite(remaining) || remaining >= starter * LOW_STARTER_FRACTION) return null;
+  const url = safeLink(p.topUpUrl) || safeLink(w.topUpUrl) || safeLink(p.claimUrl);
+  return {
+    message: `${formatMicros(Math.max(0, remaining))} of your ${formatMicros(starter)} free starter usage is left. Link this computer and pick a plan to keep going, ${BYO}`,
+    action: url ? { kind: 'link', label: COPY.cta.link, url } : null,
+    remainingMicros: Math.max(0, remaining)
+  };
+}
+
+/**
+ * The one status sentence on the settings card, with its warn flag. The
+ * gateway's own answer (lastError) wins over the fixed revoked/disconnected
+ * copy: after a dashboard revoke the stale key is still on disk and `revoked`
+ * is set, so the fixed copy used to hide why Reconnect had just failed.
+ */
+function statusLine(p) {
+  const warn = (text) => ({ text, warn: true });
+  if (!p) return { text: '', warn: false };
+  // A failed setup reads in plain words (plainProblem); a gateway sentence
+  // with no failure kind passes through unchanged.
+  const said = p.lastError ? ((typeof p.problem === 'string' && p.problem) || plainProblem(p) || p.lastError) : '';
+  if (p.connected && p.revoked) return warn(said || `${PROVIDER_LABEL} key was revoked. Reconnect to set this computer up again.`);
+  if (p.connected) return { text: `Connected · key ${p.keyId} · ${p.line || 'Ready'}`, warn: false };
+  if (p.disconnected) return warn(said || `${PROVIDER_LABEL} is disconnected. This computer was removed from your publik account.`);
+  if (!p.disclosureAccepted) return { text: 'Not set up yet — no key needed to set it up.', warn: false };
+  if (p.lastError) return warn(said);
+  return { text: 'Connecting…', warn: false };
+}
+
+/**
+ * What publik:open may hand to the system browser: the requested link when it
+ * is on publikhq.com, else the stored fallback when that is, else nothing.
+ * A link off publikhq.com is dropped, never rewritten to a third origin.
+ */
+function resolveOpenTarget(url, fallback) {
+  return safeLink(url) || safeLink(fallback) || null;
+}
+
+/** "Later" (and the primary button): the card was seen; the key stays put. */
+function markCardSeen(store) {
+  const s = store.getSettings();
+  const before = s.apiKeys.publik;
+  store.setPublik({ cardShown: true });
+  const after = store.getSettings();
+  if (after.apiKeys.publik !== before) throw new Error('markCardSeen must not touch the key');
+  return after;
+}
+
+/**
+ * True when the gateway says this install_id is finished for good: the owner
+ * revoked it from the dashboard (403 install_revoked, reprovision:false) or it
+ * was removed for abuse. The server never re-keys such an install_id, so the
+ * only way back is a fresh one.
+ */
+function isInstallFinished(e) {
+  if (!e) return false;
+  if (e.type === 'install_revoked') return true;
+  return e.status === 410;
+}
+
+// ---- failures in plain words -------------------------------------------
+// A failed setup keeps the raw message in lastError (logs, tests) and its
+// kind next to it, so the app can say what happened without "fetch failed".
+
+/** 'network' | 'rate' | 'server' | 'http' for a provision() failure. */
+function failureKind(e) {
+  const status = Number(e && e.status) || 0;
+  if (status === 429 || (e && e.type === 'rate_limited')) return 'rate';
+  if (status >= 500) return 'server';
+  if (status) return 'http';
+  return 'network'; // fetch failed, DNS, refused, timed out (AbortError)
+}
+
+function failureFields(e, now = Date.now()) {
+  const retry = Number(e && e.retryAfter) || 0;
+  return { lastErrorKind: failureKind(e), lastErrorStatus: Number(e && e.status) || 0, lastErrorRetryAt: retry > 0 ? now + retry * 1000 : 0 };
+}
+
+/**
+ * The sentence a person reads after a failed setup. Never the raw gateway
+ * text for the common failures; the server's own sentence only for the rare
+ * ones it words for people (replay, unknown kinds from older settings files).
+ */
+function plainProblem(p, now = Date.now()) {
+  if (!p || !p.lastError) return '';
+  switch (p.lastErrorKind) {
+    case 'network': return 'cue could not reach publik. Check your internet connection, then try again.';
+    case 'rate': {
+      const left = p.lastErrorRetryAt ? Math.max(0, Math.ceil((p.lastErrorRetryAt - now) / 1000)) : 0;
+      const wait = formatRetryAfter(left);
+      return wait
+        ? `publik is limiting new setups from this network. Try again in ${wait}.`
+        : 'publik is limiting new setups from this network. Try again in a few minutes.';
+    }
+    case 'server': return 'publik had a problem on its side. Nothing was charged. Try again in a minute.';
+    case 'http': return `publik did not accept the setup (error ${p.lastErrorStatus || 'unknown'}). Try again, or use your own API key.`;
+    default: return p.lastError;
+  }
+}
+
+/**
+ * runFeature with publik selected and no working key: the message and its
+ * one button always agree.
+ */
+function notReadyMessage(p) {
+  if (!p || !p.disclosureAccepted) {
+    return { message: 'Sign in with publik to start. cue runs on your publik balance, so you need no API key.', action: { kind: 'disclosure' } };
+  }
+  // main.js passes its publikState() view, which carries the plain sentence
+  // as `problem` (the stored kind fields stay behind in the store).
+  const problem = typeof p.problem === 'string' ? p.problem : plainProblem(p);
+  // Reconnect marks the key revoked before it mints, so a failed mint after
+  // a Reconnect press is still "Setup did not finish", not "disconnected".
+  const setupFailed = !!(p.lastError && (p.setupFailed || p.lastErrorKind));
+  if (problem && (setupFailed || !(p.revoked || p.disconnected))) {
+    return { message: `Setup did not finish. ${problem}`, action: { kind: 'reconnect', label: 'Reconnect' } };
+  }
+  if (p.revoked || p.disconnected) {
+    return { message: 'publik is disconnected on this computer. Press Reconnect to set it up again. You need no API key.', action: { kind: 'reconnect', label: 'Reconnect' } };
+  }
+  return { message: 'cue is still connecting to publik. Press Reconnect if this does not clear in a moment.', action: { kind: 'reconnect', label: 'Reconnect' } };
+}
+
+/** Own provider not ready, in a build with publik: publik first, proper name. */
+/**
+ * An own provider refused the key (a 401, or Gemini's "API key not valid"),
+ * on a question or in the free startup check (src/own-key-check.js). A
+ * 0.2.4/0.2.5 user who pasted a bad key gets one plain sentence and publik
+ * first: "Switch to publik" is the blue button, "Fix my key" the second.
+ */
+function ownKeyFailedMessage({ providerName, publikAvailable = true } = {}) {
+  const name = providerName || 'API';
+  if (!publikAvailable) {
+    return { message: `Your ${name} key did not work. Check the key in Settings.`, action: { kind: 'fix-key', label: 'Fix my key' } };
+  }
+  return {
+    message: `Your ${name} key did not work. Switch to publik to use cue with no API key, or fix your key in Settings.`,
+    action: { kind: 'switch', label: 'Switch to publik' },
+    secondary: { kind: 'fix-key', label: 'Fix my key' }
+  };
+}
+
+function ownProviderNotReadyMessage({ providerName, missingKey, configurationError }) {
+  if (missingKey) return `Switch to publik, or add your ${providerName} key in Settings.`;
+  const rest = String(configurationError || `Complete the ${providerName} settings.`);
+  return `Switch to publik, or ${rest.charAt(0).toLowerCase()}${rest.slice(1)}`;
+}
+
+module.exports = {
+  ownKeyFailedMessage,
+  PUBLIK_PROVIDER, PROVIDER_LABEL, DEFAULT_BASE_URL, DEFAULT_MODELS, TIER_NAMES, LINKS, COPY, KEY_RE,
+  normalizeWallet, readGatewayHeaders,
+  describeGatewayError, balanceLine, isSafePublikLink, formatMicros, formatResetTime, osName, pickModels,
+  starterLine, ctaView, settingsCta, lowStarterNotice, statusLine, resolveOpenTarget, markCardSeen, isInstallFinished,
+  LOW_STARTER_FRACTION,
+  failureKind, failureFields, plainProblem, notReadyMessage, ownProviderNotReadyMessage
+};

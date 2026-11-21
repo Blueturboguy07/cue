@@ -18,7 +18,9 @@ Module._load = function loadWithOpenAIStub(request, parent, isMain) {
           completions: {
             create: (completionRequest) => {
               capturedCompletionRequest = completionRequest;
-              const data = [{ choices: [{ delta: { content: 'ok' } }] }];
+              // A real stream ends with a finish chunk; one without it is
+              // incomplete (test/content-filter.test.js).
+              const data = [{ choices: [{ delta: { content: 'ok' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }];
               if (fakeCreateError) return Promise.reject(fakeCreateError);
               if (!fakeResponseHeaders) return Promise.resolve(data);
               const headers = fakeResponseHeaders;
@@ -233,7 +235,10 @@ test('routes DeepSeek to its OpenAI-compatible endpoint', async () => {
 test('reports a configuration error when the DeepSeek key is missing', () => {
   const llm = createLLM(deepseekSettings({ apiKeys: { deepseek: '' } }));
   assert.equal(llm.ready, false);
-  assert.match(llm.configurationError, /Add your deepseek API key/);
+  // The provider's proper name, never the lowercase id.
+  assert.equal(llm.configurationError, 'Add your DeepSeek key in Settings.');
+  assert.equal(llm.missingKey, true);
+  assert.equal(llm.providerName, 'DeepSeek');
 });
 
 // ---- Atlas Cloud ------------------------------------------------------------
@@ -275,7 +280,7 @@ test('routes Atlas Cloud to its OpenAI-compatible endpoint', async () => {
 test('reports a configuration error when the Atlas Cloud key is missing', () => {
   const llm = createLLM(atlascloudSettings({ apiKeys: { atlascloud: '' } }));
   assert.equal(llm.ready, false);
-  assert.match(llm.configurationError, /Add your atlascloud API key/);
+  assert.match(llm.configurationError, /Add your Atlas Cloud key in Settings/);
 });
 
 // ---- Gemini 404/429 error mapping ------------------------------------------
@@ -502,7 +507,10 @@ test('publik: routes through the publik base URL with the minted key, never the 
   assert.equal(llm.ready, true);
   assert.equal(llm.model, 'publik-fast');
   await llm.stream({ system: 's', turns: [{ role: 'user', text: 'hi' }], onToken: () => {} });
-  assert.deepEqual(capturedClientOptions, { apiKey: PUBLIK_KEY, baseURL: 'https://publikhq.com/api/v1' });
+  // fetch: the pass-through that notes the stream's "data: [DONE]" (src/llm.js doneWatcher).
+  const { fetch: watchedFetch, ...clientOptions } = capturedClientOptions;
+  assert.deepEqual(clientOptions, { apiKey: PUBLIK_KEY, baseURL: 'https://publikhq.com/api/v1' });
+  assert.equal(typeof watchedFetch, 'function');
   assert.equal(capturedCompletionRequest.model, 'publik-fast');
 });
 
@@ -518,10 +526,13 @@ test('publik: cleared model fields fall back to the per-tier aliases', () => {
   assert.equal(createLLM(publikSettings({ smart: true, models: { publik: { fast: '', smart: '' } } })).model, 'publik-balanced');
 });
 
-test('publik: missing key → not ready, "not set up", no request', () => {
+test('publik: missing key → not ready, "Sign in with publik", no request', () => {
   const llm = createLLM(publikSettings({ apiKeys: { publik: '' } }));
   assert.equal(llm.ready, false);
-  assert.match(llm.configurationError, /publik API is not set up/);
+  // The first thing a person reads names publik and its button, never a key to add.
+  assert.match(llm.configurationError, /^Sign in with publik/);
+  assert.match(llm.configurationError, /no API key/);
+  assert.doesNotMatch(llm.configurationError, /Add your|paste/i);
   assert.equal(capturedClientOptions, null);
 });
 

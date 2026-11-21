@@ -1,0 +1,287 @@
+name: publik build
+
+# Builds the files of a cue release and keeps them as workflow artifacts.
+# It never creates, changes or publishes a GitHub release.
+#
+#   macOS    the two apps (x64, arm64), UNSIGNED. No certificate lives in CI:
+#            the apps are signed with the Developer ID, notarized and stapled
+#            on the release Mac, then zipped.
+#   Windows  the normal NSIS installer, unsigned (there is no Windows
+#            certificate), then the publik self-test of the installed app.
+#   Linux    the two AppImages, then the publik self-test of the x64 app.
+#
+# The publik self-test (.github/scripts/publik-self-test.cjs) starts the built
+# app with PUBLIK_SELF_TEST=1 against a fake publik on the runner and expects
+# the line "publik self-test: ok cue <version>": the proof that the sign-in
+# gate is on the start-up path of this build. Nothing reaches publikhq.com.
+
+on:
+  push:
+    branches:
+      - 'telemetry/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  PUBLIK_UPDATES: '0' # the self-tests do not check for updates (publik-updater.cjs)
+
+concurrency:
+  group: publik-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS apps (x64 and arm64, unsigned)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Embed publik app token
+        # The same step as release.yml. The token is a publishable identifier.
+        shell: bash
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PUBLIK_APP_TOKEN" || { echo "PUBLIK_APP_TOKEN secret is not set"; exit 1; }
+          node -e '
+            const fs = require("fs"); const p = "src/publik-build.json";
+            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+            cfg.appToken = process.env.PUBLIK_APP_TOKEN;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+          '
+          node -e 'const c = require("./src/publik-build.json"); if (!c.appToken) process.exit(1); console.log("publik app token embedded for", c.appSlug)'
+
+      - name: Build the two apps (no signing)
+        # electron-builder.cjs signs only with MAC_SIGN=1. It is not set here.
+        run: npx electron-builder --mac dir --x64 --arm64
+
+      - name: Check and pack the apps
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          pack() { # <dist folder> <arch name>
+            local app="dist/$1/cue.app"
+            test -d "$app"
+            test -f "$app/Contents/Resources/app/src/publik.js"
+            test -f "$app/Contents/Resources/app/src/publik-gate.js"
+            test -f "$app/Contents/Resources/app/src/publik-gate-preload.cjs"
+            test -f "$app/Contents/Resources/app/publik-updater.cjs"
+            test -f "$app/Contents/Resources/app/publik-update-verify.cjs"
+            test -f "$app/Contents/Resources/app/node_modules/electron-updater/package.json"
+            node -e 'const c = require(process.argv[1]); if (!c.appToken) { console.error("no app token in the packed app"); process.exit(1); }' "$PWD/$app/Contents/Resources/app/src/publik-build.json"
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
+            lipo -archs "$app/Contents/MacOS/cue"
+            ditto -c -k --keepParent "$app" "cue-$version-mac-$2-unsigned-app.zip"
+          }
+          pack mac x64
+          pack mac-arm64 arm64
+          ls -l ./*.zip
+
+      - name: publik self-test (arm64 app against a fake publik)
+        timeout-minutes: 6
+        shell: bash
+        run: node .github/scripts/publik-self-test.cjs cue "$PWD/dist/mac-arm64/cue.app/Contents/MacOS/cue" --out publik-self-test.json
+
+      - name: Upload the self-test result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-publik-self-test
+          path: publik-self-test.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload the x64 app
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-x64-unsigned-app
+          path: cue-*-mac-x64-unsigned-app.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload the arm64 app
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-arm64-unsigned-app
+          path: cue-*-mac-arm64-unsigned-app.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  windows:
+    name: Windows installer (x64, unsigned)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Embed publik app token
+        shell: bash
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PUBLIK_APP_TOKEN" || { echo "PUBLIK_APP_TOKEN secret is not set"; exit 1; }
+          node -e '
+            const fs = require("fs"); const p = "src/publik-build.json";
+            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+            cfg.appToken = process.env.PUBLIK_APP_TOKEN;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+          '
+          node -e 'const c = require("./src/publik-build.json"); if (!c.appToken) process.exit(1); console.log("publik app token embedded for", c.appSlug)'
+
+      - name: Build Windows
+        run: npm run dist:win
+
+      - name: Check the packed app
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/cue-win-x64.exe
+          test -f dist/win-unpacked/resources/app/src/publik.js
+          test -f dist/win-unpacked/resources/app/src/publik-gate.js
+          test -f dist/win-unpacked/resources/app/src/publik-gate-preload.cjs
+          test -f dist/win-unpacked/resources/app/publik-updater.cjs
+          test -f dist/win-unpacked/resources/app/publik-update-verify.cjs
+          test -f dist/win-unpacked/resources/app/node_modules/electron-updater/package.json
+          node -e 'const c = require(process.argv[1]); if (!c.appToken) { console.error("no app token in the packed app"); process.exit(1); }' "$PWD/dist/win-unpacked/resources/app/src/publik-build.json"
+
+      - name: publik self-test (silent install, then the installed app against a fake publik)
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $installer = Start-Process -FilePath (Resolve-Path dist\cue-win-x64.exe) -ArgumentList '/S' -Wait -PassThru
+          Write-Host "installer exit code: $($installer.ExitCode)"
+          if ($installer.ExitCode -ne 0) { exit 1 }
+          $exe = Get-ChildItem -Path "$env:LOCALAPPDATA\Programs" -Recurse -Filter cue.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { Write-Host 'installed cue.exe not found'; exit 1 }
+          Write-Host "installed: $($exe.FullName)"
+          node .github/scripts/publik-self-test.cjs cue "$($exe.FullName)" --out publik-self-test.json
+          exit $LASTEXITCODE
+
+      - name: Upload the self-test result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-publik-self-test
+          path: publik-self-test.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/cue-win-x64.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  linux:
+    name: Linux AppImages (x64 and arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check and unit tests
+        # Before the token step: one test checks that the committed token is empty.
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in main.js preload.js electron-builder.cjs renderer/*.js src/*.js src/*.cjs scripts/*.js test/*.js .github/scripts/*.cjs; do
+            node --check "$file"
+          done
+          npm test
+
+      - name: Embed publik app token
+        shell: bash
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$PUBLIK_APP_TOKEN" || { echo "PUBLIK_APP_TOKEN secret is not set"; exit 1; }
+          node -e '
+            const fs = require("fs"); const p = "src/publik-build.json";
+            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+            cfg.appToken = process.env.PUBLIK_APP_TOKEN;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+          '
+          node -e 'const c = require("./src/publik-build.json"); if (!c.appToken) process.exit(1); console.log("publik app token embedded for", c.appSlug)'
+
+      - name: Build Linux x64 and arm64
+        run: npm run dist:linux && npm run dist:linux:arm64
+
+      - name: Check the packed apps
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l dist/*.AppImage
+          for dir in linux-unpacked linux-arm64-unpacked; do
+            test -f "dist/$dir/resources/app/src/publik.js"
+            test -f "dist/$dir/resources/app/src/publik-gate.js"
+            test -f "dist/$dir/resources/app/src/publik-gate-preload.cjs"
+            node -e 'const c = require(process.argv[1]); if (!c.appToken) { console.error("no app token in the packed app"); process.exit(1); }' "$PWD/dist/$dir/resources/app/src/publik-build.json"
+          done
+
+      - name: publik self-test (x64 app under Xvfb against a fake publik)
+        # Does not stop the build: a runner with no display libraries is not a
+        # fault of the app. The result is in the log and in the artifact.
+        continue-on-error: true
+        timeout-minutes: 6
+        shell: bash
+        run: xvfb-run -a node .github/scripts/publik-self-test.cjs cue "$PWD/dist/linux-unpacked/cue" --out publik-self-test.json -- --no-sandbox
+
+      - name: Upload the self-test result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-publik-self-test
+          path: publik-self-test.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload the AppImages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimages
+          path: dist/*.AppImage
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

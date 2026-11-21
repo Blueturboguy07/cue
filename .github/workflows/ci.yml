@@ -6,9 +6,15 @@ on:
       - main
       - "codex/**"
   pull_request:
+  # The updater proof (updater-proof.yml) runs this whole workflow on its own commit.
+  workflow_call:
 
 permissions:
   contents: read
+
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
 
 jobs:
   test:
@@ -36,7 +42,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for file in main.js preload.js electron-builder.cjs renderer/*.js src/*.js scripts/*.js test/*.js; do
+          for file in main.js preload.js electron-builder.cjs renderer/*.js src/*.js src/*.cjs scripts/*.js test/*.js .github/scripts/*.cjs; do
             node --check "$file"
           done
 

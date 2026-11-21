@@ -1,0 +1,421 @@
+# Updater proof: on a real Windows runner and on two real macOS runners (Apple silicon and Intel), builds
+# two TEST versions of cue (N and N+1, both with "publikUpdaterTest": true in package.json, which no
+# release has), installs N, puts N+1 and its signed feed (signed with the real publik update key) on a
+# GitHub PRERELEASE with a test tag (v0.0.0-updtest.*), and runs .github/scripts/updater-proof.cjs:
+#   - refused feeds (served from 127.0.0.1): one byte of the feed changed, signed by another key, no
+#     signature, an installer with one byte changed, and on macOS N+1 signed by another identity.
+#     For each one, N must refuse and stay N.
+#   - the good feed (the prerelease, absolute asset URLs): N must verify the signature, download N+1,
+#     check its sha512, install it, and the installed app must then report N+1. On macOS the feed lists
+#     the x64 zip and the arm64 zip (as a cue release does); each Mac must install its own one.
+# The prereleases and their tags are deleted at the end of each job, pass or fail.
+#
+# Microphone and screen: every start of cue here is a start of the updater test hook, which runs first in
+# app.whenReady() and exits before the sign-in gate, the permission requests, the window, the microphone
+# and any screen capture (test/updater-wiring.test.js checks that order). A test build started without the
+# hook exits at once (the proof checks it). No cue process may be left running after a start or after the
+# install (the proof checks it). publikhq.com is blocked on every runner: nothing reaches production. On
+# macOS the job also reads the TCC log: cue must not ask for the microphone, the camera or the screen.
+#
+# macOS: the Developer ID certificate is not in this repo's secrets (it lives on the release Mac), so both
+# test builds are signed with a code-signing identity made on the runner. That proves the Squirrel.Mac
+# path (same identity accepted, another refused), not Developer ID signing or notarization.
+#
+# Run it by hand (Actions › Updater proof, or `gh workflow run updater-proof.yml`).
+name: Updater proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # creates, then deletes, the test prereleases
+
+concurrency:
+  group: updater-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DO_NOT_TRACK: '1'
+  PUBLIK_UPDATES: '0'
+
+jobs:
+  # The repo's own CI (ci.yml), on this commit.
+  ci:
+    name: Repo CI
+    uses: ./.github/workflows/ci.yml
+
+  unit:
+    name: Unit tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+
+      # Signatures from the reference minisign tool, in both forms the app accepts: legacy (`minisign -S -l`,
+      # Ed25519 over the file) and prehashed (`minisign -S`, Ed25519 over BLAKE2b-512). Checked here with
+      # Node's crypto, then on the macOS and Windows runners with Electron's own crypto.
+      - name: Cross-check with the reference minisign tool
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq minisign > /dev/null
+          minisign -v || true
+          d=minisign-vectors; mkdir -p $d/legacy $d/prehashed
+          minisign -G -W -p $d/minisign.pub -s "$RUNNER_TEMP/minisign.key"
+          for form in legacy prehashed; do cp test/fixtures/update-feed/latest.yml $d/$form/latest.yml; done
+          minisign -S -l -s "$RUNNER_TEMP/minisign.key" -m $d/legacy/latest.yml -x $d/legacy/latest.yml.sig
+          minisign -S -s "$RUNNER_TEMP/minisign.key" -m $d/prehashed/latest.yml -x $d/prehashed/latest.yml.sig
+          rm -f "$RUNNER_TEMP/minisign.key"
+          for form in legacy prehashed; do
+            minisign -V -p $d/minisign.pub -m $d/$form/latest.yml -x $d/$form/latest.yml.sig
+            node scripts/publik-update-feed.cjs verify $d/$form/latest.yml --public-key $d/minisign.pub
+            sed -n 2p $d/$form/latest.yml.sig | base64 -d | head -c 2; echo " <- $form signature algorithm"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minisign-vectors
+          path: minisign-vectors
+          retention-days: 7
+
+  windows:
+    name: Windows — N updates to N+1 (NSIS, unsigned)
+    needs: unit
+    runs-on: windows-latest
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: bash
+    env:
+      V_OLD: 0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}.1
+      V_NEW: 0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}.2
+      TAG: v0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}-win
+    steps:
+      - name: Block publikhq.com, so a test can not touch production
+        shell: pwsh
+        run: |
+          Add-Content -Path "$env:WINDIR\System32\drivers\etc\hosts" -Value "`n127.0.0.1 publikhq.com`n127.0.0.1 www.publikhq.com"
+          ipconfig /flushdns | Out-Null
+          Get-Content "$env:WINDIR\System32\drivers\etc\hosts" | Select-String publikhq
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: minisign-vectors
+          path: minisign-vectors
+
+      - name: The signature check under Electron's own crypto (tauri, minisign legacy, minisign prehashed)
+        run: |
+          node -e "require('electron')" > /dev/null # the electron package downloads its binary on first use
+          ELECTRON_RUN_AS_NODE=1 "$(node -p "require('electron')")" .github/scripts/updater-electron-crypto.cjs minisign-vectors
+
+      - uses: actions/cache@v4
+        with:
+          path: .cache/whisper-runtime
+          key: whisper-runtime-1.9.1-${{ runner.os }}-${{ runner.arch }}
+
+      # No publik app token: a test build never gets to the sign-in (the test hook exits before it).
+      - name: Build N and N+1 (test builds)
+        run: |
+          set -euo pipefail
+          npm pkg set publikUpdaterTest=true --json
+          npm pkg set version="$V_OLD"
+          npx electron-builder --win --x64 --publish never -c.directories.output=dist-old
+          npm pkg set version="$V_NEW"
+          npx electron-builder --win --x64 --publish never -c.directories.output=dist-new
+          ls -la dist-old dist-new
+
+      - name: Check the test build carries the updater
+        run: |
+          set -euo pipefail
+          app=dist-old/win-unpacked/resources/app
+          for f in publik-updater.cjs publik-update-verify.cjs node_modules/electron-updater/package.json node_modules/blakejs/package.json; do test -f "$app/$f" && echo "has $f"; done
+          node -e 'const p = require(process.argv[1]); if (p.publikUpdaterTest !== true) process.exit(1); console.log("package.json:", p.version, "publikUpdaterTest:", p.publikUpdaterTest)' "$PWD/$app/package.json"
+          cat dist-old/win-unpacked/resources/app-update.yml
+
+      - name: Install N with its own installer
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath (Resolve-Path dist-old\cue-win-x64.exe) -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited $($p.ExitCode)" }
+          Get-Process cue -ErrorAction SilentlyContinue | Stop-Process -Force
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\cue\cue.exe'
+          if (!(Test-Path $exe)) { throw "installed cue.exe not found at $exe" }
+          "CUE_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Put N+1 on a test prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+            --title "Updater proof $TAG (test build, deleted after the run)" \
+            --notes "CI test of the self-updater (updater-proof.yml). Not a release. Deleted when the run ends." \
+            "dist-new/cue-win-x64.exe"
+
+      # The same command update-feed.yml runs for a real release: reads the release, writes latest.yml with
+      # absolute asset URLs, signs it with the real update key, verifies it, uploads latest.yml + .sig.
+      # cue-win-x64.exe carries no version in its name: the script checks its ProductVersion instead.
+      - name: Make the signed feed with the release script (real update key)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node scripts/publik-update-feed.cjs release --tag "$TAG" --version "$V_NEW" --app cue --repo "$GITHUB_REPOSITORY"
+          gh release download "$TAG" --pattern latest.yml --pattern latest.yml.sig --dir feed-good
+          node scripts/publik-update-feed.cjs verify feed-good/latest.yml
+          cat feed-good/latest.yml
+
+      - name: Make the refused feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/"
+          onebyte="cue-win-x64-onebyte.exe"
+          mkdir -p assets
+          node .github/scripts/updater-proof.cjs one-byte --src "dist-new/cue-win-x64.exe" --dst "assets/$onebyte"
+          gh release upload "$TAG" "assets/$onebyte"
+          node .github/scripts/updater-proof.cjs prepare --good feed-good --feed latest.yml --onebyte-url "$base$onebyte" --onebyte-of cue-win-x64.exe --out cases
+
+      - name: Proof (N refuses the bad feeds, then updates to N+1)
+        timeout-minutes: 30
+        run: |
+          node .github/scripts/updater-proof.cjs run --app "$CUE_EXE" --old "$V_OLD" --new "$V_NEW" \
+            --good-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/" \
+            --cases cases --out proof-logs/updater-proof-windows.json --logs proof-logs
+
+      - name: cue never used the microphone or the camera (Windows privacy store)
+        if: always()
+        shell: pwsh
+        run: |
+          $hits = @()
+          foreach ($cap in 'microphone', 'webcam') {
+            $root = "HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$cap\NonPackaged"
+            if (Test-Path $root) {
+              $keys = Get-ChildItem $root -ErrorAction SilentlyContinue
+              Write-Host "${cap}: $($keys.Count) desktop app(s) recorded"
+              $hits += $keys | Where-Object { $_.PSChildName -match '(?i)cue\.exe|Programs#cue#' } | ForEach-Object { "${cap}: $($_.PSChildName)" }
+            } else { Write-Host "${cap}: no usage store on this runner" }
+          }
+          if ($hits.Count) { $hits; throw 'cue used the microphone or the camera' }
+          Write-Host 'PASS: no microphone or camera use by cue recorded'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: updater-proof-windows
+          path: |
+            proof-logs
+            feed-good/latest.yml
+            cases
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Delete the test prerelease and its tag
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" >/dev/null 2>&1 || true
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "release $TAG still exists"; exit 1; fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" >/dev/null 2>&1; then echo "tag $TAG still exists"; exit 1; fi
+          echo "deleted $TAG"
+
+  macos:
+    name: macOS ${{ matrix.arch }} — N updates to N+1 (Squirrel.Mac, runner-made identity)
+    needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The label goes into the test tag, and so into every asset URL: it must not contain "arm64",
+          # or electron-updater would take every file for an arm64 file.
+          - { os: macos-15, arch: arm64, label: as }
+          - { os: macos-15-intel, arch: x64, label: intel }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 70
+    env:
+      ARCH: ${{ matrix.arch }}
+      V_OLD: 0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}.1
+      V_NEW: 0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}.2
+      TAG: v0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}-mac-${{ matrix.label }}
+      SIGN_ID: cue Update Test
+      OTHER_ID: cue Other Identity
+    steps:
+      - name: Block publikhq.com, so a test can not touch production
+        run: |
+          echo "127.0.0.1 publikhq.com www.publikhq.com" | sudo tee -a /etc/hosts
+          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+          echo "TCC_START=$(date '+%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: minisign-vectors
+          path: minisign-vectors
+
+      - name: The signature check under Electron's own crypto (tauri, minisign legacy, minisign prehashed)
+        run: |
+          node -e "require('electron')" > /dev/null # the electron package downloads its binary on first use
+          ELECTRON_RUN_AS_NODE=1 "$(node -p "require('electron')")" .github/scripts/updater-electron-crypto.cjs minisign-vectors
+
+      # Two self-signed code-signing identities in a keychain of this run, trusted for code signing on
+      # this runner only. SIGN_ID signs N and N+1; OTHER_ID re-signs a copy of N+1 for the refused case.
+      - name: Make two code-signing identities (this runner only)
+        run: |
+          set -euo pipefail
+          KC="$RUNNER_TEMP/updtest.keychain-db"
+          KCPASS="$(/usr/bin/openssl rand -hex 16)"
+          P12PASS="$(/usr/bin/openssl rand -hex 16)"
+          security create-keychain -p "$KCPASS" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPASS" "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          for name in "$SIGN_ID" "$OTHER_ID"; do
+            d="$RUNNER_TEMP/id-$(echo "$name" | tr ' ' '-')"; mkdir -p "$d"
+            printf '[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=%s\n[ext]\nbasicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n' "$name" > "$d/req.cnf"
+            /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 2 -config "$d/req.cnf" -keyout "$d/key.pem" -out "$d/cert.pem" 2>/dev/null
+            /usr/bin/openssl pkcs12 -export -inkey "$d/key.pem" -in "$d/cert.pem" -name "$name" -out "$d/id.p12" -passout "pass:$P12PASS"
+            security import "$d/id.p12" -k "$KC" -P "$P12PASS" -T /usr/bin/codesign >/dev/null
+            sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$d/cert.pem"
+            rm -f "$d/key.pem" "$d/id.p12"
+          done
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPASS" "$KC" >/dev/null
+          security find-identity -v -p codesigning "$KC"
+          echo "KC=$KC" >> "$GITHUB_ENV"
+
+      # As a release: zip per architecture, hardened runtime, the repo's entitlements. N for this Mac's
+      # architecture; N+1 for both (the feed lists both zips, as a cue release does).
+      # No publik app token: a test build never gets to the sign-in (the test hook exits before it).
+      - name: Build N and N+1 (test builds, zip, signed with SIGN_ID)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'true'
+        run: |
+          set -euo pipefail
+          sign=(-c.mac.identity="$SIGN_ID" -c.mac.hardenedRuntime=true -c.mac.notarize=false)
+          npm pkg set publikUpdaterTest=true --json
+          npm pkg set version="$V_OLD"
+          npx electron-builder --mac zip --$ARCH --publish never -c.directories.output=dist-old "${sign[@]}"
+          npm pkg set version="$V_NEW"
+          npx electron-builder --mac zip --x64 --arm64 --publish never -c.directories.output=dist-new "${sign[@]}"
+          ls -la dist-old dist-new
+          if [ "$ARCH" = arm64 ]; then echo "OUT_SUB=mac-arm64" >> "$GITHUB_ENV"; else echo "OUT_SUB=mac" >> "$GITHUB_ENV"; fi
+
+      - name: Check the test build carries the updater and the signature
+        run: |
+          set -euo pipefail
+          app="dist-old/$OUT_SUB/cue.app"
+          res="$app/Contents/Resources"
+          for f in publik-updater.cjs publik-update-verify.cjs node_modules/electron-updater/package.json node_modules/blakejs/package.json; do test -f "$res/app/$f" && echo "has $f"; done
+          node -e 'const p = require(process.argv[1]); if (p.publikUpdaterTest !== true) process.exit(1); console.log("package.json:", p.version, "publikUpdaterTest:", p.publikUpdaterTest)' "$PWD/$res/app/package.json"
+          cat "$res/app-update.yml"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist"
+          lipo -archs "$app/Contents/MacOS/cue"
+          codesign -dvv "$app" 2>&1 | grep -E '^(Identifier|Authority|TeamIdentifier|Runtime)'
+          codesign -d -r- "$app" 2>&1 | grep designated
+          codesign --verify --deep --strict "$app" && echo "codesign: valid"
+
+      - name: Install N (unzip into ~/Applications, as a user would)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/Applications"
+          rm -rf "$HOME/Applications/cue.app"
+          ditto -x -k "dist-old/cue-$V_OLD-mac-$ARCH.zip" "$HOME/Applications/"
+          echo "CUE_APP=$HOME/Applications/cue.app" >> "$GITHUB_ENV"
+
+      - name: Put N+1 on a test prerelease (x64 and arm64 zips)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+            --title "Updater proof $TAG (test build, deleted after the run)" \
+            --notes "CI test of the self-updater (updater-proof.yml). Not a release. Deleted when the run ends." \
+            "dist-new/cue-$V_NEW-mac-x64.zip" "dist-new/cue-$V_NEW-mac-arm64.zip"
+
+      # The same command update-feed.yml runs for a real release (see the Windows job).
+      - name: Make the signed feed with the release script (real update key)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node scripts/publik-update-feed.cjs release --tag "$TAG" --version "$V_NEW" --app cue --repo "$GITHUB_REPOSITORY"
+          gh release download "$TAG" --pattern latest-mac.yml --pattern latest-mac.yml.sig --dir feed-good
+          node scripts/publik-update-feed.cjs verify feed-good/latest-mac.yml
+          cat feed-good/latest-mac.yml
+
+      - name: Make the refused feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/"
+          zip="dist-new/cue-$V_NEW-mac-$ARCH.zip"
+          mkdir -p assets other
+          onebyte="cue-$V_NEW-mac-$ARCH-onebyte.zip"
+          node .github/scripts/updater-proof.cjs one-byte --src "$zip" --dst "assets/$onebyte"
+          # N+1 re-signed with OTHER_ID: same bundle, same version, another code-signing identity
+          ditto -x -k "$zip" other/
+          codesign --force --deep --options runtime --timestamp=none --entitlements build-resources/entitlements.mac.plist --keychain "$KC" --sign "$OTHER_ID" other/cue.app
+          codesign --verify --deep --strict other/cue.app && codesign -dvv other/cue.app 2>&1 | grep -E '^Authority'
+          otherzip="assets/cue-$V_NEW-mac-$ARCH-otheridentity.zip"
+          ditto -c -k --sequesterRsrc --keepParent other/cue.app "$otherzip"
+          gh release upload "$TAG" "assets/$onebyte" "$otherzip"
+          node scripts/publik-update-feed.cjs write --app cue --version "$V_NEW" --download-base "$base" --mac-zip "$otherzip" --out feed-otherid
+          node .github/scripts/updater-proof.cjs prepare --good feed-good --feed latest-mac.yml --onebyte-url "$base$onebyte" --onebyte-of "cue-$V_NEW-mac-$ARCH.zip" --other-identity feed-otherid --out cases
+
+      - name: Proof (N refuses the bad feeds, then updates to N+1)
+        timeout-minutes: 40
+        run: |
+          node .github/scripts/updater-proof.cjs run --app "$CUE_APP/Contents/MacOS/cue" --bundle "$CUE_APP" \
+            --old "$V_OLD" --new "$V_NEW" --good-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/" \
+            --cases cases --out proof-logs/updater-proof-macos-$ARCH.json --logs proof-logs --arch "$ARCH"
+
+      - name: cue never asked macOS for the microphone, the camera or the screen (TCC log)
+        if: always()
+        run: |
+          log show --start "$TCC_START" --info --style compact --predicate 'subsystem == "com.apple.TCC"' > tcc.log 2>&1 || true
+          node .github/scripts/updater-proof.cjs tcc --log tcc.log --bundle-id com.cue.overlay --out proof-logs/tcc-cue.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: updater-proof-macos-${{ matrix.arch }}
+          path: |
+            proof-logs
+            feed-good/latest-mac.yml
+            cases
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Delete the test prerelease and its tag
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" >/dev/null 2>&1 || true
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "release $TAG still exists"; exit 1; fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" >/dev/null 2>&1; then echo "tag $TAG still exists"; exit 1; fi
+          echo "deleted $TAG"
+
+      - name: Remove the keychain of this run
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/updtest.keychain-db" || true
