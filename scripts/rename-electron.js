@@ -42,9 +42,6 @@ if (!src && fs.existsSync(target)) {
 fs.writeFileSync(pathTxt, DISPLAY_NAME);
 console.log(`[postinstall] path.txt -> ${DISPLAY_NAME}`);
 
-// ── Step 3: Patch PE version info (retry a few times — Defender may scan briefly) ─
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 // ── Step 3: Patch PE version info + icon (retry — Defender may scan briefly) ─
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
