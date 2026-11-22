@@ -17,7 +17,7 @@
   const PROVIDER_NAMES = {
     publik: 'publik', cerebras: 'Cerebras', openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini',
     deepgram: 'Deepgram', custom: 'Custom', ollama: 'Ollama', groq: 'Groq', minimax: 'MiniMax',
-    deepseek: 'DeepSeek', azure: 'Azure AI Foundry'
+    deepseek: 'DeepSeek', atlascloud: 'Atlas Cloud', azure: 'Azure AI Foundry'
   };
 
   const COPY = {
