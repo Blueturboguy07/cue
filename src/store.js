@@ -105,7 +105,7 @@ const DEFAULTS = {
     gemini: { fast: 'gemini-3.8-flash', smart: 'gemini-3.1-pro-preview' },
     custom: { fast: '', smart: '' },
     ollama: { fast: 'llama3.2', smart: 'llama3.3' },
-    groq: { fast: 'llama-3.1-8b-instant', smart: 'llama-3.3-70b-versatile' },
+    groq: { fast: 'openai/gpt-oss-20b', smart: 'openai/gpt-oss-120b' },
     minimax: { fast: 'MiniMax-M2.7', smart: 'MiniMax-M3' },
     // deepseek-chat/deepseek-reasoner were retired 2026-07-24; deepseek-flash
     // (non-thinking) and deepseek-v4-pro (thinking) are the current aliases.
