@@ -208,9 +208,9 @@ test('main.js: at the stop, the sentence still being spoken is sent as a final p
   assert.deepEqual(h.events.slice(-1), ['notes']);
   const src = readSource('main.js');
   const stop = src.slice(src.indexOf('  state.capturing = false;\n  stopFlushLoop();'));
-  assert.ok(stop.indexOf('sendHeldAudio(takeHeldAudio())') > -1 && stop.indexOf('sendHeldAudio(takeHeldAudio())') < stop.indexOf('publikSttBatchers.you.reset()'), 'taken before the reset');
+  assert.ok(stop.indexOf('sendHeldAudio(takeHeldAudio())') > -1 && stop.indexOf('sendHeldAudio(takeHeldAudio())') < stop.indexOf('sttBatchers.you.reset()'), 'taken before the reset');
   assert.match(stop, /notesAfterStop\(meetingMemory, lastWords\)/);
-  assert.match(src, /function notesAfterStop\(memory, lastWords\) \{\n  const stop = \+\+notesStatusFor;\n  return lastWords\.then\(\(\) => memory\.refreshNotes\(\)\)/, 'the notes wait for the last words');
+  assert.match(src, /function notesAfterStop\(memory, lastWords\) \{\n  const stopped = memory\.current;\n(?:  \/\/[^\n]*\n)*  return lastWords\.then\(\(\) => \{ echoFilter\.flush\(\); return memory\.current === stopped \? memory\.end\(\) : null; \}\)/, 'the notes wait for the last words, and the meeting ends');
 });
 
 test('stt.js: publik transcription answers within 30 s or fails (no 10 min hang), with no SDK retries; Retry-After is read', () => {

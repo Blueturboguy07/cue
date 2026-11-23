@@ -152,7 +152,7 @@ function boot() {
     document: { createElement: dom.createElement, getElementById: () => null },
     cue: { on: (ch, fn) => { handlers[ch] = fn; } },
     requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; },
-    setBusy: () => {}, onAnswerActivity: () => {}, showStatus: () => {}, showPublikCard: () => {},
+    setBusy: () => {}, onAnswerActivity: () => {}, afterAnswerSettled: () => {}, showStatus: () => {}, showPublikCard: () => {},
     publikActionButton: () => null,
     Date
   });

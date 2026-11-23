@@ -34,6 +34,8 @@ const publikBuild = {
   disclosureVersion: 1
 };
 const { createMeetingStore } = require('./src/meetings');
+const { createEchoFilter } = require('./src/echo-filter');
+const { isLikelyInventedMicLine } = require('./src/transcript-filter');
 const { createMeetingMemory } = require('./src/meeting-memory');
 const {
   hashRGBA,
@@ -124,7 +126,7 @@ let appLaunched = false;
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
 let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
 const buffers = { you: [], them: [] };
-const publikSttBatchers = { you: new UtteranceBatcher(), them: new UtteranceBatcher() };
+const sttBatchers = { you: new UtteranceBatcher(), them: new UtteranceBatcher() };
 const sttInFlight = { you: Promise.resolve(null), them: Promise.resolve(null) }; // the channel's transcription request, if any
 let sttSession = 0; // one per listening session; a piece only ever joins the session it was heard in
 let stopFlush = null; // the stop flush still running: { session, cancelled }
@@ -132,10 +134,14 @@ const STOP_FLUSH_MS = 40000; // the stop flush starts no request after this
 const lastSttText = { you: '', them: '' }; // the channel's latest text, whisper context for a piece after a cut
 let sttSessionShown = false; // the current session has shown text (an old session's late text then waits no more)
 const NEW_SESSION_FIRST = { message: 'a new session started first' };
+let sttPassingFailures = 0; // passing transcription errors in a row (reset by any success)
+const STT_PASSING_FAILURE_LIMIT = 6; // this many in a row (about a minute of failures): stop and say why
 let publikSttNoticeAt = 0; // last "not transcribed" notice for a lost piece (passing publik error)
 const transcript = []; // { channel, text, ts } — capped at MAX_TRANSCRIPT_TURNS
 const MAX_TRANSCRIPT_TURNS = 200; // ~30–40 minutes of conversation at normal pace
 let meetingMemory = null; // persists the transcript per meeting + notes; see src/meeting-memory.js
+let meetingStore = null; // the meetings file behind meetingMemory (Settings › Meetings reads it)
+let stoppedMeeting = null; // the meeting the last Stop ends once its last words are in
 let restoredTurns = []; // turns of an interrupted meeting resumed at launch, replayed to the renderer once
 // -------- slides state (memory-only, never written to disk) --------
 let slideStore = createSlideStore({ maxSlides: 50 });
@@ -146,9 +152,10 @@ let slideBusy = false;
 let slideDisabled = false; // set when the chat key rejects slide captions (stops cost spam)
 let slideTxCursor = 0; // transcript.length at last emitted slide
 const FLUSH_MS = 900;
+const OWN_KEY_MIN_GAP_MS = 900; // request spacing per channel with an own transcription key
+let currentAnswerGuard = null; // the streaming answer's give-up timer (ask:cancel stops it)
 const STREAM_INACTIVITY_MS = 25000; // abort a stalled LLM stream so state.busy can't wedge forever
 const THINKING_PING_MS = 5000; // at most one "Thinking…" signal to the renderer per 5 s
-const MIN_BYTES = Math.floor(16000 * 2 * 0.12); // ~0.12s
 const RMS_GATE = 180;
 let flushTimer = null;
 let whisperModelManager = null;
@@ -201,12 +208,30 @@ function getWhisperRuntime() {
   });
 }
 
+// Every finished transcript line goes out through here. "You" lines wait a
+// moment in the echo filter (src/echo-filter.js): with speakers instead of
+// headphones the mic hears the other side, and that copy is dropped.
+const echoFilter = createEchoFilter({
+  publish: (turn, extra) => {
+    pushTranscript(turn);
+    send('transcript', turn);
+    if (extra && extra.final) send('stt:final', { channel: turn.channel, text: turn.text });
+  },
+  onDrop: (turn) => console.log('[stt] dropped mic echo of meeting audio:', JSON.stringify(turn.text))
+});
+
+function publishTurn(turn, extra) {
+  // The mic in a quiet room: text the transcriber made up (src/transcript-filter.js).
+  if (turn.channel === 'you' && isLikelyInventedMicLine(turn.text)) {
+    console.log('[stt] dropped invented mic line:', JSON.stringify(turn.text));
+    return;
+  }
+  echoFilter.offer(turn, extra);
+}
+
 function publishTranscript(channel, text) {
   if (!text || !text.trim()) return;
-  const turn = { channel, text: text.trim(), ts: Date.now() };
-  pushTranscript(turn);
-  send('transcript', turn);
-  send('stt:final', { channel, text: turn.text });
+  publishTurn({ channel, text: text.trim(), ts: Date.now() }, { final: true });
 }
 
 async function startLocalWhisper(settings) {
@@ -427,52 +452,46 @@ async function flushChannel(channel) {
   const busy = state.transcribing[channel];
   const settings = store.getSettings();
   const stt = createSTT(settings);
-  const viaPublik = stt.providers[0] === publik.PUBLIK_PROVIDER;
-  // Another provider: the audio waits in the buffer while a request is in
-  // flight and goes out with the next window.
-  if (busy && !viaPublik) return;
   const chunks = buffers[channel];
   buffers[channel] = [];
   const windowPcm = chunks.length ? Buffer.concat(chunks) : null;
-  // silence gate: a window that is too short or too quiet is not speech
-  const voiced = windowPcm && windowPcm.length >= MIN_BYTES && rms16(windowPcm) >= RMS_GATE ? windowPcm : null;
-  let pcm = voiced;
-  if (viaPublik) {
-    // publik API: whole utterances cut at pauses, so two busy channels stay
-    // under the key's 60 requests a minute and a question is never cut inside
-    // a word; a sentence reaches whisper within about 10 s of its end
-    // (src/publik-stt-batcher.js). The batcher gets the raw window, pauses
-    // included: it finds them in 30 ms frames. While this channel's request
-    // is in flight, the window still goes in (each pause is found where it
-    // is), and nothing is sent: a piece after a pause waits for its own
-    // request (0.2.12 smoke: "No." after a 2 s pause was joined to the
-    // sentence before it while a slow request ran, and whisper dropped it).
-    if (busy) { publikSttBatchers[channel].feed(windowPcm); return; }
-    pcm = publikSttBatchers[channel].push(windowPcm);
-  } else {
-    publikSttBatchers[channel].reset();
-  }
+  // Every provider gets whole utterances cut at pauses (src/publik-stt-batcher.js),
+  // not one request per 900 ms window. Fixed windows cut words in half (a
+  // Gemini smoke test read "walk me through a project" as "Can you walk me /
+  // drew a project where / Are you used to large"), each request took about
+  // twice as long as the window it covered, and every window of room noise
+  // above the old fixed 180 RMS gate became a request that came back as
+  // invented words. The batcher follows the room's noise floor and drops
+  // clicks. While this channel's request is in flight, the window still goes
+  // in (each pause is found where it is), and nothing is sent.
+  const batcher = sttBatchers[channel];
+  // Spacing between requests on one channel: publik keys are held to 60
+  // requests a minute (chat included); an own key is not, so a question that
+  // follows quickly on the last one is not kept waiting 2.5 s.
+  batcher.minGapMs = stt.providers[0] === publik.PUBLIK_PROVIDER ? DEFAULT_MIN_GAP_MS : OWN_KEY_MIN_GAP_MS;
+  if (busy) { batcher.feed(windowPcm); return; }
+  const pcm = batcher.push(windowPcm);
   if (!pcm) return;
-  // After publik refused for good (balance used up, a refused request), do
-  // not send every utterance again; listening resumes on the next start or
-  // a Settings save, which clear sttDisabled.
-  if (sttDisabled && stt.providers[0] === publik.PUBLIK_PROVIDER) return;
+  // After a lasting refusal (bad key, no credit), do not send every
+  // utterance again; listening resumes on the next start or a Settings
+  // save, which clear sttDisabled.
+  if (sttDisabled) return;
 
   const session = sttSession;
-  // A piece that starts at a cut goes with the text before it, so whisper
-  // reads its first words in context (src/stt.js promptWithContext).
-  const context = publikSttBatchers[channel].continuesCut(pcm) ? lastSttText[channel] : '';
+  // A piece that starts at a cut goes with the text before it, so the
+  // transcriber reads its first words in context (src/stt.js promptWithContext).
+  const context = batcher.continuesCut(pcm) ? lastSttText[channel] : '';
   const failed = await transcribePiece(channel, pcm, settings, stt, { context, session });
   if (!failed || failed.stale) return;
   // Stopped while it was in flight: the stop flush gives it its one more try.
   if (session !== sttSession || !state.capturing) return;
   failed.handled = true;
-  // A passing publik failure: the batcher sends the piece once more, first
-  // in line, after the delay; a second failure is final, and said.
-  if (!publikSttBatchers[channel].retry(pcm, failed.delayMs)) reportLostAudio(pcm, failed.error);
+  // A passing failure: the batcher sends the piece once more, first in line,
+  // after the delay; a second failure is final, and said.
+  if (!batcher.retry(pcm, failed.delayMs)) reportLostAudio(pcm, failed.error);
 }
 
-// publik API: busy (429), a server error, or no answer in time (no status)
+// Any provider: busy (429), a server error, or no answer in time (no status)
 // is passing; anything else (balance used up, key revoked) is not.
 function isPassingSttError(err) {
   return Boolean(err) && (err.status === 429 || !err.status || err.status >= 500);
@@ -489,12 +508,20 @@ function sttRetryDelayMs(err) {
 // Why a piece was lost, as part of a sentence. Not the error's own message:
 // a 429 says "Wait 2 seconds and try again", which does not apply to audio
 // that is gone (0.2.12 smoke).
+function sttProviderLabel(err) {
+  const p = err && err.provider;
+  if (!p || p === publik.PUBLIK_PROVIDER) return 'publik API';
+  const names = { gemini: 'Gemini', openai: 'OpenAI', groq: 'Groq', deepgram: 'Deepgram', custom: 'the custom provider' };
+  return names[p] || p;
+}
+
 function lostAudioReason(err) {
   if (!err) return '';
   if (err === NEW_SESSION_FIRST) return 'a new session started first';
-  if (err.status === 429) return 'publik API was busy';
-  if (err.status >= 500) return 'publik API had a server error';
-  if (!err.status) return 'publik API did not answer in time';
+  const who = sttProviderLabel(err);
+  if (err.status === 429) return `${who} was busy`;
+  if (err.status >= 500) return `${who} had a server error`;
+  if (!err.status) return `${who} did not answer in time`;
   return String(err.message || '').trim().replace(/[\s.!]+$/, '');
 }
 
@@ -538,24 +565,30 @@ function transcribePiece(channel, pcm, settings, stt, { context = '', session = 
         // session has shown nothing, so the order holds; else said as lost.
         const text = !res.error && res.text ? res.text.trim() : '';
         if (text.length > 1 && !sttSessionShown && !/^[?!.,;:\-…]+$/.test(text)) {
-          const turn = { channel, text, ts: Date.now() };
-          pushTranscript(turn);
-          send('transcript', turn);
+          publishTurn({ channel, text, ts: Date.now() });
           return null;
         }
         return { stale: true, pcm, session, error: res.error || (text ? NEW_SESSION_FIRST : null) };
       }
       if (res.error) {
-        if (res.error.provider === publik.PUBLIK_PROVIDER && isPassingSttError(res.error)) {
-          return { error: res.error, delayMs: sttRetryDelayMs(res.error), pcm, session, context };
+        // Busy (429), a server error or no answer in time is passing for
+        // every provider: the piece gets one more try and listening goes on.
+        // One 429 used to switch transcription off for the rest of the
+        // session ("Transcription off: your gemini key was rejected").
+        // Only a run of them in a row means the key really is out of quota.
+        if (isPassingSttError(res.error)) {
+          sttPassingFailures++;
+          if (res.error.provider === publik.PUBLIK_PROVIDER || sttPassingFailures < STT_PASSING_FAILURE_LIMIT) {
+            return { error: res.error, delayMs: sttRetryDelayMs(res.error), pcm, session, context };
+          }
         }
         handleSttError(res.error, settings);
         return null;
       }
+      sttPassingFailures = 0;
       if (res.text && res.text.trim() && res.text.trim().length > 1 && !/^[?!.,;:\-…]+$/.test(res.text.trim())) {
         const turn = { channel, text: res.text.trim(), ts: Date.now() };
-        pushTranscript(turn);
-        send('transcript', turn);
+        publishTurn(turn);
         lastSttText[channel] = turn.text;
         sttSessionShown = true;
       }
@@ -573,15 +606,18 @@ function transcribePiece(channel, pcm, settings, stt, { context = '', session = 
 }
 
 // The meeting notes after a Stop. They wait for the last words, so they hold
-// them. "Meeting notes saved (N turns)." is said once, for the last Stop,
-// with the turns those notes were written from (0.2.12 smoke: Stop, Start
-// and Stop again within 5 s said "(13 turns)" twice, for notes that did not
-// hold the last turn).
-let notesStatusFor = 0;
+// them. End session ends the meeting, once its last words are in (the mic
+// lines still waiting in the echo filter included). It used to stay open
+// until the transcript was cleared, cue quit, or 30 minutes passed, so the
+// next session's lines joined it and its notes were often never written.
+// Each Stop ends its own meeting, so each says its own
+// "Meeting notes saved (N turns).", with the turns they were written from.
 function notesAfterStop(memory, lastWords) {
-  const stop = ++notesStatusFor;
-  return lastWords.then(() => memory.refreshNotes()).then((notes) => {
-    if (notes && stop === notesStatusFor) send('status', { message: `Meeting notes saved (${notes.turns} turns).` });
+  const stopped = memory.current;
+  // A Start that came before the last words were in has ended this meeting
+  // already (so the new session does not join it): then nothing is left to do.
+  return lastWords.then(() => { echoFilter.flush(); return memory.current === stopped ? memory.end() : null; }).then((notes) => {
+    if (notes) send('status', { message: `Meeting notes saved (${notes.turns} turns).` });
   }).catch(() => {});
 }
 
@@ -592,21 +628,20 @@ function startSttSession() {
   sttSession++;
   if (stopFlush) stopFlush.cancelled = true;
   buffers.you = []; buffers.them = [];
-  publikSttBatchers.you.reset(); publikSttBatchers.them.reset();
+  sttBatchers.you.reset(); sttBatchers.them.reset();
   lastSttText.you = ''; lastSttText.them = '';
   sttSessionShown = false;
 }
 
-// The session stopped: what the publik batchers still hold (the sentence
+// The session stopped: what the batchers still hold (the sentence
 // being spoken at that moment, and audio that arrived since the last flush)
 // is taken now, before the buffers are cleared.
 function takeHeldAudio() {
-  const settings = store.getSettings();
-  const stt = createSTT(settings);
-  if (stt.providers[0] !== publik.PUBLIK_PROVIDER || sttDisabled) return null;
+  // Streaming and local modes never fill the batchers, so they hand back nothing here.
+  if (sttDisabled) return null;
   const pieces = {};
   for (const channel of ['you', 'them']) {
-    const batcher = publikSttBatchers[channel];
+    const batcher = sttBatchers[channel];
     const rest = buffers[channel].length ? Buffer.concat(buffers[channel]) : null;
     buffers[channel] = [];
     // A retry already waiting keeps what is left of its delay (Retry-After),
@@ -646,7 +681,7 @@ async function sendHeldAudio(held) {
     if (inFlight && inFlight.session === held.session && inFlight.pcm && !inFlight.handled) {
       if (inFlight.stale) { if (inFlight.error) { lostBytes += inFlight.pcm.length; lastErr = inFlight.error; } } // no error: no words in it
       else if (inFlight.error) {
-        queue.push({ pcm: inFlight.pcm, tried: publikSttBatchers[channel].wasRetried(inFlight.pcm) ? 2 : 1, error: inFlight.error, delayMs: inFlight.delayMs, context: inFlight.context });
+        queue.push({ pcm: inFlight.pcm, tried: sttBatchers[channel].wasRetried(inFlight.pcm) ? 2 : 1, error: inFlight.error, delayMs: inFlight.delayMs, context: inFlight.context });
         notBefore = Date.now() + inFlight.delayMs;
       }
     }
@@ -702,13 +737,20 @@ function handleSttError(err, settings) {
     if (err.action) publikHandleErrorAction(err.action);
     return;
   }
-  const isQuota = err.status === 429 || err.code === 'RESOURCE_EXHAUSTED' || (err.message && err.message.includes('Quota exceeded'));
-  const noAccess = err.status === 403 || err.status === 401 || err.code === 'model_not_found' || isQuota;
+  const who = sttProviderLabel(err);
+  const rejected = err.status === 403 || err.status === 401 || err.code === 'model_not_found';
+  const billing = err.status === 402 || /billing|prepay|credit/i.test(err.message || '');
+  const limited = err.status === 429 || err.code === 'RESOURCE_EXHAUSTED' || /quota/i.test(err.message || '');
   sttDisabled = true; // stop hammering the API every few seconds
-  if (noAccess) {
-    send('status', { message: `Transcription off: your ${err.provider} key was rejected or hit a quota limit. Update your key in Settings to resume.` });
+  sttPassingFailures = 0;
+  if (rejected) {
+    send('status', { message: `Transcription off: ${who} rejected your key. Update it in Settings to resume.` });
+  } else if (billing) {
+    send('status', { message: `Transcription off: ${who} says the account is out of credit. Add credit, then end and start the session again.` });
+  } else if (limited) {
+    send('status', { message: `Transcription off: ${who} kept refusing requests (rate or quota limit) for about a minute. End and start the session again to retry.` });
   } else {
-    send('status', { message: 'Transcription error (' + err.provider + '): ' + err.message });
+    send('status', { message: `Transcription error (${who}): ${err.message}` });
   }
 }
 
@@ -729,10 +771,7 @@ function initStreamingSTT() {
       onTranscript: (ch, text) => {
         if (instance && streamingSTT[ch] !== instance) return; // stale instance after a stop/start
 
-        const turn = { channel: ch, text, ts: Date.now() };
-        pushTranscript(turn);
-        send('transcript', turn);
-        send('stt:final', { channel: ch, text });
+        publishTurn({ channel: ch, text, ts: Date.now() }, { final: true });
       },
       onInterim: (ch, text) => {
         if (instance && streamingSTT[ch] !== instance) return;
@@ -960,7 +999,24 @@ async function setCapturing(active) {
 
   if (active) {
     sttDisabled = false; // reset on re-enable
+    sttPassingFailures = 0;
     startSttSession();
+    // Start pressed again while the last Stop was still sending its last
+    // words: that meeting ends now, so this session is a meeting of its own
+    // (the late words, if any, land in the new one).
+    if (meetingMemory && stoppedMeeting && meetingMemory.current === stoppedMeeting) {
+      echoFilter.flush();
+      meetingMemory.end().then((notes) => { if (notes) send('status', { message: `Meeting notes saved (${notes.turns} turns).` }); }).catch(() => {});
+    }
+    stoppedMeeting = null;
+    // A new session after the last meeting ended is a new conversation: the
+    // old lines leave the live transcript (they stay in the meeting history),
+    // so they are not sent with this session's questions. A meeting resumed
+    // at launch (cue quit mid-session) is still open and keeps its lines.
+    if (meetingMemory && !meetingMemory.current && transcript.length) {
+      transcript.splice(0, transcript.length);
+      send('transcript:cleared');
+    }
     const settings = store.getSettings();
     if ((settings.sttProvider || 'auto') === 'local') {
       try {
@@ -1016,6 +1072,7 @@ async function setCapturing(active) {
   // The last words before the stop go out as final pieces, not dropped.
   const lastWords = sendHeldAudio(takeHeldAudio()).catch(() => {});
   if (meetingMemory) {
+    stoppedMeeting = meetingMemory.current;
     // Write/refresh the notes for this meeting in the background so the
     // summary survives even if cue is closed before the meeting formally ends.
     // They wait for the last words, so the notes hold them too.
@@ -1023,7 +1080,7 @@ async function setCapturing(active) {
   }
   stopSlideLoop();
   buffers.you = []; buffers.them = [];
-  publikSttBatchers.you.reset(); publikSttBatchers.them.reset();
+  sttBatchers.you.reset(); sttBatchers.them.reset();
   vad.you.reset(); vad.them.reset();
   ringBuffers.you.clear(); ringBuffers.them.clear();
   const stoppingLocalTranscriber = localWhisperTranscriber;
@@ -1130,6 +1187,7 @@ async function runFeature(mode, userText) {
     // provider stops generating and billing an answer cue no longer shows.
     const guard = giveUpTimer(STREAM_INACTIVITY_MS, 'the model stopped responding (timed out). Please try again.');
     const rearm = guard.rearm;
+    currentAnswerGuard = guard;
     // A reasoning model streams its thinking before any text: that is
     // activity too, so a long think is not called a stalled stream. While it
     // only thinks, the renderer shows "Thinking…" (never the reasoning text).
@@ -1172,6 +1230,8 @@ async function runFeature(mode, userText) {
     // GET /wallet shortly after the answer — one request per answer, debounced.
     if (settings.provider === publik.PUBLIK_PROVIDER) publikScheduleWalletRefresh();
   } catch (e) {
+    // Stopped on purpose (the question went on and is asked again in full).
+    if (e && e.cancelled) { send('llm:cancelled', {}); return; }
     recordEvent({ level: 'error', event: e && e.emptyAnswer ? 'llm_empty_answer' : 'llm_failed', msg: e && e.message ? e.message : String(e), frame: 'runFeature', context: { mode, provider: store.getSettings().provider, finishReason: (e && e.finishReason) || null, stopKind: (e && e.stopKind) || null, retryFailed: (e && e.retryFailed) || null } });
     // A bad own key: plain words, "Switch to publik" first, "Fix my key"
     // second; never the provider's raw 401.
@@ -1185,6 +1245,7 @@ async function runFeature(mode, userText) {
     if (action) publikHandleErrorAction(action);
   } finally {
     streamSettled = true;
+    currentAnswerGuard = null;
     state.busy = false;
   }
 }
@@ -1589,6 +1650,30 @@ ipcMain.handle('platform:info', () => ({
   winBuild: WIN_BUILD,
   winSupportsContentProtection: WIN_SUPPORTS_CONTENT_PROTECTION
 }));
+// Settings › Meetings: past meetings, newest first, and one meeting in full.
+ipcMain.handle('meetings:list', () => {
+  if (!meetingStore) return [];
+  const openId = meetingMemory && meetingMemory.current ? meetingMemory.current.id : null;
+  return meetingStore.all().slice().reverse().map((m) => ({
+    id: m.id,
+    title: m.title,
+    startedAt: m.startedAt,
+    endedAt: m.endedAt,
+    lastTs: m.transcript.length ? m.transcript[m.transcript.length - 1].ts : m.startedAt,
+    turns: m.transcript.length,
+    hasNotes: Boolean(m.summary),
+    open: m.id === openId
+  }));
+});
+ipcMain.handle('meetings:get', (_e, id) => (meetingStore ? meetingStore.get(String(id)) : null));
+// The meeting being recorded cannot be deleted (its next line would bring it back half-empty).
+ipcMain.handle('meetings:delete', (_e, id) => {
+  if (!meetingStore) return false;
+  if (meetingMemory && meetingMemory.current && meetingMemory.current.id === id) return false;
+  const removed = meetingStore.remove(String(id));
+  meetingStore.flush();
+  return removed;
+});
 ipcMain.handle('transcript:clear', () => {
   if (meetingMemory) meetingMemory.end().catch(() => {}); // it stays in history with its notes
   transcript.splice(0, transcript.length);
@@ -1609,6 +1694,8 @@ ipcMain.handle('slides:clear', () => {
   return { ok: true };
 });
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
+// Stop the answer that is streaming (the renderer asks again with more of the question).
+ipcMain.on('ask:cancel', () => { if (currentAnswerGuard) currentAnswerGuard.cancel(); });
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('you', arrayBuffer); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) routeAudio('them', arrayBuffer); });
 ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, { forward: true }); });
@@ -1815,8 +1902,9 @@ function launchApp() {
 
   whisperModelManager = new WhisperModelManager({ userDataPath: app.getPath('userData') });
 
+  meetingStore = createMeetingStore({ file: path.join(app.getPath('userData'), 'meetings.json'), debounceMs: 1500 });
   meetingMemory = createMeetingMemory({
-    store: createMeetingStore({ file: path.join(app.getPath('userData'), 'meetings.json'), debounceMs: 1500 }),
+    store: meetingStore,
     llmFactory: () => createLLM(store.getSettings()),
     log: (msg) => console.log('[meetings]', msg),
     onRetry: (r) => recordEvent({ level: 'info', event: 'llm_filter_retry', msg: `${r.from} -> ${r.to}`, frame: 'meetingNotes', context: { mode: 'notes', from: r.from, to: r.to, finishReason: r.finishReason } })

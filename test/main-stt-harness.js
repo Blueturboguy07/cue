@@ -18,7 +18,7 @@ const settle = async () => { for (let i = 0; i < 3; i++) await new Promise((r) =
 
 // By name, so the same tests also run on an older main.js (one without
 // startSttSession) to show what they catch there.
-const NAMES = ['flushChannel', 'isPassingSttError', 'sttRetryDelayMs', 'lostAudioReason', 'lostAudioMessage', 'reportLostAudio',
+const NAMES = ['flushChannel', 'isPassingSttError', 'sttProviderLabel', 'sttRetryDelayMs', 'lostAudioReason', 'lostAudioMessage', 'reportLostAudio',
   'transcribePiece', 'startSttSession', 'takeHeldAudio', 'sendHeldAudio'];
 function fnByName(src, name) {
   const m = new RegExp(`^(async )?function ${name}\\(.*$`, 'm').exec(src);
@@ -29,7 +29,7 @@ function mainHarness({ plan = [], batcherOpts = {} } = {}) {
   const src = readSource('main.js');
   const code = NAMES.map((name) => fnByName(src, name)).join('\n');
   // Top-level values of main.js the functions use (when this main.js has them).
-  const consts = ['NEW_SESSION_FIRST'].map((name) => (new RegExp(`^const ${name} = .*;$`, 'm').exec(src) || [''])[0]).join('\n');
+  const consts = ['NEW_SESSION_FIRST', 'STT_PASSING_FAILURE_LIMIT'].map((name) => (new RegExp(`^const ${name} = .*;$`, 'm').exec(src) || [''])[0]).join('\n');
   let t = 1e6;
   const requests = []; const notices = []; const turns = []; const reported = []; const waits = []; const events = [];
   const held = new Map();
@@ -60,14 +60,15 @@ function mainHarness({ plan = [], batcherOpts = {} } = {}) {
   const ctx = vm.createContext({
     state: { capturing: true, transcribing: { you: false, them: false } },
     buffers: { you: [], them: [] },
-    publikSttBatchers: { you: new UtteranceBatcher({ now: () => t, ...batcherOpts }), them: new UtteranceBatcher({ now: () => t, ...batcherOpts }) },
+    sttBatchers: { you: new UtteranceBatcher({ now: () => t, ...batcherOpts }), them: new UtteranceBatcher({ now: () => t, ...batcherOpts }) },
     sttInFlight: { you: Promise.resolve(null), them: Promise.resolve(null) },
     sttSession: 1, stopFlush: null, STOP_FLUSH_MS: 40000, lastSttText: { you: '', them: '' }, sttSessionShown: false,
-    publikSttNoticeAt: 0,
+    publikSttNoticeAt: 0, sttPassingFailures: 0,
     store: { getSettings: () => ({}) }, createSTT: makeStt, publik: { PUBLIK_PROVIDER: 'publik' },
     MIN_BYTES: 3840, RMS_GATE: 180, rms16: S.rms, DEFAULT_MIN_GAP_MS: 2500, sttDisabled: false,
     send: (ch, p) => { if (ch === 'status') { notices.push(p.message); events.push(`status: ${p.message}`); } },
     pushTranscript: (turn) => { turns.push(turn); events.push(`turn: ${turn.text}`); },
+    publishTurn: (turn) => { turns.push(turn); events.push(`turn: ${turn.text}`); },
     recordEvent: () => {}, noTranscriptionMessage: () => 'off',
     handleSttError: (err) => { reported.push(err); events.push(`reported ${err.status}`); },
     console, Date: { now: () => t }, Buffer, Promise,
@@ -95,7 +96,7 @@ function mainHarness({ plan = [], batcherOpts = {} } = {}) {
       ctx.state.capturing = false;
       const lastWords = ctx.api.sendHeldAudio(ctx.api.takeHeldAudio()).catch(() => {});
       ctx.buffers.you = []; ctx.buffers.them = [];
-      ctx.publikSttBatchers.you.reset(); ctx.publikSttBatchers.them.reset();
+      ctx.sttBatchers.you.reset(); ctx.sttBatchers.them.reset();
       return lastWords.then(() => events.push('notes'));
     },
     start() { if (ctx.api.startSttSession) ctx.api.startSttSession(); ctx.state.capturing = true; }

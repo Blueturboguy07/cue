@@ -58,26 +58,40 @@
   function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
   // minimal, safe markdown: fenced code, bullets, inline code, bold, paragraphs
+  // A small, safe markdown subset: everything is escaped first, then code
+  // fences, headings (shown as bold lines), bullet and numbered lists, inline
+  // code, bold, italics and $…$ maths (shown as code). Numbered lists and
+  // headings used to come out as raw "1." and "##" text.
   function renderMarkdown(text) {
     const lines = text.split('\n');
-    let html = '', inCode = false, inList = false, buf = [];
+    let html = '', inCode = false, list = null, buf = [];
     const flushP = () => { if (buf.length) { html += '<p>' + inline(buf.join(' ')) + '</p>'; buf = []; } };
+    const closeList = () => { if (list) { html += '</' + list + '>'; list = null; } };
+    const openList = (kind) => { if (list !== kind) { closeList(); html += '<' + kind + '>'; list = kind; } };
     const inline = (s) => esc(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      .replace(/\$\$?([^$\s][^$\n]*?)\$\$?/g, (m, body) => (/[\^_={}]/.test(body) ? '<code>' + body + '</code>' : m))
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>')
+      .replace(/(^|[\s(])_([^_\s][^_]*?)_(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
     for (const raw of lines) {
       const line = raw;
       if (/^```/.test(line.trim())) {
-        if (!inCode) { flushP(); if (inList) { html += '</ul>'; inList = false; } html += '<pre><code>'; inCode = true; }
+        if (!inCode) { flushP(); closeList(); html += '<pre><code>'; inCode = true; }
         else { html += '</code></pre>'; inCode = false; }
         continue;
       }
       if (inCode) { html += esc(line) + '\n'; continue; }
-      if (/^\s*[-*]\s+/.test(line)) { flushP(); if (!inList) { html += '<ul>'; inList = true; } html += '<li>' + inline(line.replace(/^\s*[-*]\s+/, '')) + '</li>'; continue; }
-      if (line.trim() === '') { flushP(); if (inList) { html += '</ul>'; inList = false; } continue; }
+      const heading = /^\s*#{1,6}\s+(.*)$/.exec(line);
+      if (heading) { flushP(); closeList(); html += '<p class="md-h"><strong>' + inline(heading[1].replace(/\s*#+\s*$/, '')) + '</strong></p>'; continue; }
+      if (/^\s*[-*•]\s+/.test(line)) { flushP(); openList('ul'); html += '<li>' + inline(line.replace(/^\s*[-*•]\s+/, '')) + '</li>'; continue; }
+      if (/^\s*\d+[.)]\s+/.test(line)) { flushP(); openList('ol'); html += '<li>' + inline(line.replace(/^\s*\d+[.)]\s+/, '')) + '</li>'; continue; }
+      if (line.trim() === '') { flushP(); closeList(); continue; }
+      closeList();
       buf.push(line.trim());
     }
-    flushP(); if (inList) html += '</ul>'; if (inCode) html += '</code></pre>';
+    flushP(); closeList(); if (inCode) html += '</code></pre>';
     return html;
   }
 
@@ -260,6 +274,7 @@
   let questionFinalizeTimer = null;
   let softClearTimer = null;
   let userSpeechStart = null;
+  let lastUserLineAt = 0; // when the last "you" line arrived (soft-clear bookkeeping)
 
   // Question history for undo (Ctrl+Z)
   const questionHistory = [];
@@ -392,6 +407,16 @@
     // If user has manually typed something different, don't overwrite
     if (!inputFromSTT && input.value.trim().length > 0) return;
 
+    // More words from the other side within a few seconds of an auto-answer:
+    // they are still on the same question ("…walk me through a project." —
+    // "Specifically, one where you used an LLM."). Start from that question,
+    // so the answer can be redone for the whole of it.
+    if (!input.value.trim() && isQuestionContinuing() && settings && settings.autoAnswer !== false) {
+      input.value = lastAutoQuestion;
+      inputFromSTT = true;
+      continuingQuestion = true;
+    }
+
     // Cancel any pending soft-clear (interviewer is still talking)
     clearTimeout(softClearTimer);
     composer.classList.remove('stt-dimmed');
@@ -410,14 +435,23 @@
 
     // Reset the idle timer — after 2s of silence, check if question is complete
     clearTimeout(questionFinalizeTimer);
+    // A question that ends in "?" is finished (the audio splitter already
+    // waited for a pause to send it): answer after 0.6 s more quiet.
+    // Without one, wait 1.8 s in case the sentence goes on.
+    const finalizeMs = /\?\s*$/.test(newText) ? 600 : 1800;
     questionFinalizeTimer = setTimeout(() => {
       if (isLikelyCompleteQuestion(input.value)) {
         composer.classList.add('stt-ready');
         updateSendButtonState(); // FIX #9: Update send button when ready
+        // Auto-answer (Settings › Transcription, on by default): a complete
+        // question followed by 1.8 s of quiet is answered without Enter.
+        // Before this, every heard question waited for a key press, so
+        // "Start session" looked like it never answered anything.
+        if (settings && settings.autoAnswer !== false && inputFromSTT && autoAnswerNow()) return;
         // Subtle notification that question is ready
         showToast('Press Enter to answer', 2500);
       }
-    }, 1800);
+    }, finalizeMs);
 
     // After 8s of no new words, save to history and keep stable
     clearTimeout(sttFillTimer);
@@ -430,18 +464,76 @@
     }, 8000);
   }
 
+  // ---- Auto-answer ----
+  // More words from the other side continue the auto-answered question when
+  // they never stopped for long since it was asked: no pause of NEW_TURN_PAUSE_MS
+  // or more on their side, and at most CONTINUE_WINDOW_MS after it. (A fixed
+  // 6 s window missed a long follow-up: its text arrived 7 s later.) A new
+  // question comes after a real pause, while the candidate answers.
+  const CONTINUE_WINDOW_MS = 15000;
+  const NEW_TURN_PAUSE_MS = 2500;
+  let themQuietSince = 0;     // their side went quiet at (0: speaking, or not heard yet)
+  let themNewTurnAt = 0;      // they started again after a long pause at
+  function noteThemSpeech(channel, speaking) {
+    if (channel !== 'them') return;
+    const now = Date.now();
+    if (!speaking) { themQuietSince = now; return; }
+    if (themQuietSince && now - themQuietSince >= NEW_TURN_PAUSE_MS) themNewTurnAt = now;
+    themQuietSince = 0;
+  }
+  function isQuestionContinuing() {
+    if (!lastAutoQuestion || Date.now() - lastAutoAt >= CONTINUE_WINDOW_MS) return false;
+    return themNewTurnAt < lastAutoAt;
+  }
+  let lastAutoQuestion = '';
+  let lastAutoAt = 0;
+  let continuingQuestion = false; // the box holds an auto-answered question plus what followed it
+  let sendAfterCancel = false;    // an answer is being stopped so the whole question can be asked
+  // Answers the question in the box. Returns false when it did not (the same
+  // question again, or an answer to another question is still streaming).
+  function autoAnswerNow() {
+    const q = input.value.trim();
+    if (!q || q === lastAutoQuestion) return false;
+    if (busy) {
+      if (!continuingQuestion) return false;
+      // The question went on after cue began answering its first part: stop
+      // that answer; the whole question is asked once it has stopped.
+      sendAfterCancel = true;
+      cue.cancelAsk();
+      return true;
+    }
+    lastAutoQuestion = q;
+    lastAutoAt = Date.now();
+    continuingQuestion = false;
+    send();
+    return true;
+  }
+  // An answer finished, failed or was stopped.
+  function afterAnswerSettled() {
+    if (!sendAfterCancel) return;
+    sendAfterCancel = false;
+    autoAnswerNow();
+  }
+
   // ---- Soft clear: don't immediately wipe question when user speaks ----
-  function softClearSTTFill() {
+  function softClearSTTFill(text) {
     // When the user speaks (You channel), don't immediately clear
     // Instead, dim the input and wait — they might just be acknowledging
     if (!inputFromSTT) return;
-    
-    // FIX #3: Reset userSpeechStart at the beginning before setting new timestamp
-    // This ensures we always track from fresh when a new soft-clear cycle begins
+    // A word or two ("yeah", "okay", a stray noise the transcriber turned
+    // into words) is not the user answering: leave the question alone.
+    if (String(text || '').trim().split(/\s+/).filter(Boolean).length < 3) return;
+
+    // The "talking for 2 s" test counts from the first line of one stretch
+    // of talk. A line that comes more than 2.5 s after the previous one
+    // starts a new stretch. Before, the start was never reset, so two short
+    // lines half a minute apart counted as a long answer and wiped the
+    // question (smoke test: two invented mic lines, 5 s apart, cleared it).
     const now = Date.now();
-    if (!userSpeechStart) {
+    if (!userSpeechStart || now - lastUserLineAt > 2500) {
       userSpeechStart = now;
     }
+    lastUserLineAt = now;
 
     // Dim the input to show it's in "pending clear" state
     composer.classList.add('stt-dimmed');
@@ -697,15 +789,26 @@
 
   // Stop = start/stop listening. Kick off system-audio capture straight from the click so
   // the user-gesture is fresh for getDisplayMedia (loopback capture needs it).
+  // One Start/End at a time. A second click while the first was still
+  // opening meeting audio read the button's old state, so two clicks made
+  // one Start and one End in the wrong order (smoke test: three quick
+  // clicks left a session running that the label said had ended).
+  let sessionToggling = false;
   $('#stop-btn').addEventListener('click', async () => {
-    const turningOn = !$('#stop-btn').classList.contains('active');
-    if (turningOn) {
-      // startSystemAudio may fail (user cancels, no permission) — that's OK,
-      // mic will still work and capture will toggle regardless
-      try { await startSystemAudio(); } catch (_) { /* handled inside startSystemAudio */ }
+    if (sessionToggling) return;
+    sessionToggling = true;
+    try {
+      const turningOn = !$('#stop-btn').classList.contains('active');
+      if (turningOn) {
+        // startSystemAudio may fail (user cancels, no permission) — that's OK,
+        // mic will still work and capture will toggle regardless
+        try { await startSystemAudio(); } catch (_) { /* handled inside startSystemAudio */ }
+      }
+      const active = await cue.captureToggle();
+      if (turningOn && !active) stopSystemAudio();
+    } finally {
+      sessionToggling = false;
     }
-    const active = await cue.captureToggle();
-    if (turningOn && !active) stopSystemAudio();
   });
 
   // Transcript toggle removed — sidebar now auto-opens with listening
@@ -942,12 +1045,42 @@
     error: 'Transcription error'
   };
 
+  // While transcription runs, the label says what it has heard this
+  // session ("Listening · 4 lines heard"), so a session that has gone quiet
+  // (no meeting audio, transcription stopped) is plain to see.
+  let sessionLines = 0;
+  let lastLineAt = 0;
+  let sessionStartedAt = 0;
+  let sttLabelTimer = null;
+  function sttLabelText(state) {
+    if (!['streaming', 'batch', 'local'].includes(state) || !sessionStartedAt) return STT_LABELS[state];
+    const quietFor = Date.now() - (lastLineAt || sessionStartedAt);
+    const mins = Math.floor(quietFor / 60000);
+    if (!sessionLines) return mins >= 1 ? `Listening · nothing heard for ${mins} min` : 'Listening · nothing heard yet';
+    const heard = `Listening · ${sessionLines} ${sessionLines === 1 ? 'line' : 'lines'} heard`;
+    return mins >= 2 ? `${heard} · quiet for ${mins} min` : heard;
+  }
   function setSttState(state) {
     sttState = state;
     const label = document.getElementById('stt-status');
     if (!label) return;
-    label.textContent = STT_LABELS[state];
+    label.textContent = sttLabelText(state);
     label.className = 'stt-status stt-' + state;
+  }
+  function noteSessionStart(active) {
+    clearInterval(sttLabelTimer);
+    sttLabelTimer = null;
+    if (!active) { sessionStartedAt = 0; return; }
+    sessionLines = 0;
+    lastLineAt = 0;
+    sessionStartedAt = Date.now();
+    sttLabelTimer = setInterval(() => setSttState(sttState), 15000);
+  }
+  function noteSessionLine() {
+    if (!sessionStartedAt) return;
+    sessionLines++;
+    lastLineAt = Date.now();
+    setSttState(sttState);
   }
 
   function updateSttStatus({ active, streaming } = {}) {
@@ -1106,6 +1239,7 @@
 
   // ---- events from main --------------------------------------------------
   cue.on('capture:state', ({ active, streaming, mode }) => {
+    noteSessionStart(active);
     setLiveDotState(active ? 'idle' : 'off');
     setSessionButton(active);
     // FIX #4: Add .listening class to composer when capture is active
@@ -1114,7 +1248,8 @@
     // so that the getDisplayMedia request has a fresh user gesture.
     // Here we only start the mic (no gesture required) and stop everything on deactivate.
     if (active) {
-      startMic();
+      // Settings › Audio › Transcribe my microphone: off keeps the mic closed.
+      if (!settings || settings.transcribeMic !== false) startMic();
       // Don't auto-open sidebar — user can toggle it manually
     } else {
       stopMic();
@@ -1212,6 +1347,7 @@
   });
   cue.on('vad:state', ({ channel, speaking }) => {
     setLiveDotState(speaking ? 'speaking' : 'idle');
+    noteThemSpeech(channel, speaking);
   });
   cue.on('slides:update', ({ count, last }) => {
     if (!count) return;
@@ -1271,10 +1407,16 @@
     appendToken(text);
     onAnswerActivity(); // nor is a long answer that is still streaming
   });
-  cue.on('llm:done', () => { finalizeAi(); setBusy(false); });
+  cue.on('llm:done', () => { finalizeAi(); setBusy(false); afterAnswerSettled(); });
+  // Stopped because the question went on: the part shown stays, marked, and
+  // the whole question is asked next.
+  cue.on('llm:cancelled', () => {
+    if (aiEl) aiEl.dataset.raw = (aiEl.dataset.raw || '').trimEnd() + (aiEl.dataset.raw ? '…' : '') + '\n\n*Stopped: the question went on.*';
+    finalizeAi(); setBusy(false); afterAnswerSettled();
+  });
   cue.on('llm:error', ({ message, action, secondary }) => {
     if (!aiEl) startAi(true);
-    aiEl.dataset.raw = message; finalizeAi(); setBusy(false);
+    aiEl.dataset.raw = message; finalizeAi(); setBusy(false); afterAnswerSettled();
     // publik errors carry one action: the renderer's markdown emits no anchors,
     // so a link needs a real button (same pattern as the mic banner).
     if (action && action.kind === 'card') { showPublikCard(); return; }
@@ -1284,15 +1426,21 @@
   cue.on('transcript', ({ channel, text }) => {
     if (!text || text.trim().length < 2 || /^[?!.,;:\-…]+$/.test(text.trim())) return;
     appendTranscriptHistoryTurn(channel, text, false);
-    // Auto-fill the input box with Them (interviewer) speech
-    if (channel === 'them') {
+    noteSessionLine();
+    // Auto-fill the input box with Them (interviewer) speech. With
+    // "Answer my own questions" on (Settings › Transcription), questions
+    // spoken into the mic are treated the same way, for practising alone.
+    if (channel === 'them' || (settings && settings.answerMyQuestions)) {
       cancelSoftClear(); // Interviewer is speaking, cancel any pending clear
       autoFillInputFromSTT(text);
     } else {
       // User spoke — soft clear (don't immediately wipe, wait to see if they're really answering)
-      softClearSTTFill();
+      softClearSTTFill(text);
     }
   });
+  // A new session started after the last meeting ended: its lines are gone
+  // from the live transcript, so they leave the sidebar too.
+  cue.on('transcript:cleared', () => clearTranscriptSidebar());
   // Transcript of a meeting resumed at launch: sidebar rows only — no
   // auto-fill of the input box, which is for live speech.
   cue.on('transcript:restore', ({ turns }) => {
@@ -1419,9 +1567,10 @@
   }
   // Settings always opens on the first tab (publik), with the own-key section
   // closed unless this build has no publik at all.
-  function openSettings() {
+  function openSettings(tab) {
     fillSettings();
-    showSettingsTab('keys');
+    if (tab === 'meetings') { showSettingsTab('meetings'); void showMeetingList(); }
+    else showSettingsTab('keys');
     const byo = $('#byo-section');
     if (byo) byo.open = !(publikState && publikState.available);
     scrim.classList.remove('hidden');
@@ -1462,8 +1611,110 @@
       tab.classList.add('on');
       const pane = document.querySelector(`.s-tab-pane[data-pane="${tab.dataset.tab}"]`);
       if (pane) pane.classList.remove('hidden');
+      if (tab.dataset.tab === 'meetings') void showMeetingList();
     });
   });
+
+  // ---- Settings › Meetings: past sessions, notes and transcripts ----------
+  // Built with textContent only: transcripts and notes are untrusted text.
+  const mtListView = $('#mt-list-view');
+  const mtDetailView = $('#mt-detail-view');
+  const mtList = $('#mt-list');
+  const mtDetail = $('#mt-detail');
+  let mtShownId = null;
+  function mtEl(tag, cls, text) {
+    const el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (text != null) el.textContent = text;
+    return el;
+  }
+  function mtWhen(ms) {
+    const d = new Date(ms);
+    return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) + ', ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  function mtLength(m) {
+    const end = m.endedAt || m.lastTs || m.startedAt;
+    const mins = Math.max(0, Math.round((end - m.startedAt) / 60000));
+    return mins < 1 ? 'under a minute' : mins + ' min';
+  }
+  async function showMeetingList() {
+    mtShownId = null;
+    mtDetailView.classList.add('hidden');
+    mtListView.classList.remove('hidden');
+    mtList.textContent = '';
+    let meetings = [];
+    try { meetings = await cue.meetingsList(); } catch (_) { meetings = []; }
+    if (!meetings.length) { mtList.appendChild(mtEl('div', 'mt-empty', 'No meetings yet. Start a session and they will show up here.')); return; }
+    for (const m of meetings) {
+      const row = mtEl('button', 'mt-row');
+      row.appendChild(mtEl('div', 'mt-row-title', m.title || 'Untitled meeting'));
+      const bits = [mtWhen(m.startedAt), mtLength(m), m.turns + (m.turns === 1 ? ' line' : ' lines')];
+      if (m.open) bits.push('in progress');
+      else if (!m.hasNotes) bits.push('no notes');
+      row.appendChild(mtEl('div', 'mt-row-meta', bits.join(' · ')));
+      row.addEventListener('click', () => { void showMeeting(m.id); });
+      mtList.appendChild(row);
+    }
+  }
+  function mtSection(title, items) {
+    const list = [].concat(items || []).map((x) => String(x || '').trim()).filter(Boolean);
+    if (!list.length) return;
+    mtDetail.appendChild(mtEl('div', 'mt-sec-title', title));
+    const ul = mtEl('ul', 'mt-sec-list');
+    for (const item of list) ul.appendChild(mtEl('li', null, item.replace(/^[-*•]\s+/, '')));
+    mtDetail.appendChild(ul);
+  }
+  async function showMeeting(id) {
+    let m = null;
+    try { m = await cue.meetingsGet(id); } catch (_) { m = null; }
+    if (!m) { void showMeetingList(); return; }
+    mtShownId = id;
+    mtListView.classList.add('hidden');
+    mtDetailView.classList.remove('hidden');
+    mtDelete.textContent = 'Delete';
+    mtDelete.classList.remove('confirm');
+    mtDetail.textContent = '';
+    mtDetail.appendChild(mtEl('div', 'mt-title', m.title || 'Untitled meeting'));
+    mtDetail.appendChild(mtEl('div', 'mt-row-meta', mtWhen(m.startedAt) + ' · ' + mtLength({ ...m, lastTs: m.transcript.length ? m.transcript[m.transcript.length - 1].ts : m.startedAt }) + ' · ' + m.transcript.length + ' lines'));
+    if (m.summary) {
+      mtDetail.appendChild(mtEl('div', 'mt-sec-title', 'Summary'));
+      // Notes sometimes run their points into one line ("… involved. - You …"): one point per line.
+      const points = String(m.summary).split(/\n|\s+-\s+(?=[A-Z])/).map((x) => x.trim().replace(/^[-*•]\s+/, '')).filter(Boolean);
+      for (const line of points) mtDetail.appendChild(mtEl('p', 'mt-summary', line));
+    } else {
+      mtDetail.appendChild(mtEl('div', 'mt-empty', m.transcript.length >= 4 ? 'No notes yet: they are written when the session ends (or at the next launch).' : 'Too short for notes (fewer than 4 lines).'));
+    }
+    mtSection('Key points', m.keyPoints);
+    mtSection('Decisions', m.decisions);
+    mtSection('Action items', m.actionItems);
+    mtSection('Follow-up', m.followUp);
+    if (m.transcript.length) {
+      mtDetail.appendChild(mtEl('div', 'mt-sec-title', 'Transcript'));
+      const box = mtEl('div', 'mt-transcript');
+      for (const t of m.transcript) {
+        const line = mtEl('div', 'mt-line mt-' + (t.channel === 'them' ? 'them' : 'you'));
+        line.appendChild(mtEl('span', 'mt-who', t.channel === 'them' ? 'Them' : 'You'));
+        line.appendChild(mtEl('span', 'mt-text', t.text));
+        box.appendChild(line);
+      }
+      mtDetail.appendChild(box);
+    }
+  }
+  const mtDelete = $('#mt-delete');
+  $('#mt-back').addEventListener('click', () => { void showMeetingList(); });
+  // Two clicks: the first asks, the second deletes (there is no undo).
+  mtDelete.addEventListener('click', async () => {
+    if (!mtShownId) return;
+    if (!mtDelete.classList.contains('confirm')) {
+      mtDelete.classList.add('confirm');
+      mtDelete.textContent = 'Click again to delete';
+      return;
+    }
+    const ok = await cue.meetingsDelete(mtShownId).catch(() => false);
+    if (!ok) showToast('This meeting is still being recorded. End the session first.', 2500);
+    void showMeetingList();
+  });
+  $('#past-meetings-btn').addEventListener('click', () => { openSettings('meetings'); });
 
   function updateCustomProviderFields() {
     const provider = settings.provider;
@@ -1806,6 +2057,15 @@
     document.querySelectorAll('#meeting-audio-seg button').forEach((button) => {
       button.classList.toggle('on', (button.dataset.meetingAudio === 'on') === !!settings.meetingAudio);
     });
+    document.querySelectorAll('#auto-answer-seg button').forEach((button) => {
+      button.classList.toggle('on', (button.dataset.autoAnswer === 'on') === (settings.autoAnswer !== false));
+    });
+    document.querySelectorAll('#answer-mine-seg button').forEach((button) => {
+      button.classList.toggle('on', (button.dataset.answerMine === 'on') === !!settings.answerMyQuestions);
+    });
+    document.querySelectorAll('#transcribe-mic-seg button').forEach((button) => {
+      button.classList.toggle('on', (button.dataset.transcribeMic === 'on') === (settings.transcribeMic !== false));
+    });
     const meetingAudioNote = $('#meeting-audio-note');
     if (meetingAudioNote) {
       meetingAudioNote.textContent = isMac
@@ -1905,6 +2165,21 @@
     document.querySelectorAll('#meeting-audio-seg button').forEach((candidate) => {
       candidate.classList.toggle('on', candidate === button);
     });
+  }));
+
+  document.querySelectorAll('#auto-answer-seg button').forEach((button) => button.addEventListener('click', () => {
+    settings.autoAnswer = button.dataset.autoAnswer === 'on';
+    document.querySelectorAll('#auto-answer-seg button').forEach((candidate) => candidate.classList.toggle('on', candidate === button));
+  }));
+  document.querySelectorAll('#transcribe-mic-seg button').forEach((button) => button.addEventListener('click', () => {
+    settings.transcribeMic = button.dataset.transcribeMic === 'on';
+    document.querySelectorAll('#transcribe-mic-seg button').forEach((candidate) => candidate.classList.toggle('on', candidate === button));
+    // Takes effect in a running session at once: the mic opens or closes now.
+    if (composer.classList.contains('listening')) { if (settings.transcribeMic) startMic(); else stopMic(); }
+  }));
+  document.querySelectorAll('#answer-mine-seg button').forEach((button) => button.addEventListener('click', () => {
+    settings.answerMyQuestions = button.dataset.answerMine === 'on';
+    document.querySelectorAll('#answer-mine-seg button').forEach((candidate) => candidate.classList.toggle('on', candidate === button));
   }));
 
   document.querySelectorAll('#stt-provider-seg button').forEach((button) => button.addEventListener('click', () => {

@@ -90,6 +90,7 @@
       <div id="transcript-sidebar" class="transcript-sidebar">
         <div class="ts-header">
           <span class="ts-title">Transcription history</span>
+          <button class="ts-past-btn" id="past-meetings-btn" title="Past meetings and their notes">Past meetings</button>
           <button class="ts-close-btn" id="close-sidebar-btn" title="Close history">✕</button>
         </div>
         <div id="ts-list" class="ts-list">
@@ -116,6 +117,7 @@
         <button class="s-tab" data-tab="transcription">🔉 Audio</button>
         <button class="s-tab" data-tab="style">✨ Style</button>
         <button class="s-tab" data-tab="appearance">🌗 Appearance</button>
+        <button class="s-tab" data-tab="meetings">🗂 Meetings</button>
       </div>
 
       <!-- Tab: publik (first). The publik card comes first; every key and
@@ -223,6 +225,27 @@
         </div>
         <div class="s-note" id="meeting-audio-note"></div>
 
+        <label class="s-label">Auto-answer <span class="s-hint">answer a heard question without pressing Enter</span></label>
+        <div class="s-seg" id="auto-answer-seg">
+          <button data-auto-answer="off">Off</button>
+          <button data-auto-answer="on">On</button>
+        </div>
+        <div class="s-note">When the other side finishes a question, cue answers it after a short pause. Off: the question waits in the box until you press Enter.</div>
+
+        <label class="s-label">Answer my own questions <span class="s-hint">for practising alone</span></label>
+        <div class="s-seg" id="answer-mine-seg">
+          <button data-answer-mine="off">Off</button>
+          <button data-answer-mine="on">On</button>
+        </div>
+        <div class="s-note">Questions you say into the microphone are answered too. Leave this off in a real call, where your own speech is your answer.</div>
+
+        <label class="s-label">Transcribe my microphone <span class="s-hint">your side of the call</span></label>
+        <div class="s-seg" id="transcribe-mic-seg">
+          <button data-transcribe-mic="off">Off</button>
+          <button data-transcribe-mic="on">On</button>
+        </div>
+        <div class="s-note">Off: only the other side is transcribed, so room sound and your own voice never show up as lines, and the microphone stays closed. Recap and notes then have only their side, and "Answer my own questions" cannot hear you.</div>
+
         <div class="whisper-card">
           <div class="whisper-runtime-row">
             <span class="s-label">whisper.cpp runtime</span>
@@ -284,6 +307,22 @@
       </div>
 
       <!-- Tab: Appearance -->
+      <!-- Tab: Meetings — past sessions, their notes and transcripts. -->
+      <div class="s-body s-tab-pane hidden" data-pane="meetings">
+        <div id="mt-list-view">
+          <div class="s-note mt-intro">Every session is saved here with its transcript. Notes are written when a session with at least 4 lines ends.</div>
+          <div id="mt-list" class="mt-list"></div>
+        </div>
+        <div id="mt-detail-view" class="hidden">
+          <div class="mt-detail-head">
+            <button id="mt-back" class="mt-btn">‹ All meetings</button>
+            <div class="spacer"></div>
+            <button id="mt-delete" class="mt-btn mt-danger">Delete</button>
+          </div>
+          <div id="mt-detail" class="mt-detail"></div>
+        </div>
+      </div>
+
       <div class="s-body s-tab-pane hidden" data-pane="appearance">
         <label class="s-label" for="s-opacity-slider">Opacity <span class="s-hint">how see-through the overlay is</span></label>
         <div class="s-opacity-row">
