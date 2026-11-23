@@ -30,6 +30,13 @@ const DEFAULTS = {
   // screen-sharing. cue's promise is to be invisible, so on macOS this is opt-in;
   // on Windows/Linux loopback capture carries no such indicator, so it stays on.
   meetingAudio: process.platform !== 'darwin',
+  // Answer a complete question from the other side without waiting for Enter.
+  autoAnswer: true,
+  // Treat questions spoken into the mic like the other side's (practising alone).
+  answerMyQuestions: false,
+  // Transcribe the microphone ("you"). Off: only the other side is heard,
+  // so room sound never becomes "you" lines.
+  transcribeMic: true,
   baseUrl: '',
   minimaxRegion: 'global_en',
   apiKeys: { cerebras: '', openai: '', anthropic: '', gemini: '', deepgram: '', custom: '', ollama: '', groq: '', minimax: '', deepseek: '', azure: '', publik: '' },

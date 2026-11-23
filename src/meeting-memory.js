@@ -42,7 +42,8 @@ function createMeetingMemory(opts) {
   }
 
   function titleFor(summary, startedAt) {
-    const first = (summary || '').split(/(?<=[.!?])\s/)[0].trim();
+    // A summary written as bullets starts with "- ": not part of the title.
+    const first = (summary || '').replace(/^\s*[-*•]\s+/, '').split(/(?<=[.!?])\s/)[0].trim();
     if (first) return first.length > 60 ? first.slice(0, 57).trimEnd() + '…' : first;
     return 'Meeting on ' + new Date(startedAt).toLocaleDateString();
   }

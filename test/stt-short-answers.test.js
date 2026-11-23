@@ -135,7 +135,7 @@ test('1: main.js: while a slow request is in flight, the audio goes into the bat
   // Feed up to the end of the recording; request 1 (the first sentence) stays in flight all along.
   await h.feed(audio);
   assert.equal(h.requests.length, 1);
-  assert.ok(h.ctx.publikSttBatchers.them.pendingMs() > 4000, `the audio after it is in the batcher, with its pauses (${h.ctx.publikSttBatchers.them.pendingMs()} ms)`);
+  assert.ok(h.ctx.sttBatchers.them.pendingMs() > 4000, `the audio after it is in the batcher, with its pauses (${h.ctx.sttBatchers.them.pendingMs()} ms)`);
   await h.release(1);
   await h.feed(Buffer.alloc(0), { thenTicks: 8 });
   assert.equal(h.requests.length, 3, h.events.join(' | '));
@@ -208,25 +208,30 @@ test('2: meeting memory: a refresh while a notes call runs, with no new turn, wa
   h.done();
 });
 
-test('2: main.js: Stop, Start and Stop again while the notes call runs: "Meeting notes saved" is said once, with every turn', async () => {
+test('2: main.js: End session ends the meeting; a turn after the next Start opens a new one', async () => {
   const src = readSource('main.js');
   const m = /^function notesAfterStop\(.*$/m.exec(src);
   assert.ok(m, 'main.js says the notes status in notesAfterStop(memory, lastWords)');
   const decl = (/^let notesStatusFor = .*;$/m.exec(src) || [''])[0];
   const statuses = [];
-  const ctx = vm.createContext({ send: (ch, p) => { if (ch === 'status') statuses.push(p.message); }, Promise });
+  let flushed = 0;
+  const ctx = vm.createContext({ send: (ch, p) => { if (ch === 'status') statuses.push(p.message); }, Promise, echoFilter: { flush: () => { flushed++; } } });
   vm.runInContext(`${decl}\n${fnFrom(src, m[0])}\nthis.notesAfterStop = notesAfterStop;`, ctx);
   const h = notesHarness();
+  const first = h.memory.current;
   const stop1 = ctx.notesAfterStop(h.memory, Promise.resolve());
   await settle();
+  assert.equal(flushed, 1, 'mic lines waiting in the echo filter go in before the meeting ends');
+  assert.equal(h.memory.current, null, 'the meeting ended at Stop');
+  assert.ok(h.store.get(first.id).endedAt, 'with its end time');
   h.memory.onTurn({ channel: 'them', text: 'the last turn', ts: 1_000_100 });
+  assert.notEqual(h.memory.current.id, first.id, 'the next session is a new meeting');
   const stop2 = ctx.notesAfterStop(h.memory, Promise.resolve());
   await settle();
   h.calls[0].resolve(NOTES);
-  await settle();
-  h.calls[1].resolve(NOTES);
   await Promise.all([stop1, stop2]);
-  assert.deepEqual(statuses, ['Meeting notes saved (14 turns).']);
+  assert.equal(h.calls.length, 1, 'a one-turn meeting gets no notes call');
+  assert.deepEqual(statuses, ['Meeting notes saved (13 turns).']);
   h.done();
 });
 

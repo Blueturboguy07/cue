@@ -28,8 +28,17 @@ function giveUpTimer(ms, message, timers = { setTimeout, clearTimeout }) {
     timers.clearTimeout(timer);
     timer = null;
   };
+  // Stop on purpose (not a timeout): the rejection carries `cancelled`, so
+  // the caller can tell it from a failure and say nothing about it.
+  const cancel = () => {
+    clear();
+    const e = new Error('cancelled');
+    e.cancelled = true;
+    controller.abort(e);
+    reject(e);
+  };
   rearm();
-  return { signal: controller.signal, expired, rearm, clear };
+  return { signal: controller.signal, expired, rearm, clear, cancel };
 }
 
 module.exports = { giveUpTimer };

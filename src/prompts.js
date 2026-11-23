@@ -10,6 +10,22 @@ function formatTranscript(turns, limit) {
   return recent.map((t) => (t.channel === 'them' ? 'Them: ' : 'You: ') + t.text).join('\n');
 }
 
+// Answers about the candidate must come from the candidate's own profile.
+// Without this the model filled gaps with plausible stories (a Kubernetes
+// migration that is on no résumé), which the candidate would then say out
+// loud in an interview.
+const GROUNDING_RULE =
+  'Only claim experience, employers, projects, numbers and tools that appear in the candidate\'s résumé or profile above. ' +
+  'If nothing there fits the question, say so honestly in the candidate\'s voice and bridge to the closest real experience, ' +
+  'or answer from general knowledge without claiming to have done it. Never invent projects, companies, metrics or technologies. ';
+
+// Live answers are read off the screen while talking: one line to start
+// with, then a few short points, not a paragraph.
+const SPOKEN_FORMAT =
+  'Format it to be read at a glance while speaking: first one short sentence the candidate can say straight away, ' +
+  'then 2–4 bullet points ("- "), each a short spoken phrase of at most 15 words with one concrete detail. ' +
+  'Under 90 words in total. No headings, no quotes, no preamble.';
+
 function buildSystem(base, contextBlock) {
   if (!contextBlock) return base;
   return contextBlock + '\n\n' + base;
@@ -24,7 +40,8 @@ function applyRules(prompt, aiRules, mode) {
 }
 
 const BASE_RULES =
-  'Always respond in clear, natural English. Never switch to Hindi or any other language unless the user explicitly asks for it. ';
+  'Always respond in clear, natural English. Never switch to Hindi or any other language unless the user explicitly asks for it. ' +
+  GROUNDING_RULE;
 
 const MODES = {
 
@@ -76,7 +93,7 @@ const MODES = {
         '• EXPERIENCE: Reference the specific role/project from their resume.\n' +
         '• COMPENSATION: State the target range confidently without over-explaining.\n' +
         '• TECHNICAL: Give a clear, confident explanation. Use analogies for non-technical interviewers.\n\n' +
-        'No quotes, no preamble. Write the actual words to say. 2–5 sentences.',
+        'Write the actual words to say, in first person. ' + SPOKEN_FORMAT,
         contextBlock
       ), aiRules, 'say');
     },
@@ -147,13 +164,13 @@ const MODES = {
         BASE_RULES +
         'The interviewer\'s exact question is provided below. Focus ONLY on answering that question — ignore any other conversation context.\n\n' +
         'Rules:\n' +
-        '• BEHAVIORAL ("tell me about a time…"): STAR format using real stories from the candidate\'s background. Situation → Task → Action → Result. Include metrics if available.\n' +
+        '• BEHAVIORAL ("tell me about a time…"): a real story from the candidate\'s background, with one bullet each for Situation, Task, Action and Result. Include metrics if the résumé has them.\n' +
         '• MOTIVATION ("why this company/role"): Specific, genuine reasons from their stated preferences.\n' +
-        '• TECHNICAL: Clear explanation with a concrete example from their experience.\n' +
+        '• TECHNICAL: Clear explanation with a concrete example. Tie it to their experience only when the résumé names that exact technique or tool; otherwise use a general example and claim nothing.\n' +
         '• EXPERIENCE: Reference specific roles/projects from their resume.\n' +
         '• COMPENSATION: State the salary target confidently in one sentence.\n' +
         '• SITUATIONAL: Structured thinking — "First I would X, then Y, because Z."\n\n' +
-        'Write in first person, as the candidate speaking. No preamble. 2–5 sentences.',
+        'Write in first person, as the candidate speaking. ' + SPOKEN_FORMAT,
         contextBlock
       ), aiRules, 'answerThis');
     },

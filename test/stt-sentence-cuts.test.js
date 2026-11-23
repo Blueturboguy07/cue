@@ -83,7 +83,7 @@ test('a short answer ("Yes.") followed by silence is sent on its own', () => {
 
 test('main.js gives the batcher the raw window (pauses included), the same on Mac and Windows', () => {
   const src = readSource('main.js');
-  assert.match(src, /pcm = publikSttBatchers\[channel\]\.push\(windowPcm\);/);
+  assert.match(src, /const pcm = batcher\.push\(windowPcm\);/);
   // Both platforms' meeting audio and the mic take the same road into flushChannel.
   assert.match(src, /ipcMain\.on\('system:pcm', \(_e, arrayBuffer\) => \{ if \(state\.capturing\) routeAudio\('them', arrayBuffer\); \}\);/);
   assert.match(src, /ipcMain\.on\('mic:pcm', \(_e, arrayBuffer\) => \{ if \(state\.capturing\) routeAudio\('you', arrayBuffer\); \}\);/);
